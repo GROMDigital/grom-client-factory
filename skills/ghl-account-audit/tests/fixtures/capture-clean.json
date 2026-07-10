@@ -1,0 +1,6 @@
+{
+  "name": "01 Meta Lead Intake",
+  "status": "published",
+  "steps": [{ "config": { "message": "Hi {{contact.first_name}}, thanks for enquiring." } }],
+  "trigger": { "type": "facebook_lead_form" }
+}
