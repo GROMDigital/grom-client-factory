@@ -39,6 +39,12 @@ if [ -f "$CONFIG" ]; then
       author=$(jq -r ".deps[\"$dep\"].author_of // false" "$CONFIG")
       if [ -n "$dirty" ] && [ "$author" != "true" ]; then
         say "dep:$dep" FAIL "clone dirty on non-author machine ($p); reset or reclone"
+      elif [ "$behind" = "?" ]; then
+        if [ "$author" = "true" ]; then
+          say "dep:$dep" PASS "$p on a local branch with no upstream (author-owned)"
+        else
+          say "dep:$dep" FAIL "no upstream tracking branch; switch to a tracked branch ($p)"
+        fi
       elif [ "$behind" != "0" ]; then
         say "dep:$dep" FAIL "behind remote by $behind commits; pull ($p)"
       elif [ -n "$dirty" ]; then
