@@ -44,3 +44,24 @@ test("--check mode: exit 1 on dirty, 0 on clean", () => {
   assert.equal(run(["--check", fixture("capture-dirty.json")]).code, 1);
   assert.equal(run(["--check", fixture("capture-clean.json")]).code, 0);
 });
+
+test("--check passes on already-sanitized output (gate terminates)", () => {
+  const out = path.join(os.tmpdir(), `resanitized-${process.pid}.json`);
+  assert.equal(run([fixture("capture-dirty.json"), out]).code, 0);
+  const r = run(["--check", out]);
+  assert.equal(r.code, 0, `sanitized output re-tripped the gate:\n${r.out}`);
+});
+
+test("embedded secrets: array-element and substring tokens are redacted in place", () => {
+  const out = path.join(os.tmpdir(), `embedded-${process.pid}.json`);
+  const r = run([fixture("capture-embedded.json"), out]);
+  assert.equal(r.code, 0, r.out);
+  const s = JSON.parse(fs.readFileSync(out, "utf8"));
+  const header = s.steps[0].config.webhookHeaders[0];
+  assert.match(header, /^Authorization: <REDACTED:bearer>$/);
+  assert.ok(!header.includes("eyJ"), `jwt leaked in array element: ${header}`);
+  const url = s.steps[0].config.url;
+  assert.ok(url.includes("<REDACTED:meta-capi>"), `capi token not redacted: ${url}`);
+  assert.ok(!url.includes("EAAGm0PX4"), `capi token leaked in url: ${url}`);
+  assert.ok(url.startsWith("https://graph.facebook.com/") && url.endsWith("&fields=id"), `url structure not preserved: ${url}`);
+});

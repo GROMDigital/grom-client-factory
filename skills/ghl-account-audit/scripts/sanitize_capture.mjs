@@ -5,9 +5,17 @@
 import fs from "node:fs";
 
 const KEY_SECRET = /^(.*(token|api[_-]?key|secret|password|jwt|bearer).*)$/i;
-const JWT = /^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$/;
-const META_CAPI = /^EAA[A-Za-z0-9]{20,}$/;
-const BEARER = /^Bearer\s+\S+$/i;
+const REDACTED_MARKER = /^<REDACTED:[a-z-]+>$/;
+// Value-shape patterns, applied as in-place global replacements so a secret
+// embedded in a longer string (a webhook URL, an "Authorization: ..." header
+// carried as an array element) is redacted in place, not only when it is the
+// whole value. Order matters: bearer consumes "Bearer <jwt>" before the bare
+// jwt pattern could split it.
+const VALUE_PATTERNS = [
+  ["bearer", /Bearer\s+\S+/gi],
+  ["meta-capi", /EAA[A-Za-z0-9]{20,}/g],
+  ["jwt", /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g],
+];
 
 const checkMode = process.argv[2] === "--check";
 const inPath = checkMode ? process.argv[3] : process.argv[2];
@@ -18,35 +26,44 @@ if (!inPath || (!checkMode && !outPath)) {
 }
 
 const redactions = [];
-function classify(key, val) {
-  if (typeof val !== "string") return null;
-  if (/^cookie$/i.test(key)) return "cookie";
-  if (BEARER.test(val)) return "bearer";
-  if (META_CAPI.test(val)) return "meta-capi";
-  if (JWT.test(val)) return "jwt";
-  if (KEY_SECRET.test(key)) return "secret-key";
-  return null;
+// Redact one string value. key is "" for array elements and other keyless
+// scalars. Returns the possibly-redacted string; pushes one record per hit.
+function redactString(key, val, jsonPath) {
+  if (REDACTED_MARKER.test(val)) return val; // idempotent: never re-redact a marker
+  if (/^cookie$/i.test(key)) {
+    redactions.push(`REDACTED\t${jsonPath}\tcookie`);
+    return "<REDACTED:cookie>";
+  }
+  let out = val;
+  let hit = false;
+  for (const [kind, pattern] of VALUE_PATTERNS) {
+    out = out.replace(pattern, () => {
+      redactions.push(`REDACTED\t${jsonPath}\t${kind}`);
+      hit = true;
+      return `<REDACTED:${kind}>`;
+    });
+  }
+  if (hit) return out;
+  if (KEY_SECRET.test(key)) {
+    redactions.push(`REDACTED\t${jsonPath}\tsecret-key`);
+    return "<REDACTED:secret-key>";
+  }
+  return val;
 }
-function walk(node, jsonPath) {
-  if (Array.isArray(node)) return node.map((v, i) => walk(v, `${jsonPath}[${i}]`));
+
+function walk(node, jsonPath, key) {
+  if (typeof node === "string") return redactString(key, node, jsonPath);
+  if (Array.isArray(node)) return node.map((v, i) => walk(v, `${jsonPath}[${i}]`, ""));
   if (node && typeof node === "object") {
     const out = {};
-    for (const [k, v] of Object.entries(node)) {
-      const kind = classify(k, v);
-      if (kind) {
-        redactions.push(`REDACTED\t${jsonPath}.${k}\t${kind}`);
-        out[k] = `<REDACTED:${kind}>`;
-      } else {
-        out[k] = walk(v, `${jsonPath}.${k}`);
-      }
-    }
+    for (const [k, v] of Object.entries(node)) out[k] = walk(v, `${jsonPath}.${k}`, k);
     return out;
   }
   return node;
 }
 
 const data = JSON.parse(fs.readFileSync(inPath, "utf8"));
-const sanitized = walk(data, "$");
+const sanitized = walk(data, "$", "");
 if (redactions.length) console.log(redactions.join("\n"));
 if (checkMode) process.exit(redactions.length ? 1 : 0);
 fs.writeFileSync(outPath, JSON.stringify(sanitized, null, 2) + "\n");
