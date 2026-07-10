@@ -45,3 +45,11 @@ directory (a bare directory arg fails on some Node builds):
 `node baseline/validate.mjs <client-folder>` runs the validator directly:
 exit 0 clean, exit 1 with one `RULE<TAB>file<TAB>detail` line per violation,
 exit 2 on a usage error.
+
+`validate.mjs` is the mechanical Tier-1 floor, not a full schema check: it
+verifies top-level required fields are present and that stage_map values are
+canonical steps, plus the text scans (em dashes, platform names, LP events,
+fill tokens). It does not enforce nested requirements, enums, or patterns from
+`client-manifest.schema.json`. A `validate: PASS` means the floor held, not that
+the manifest is fully schema-valid; run a real draft-07 validator against the
+schema when you need full conformance.
