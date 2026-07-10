@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Grom client manifest",
+  "type": "object",
+  "required": ["manifest_version", "client_key", "label", "status", "ghl_location_id", "market", "currency", "timezone", "stage_map", "tracking", "ids_harvested"],
+  "properties": {
+    "manifest_version": { "type": "integer", "minimum": 1 },
+    "client_key": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "label": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["design", "build", "live", "paused", "archived"] },
+    "ghl_location_id": { "type": ["string", "null"] },
+    "market": { "type": "string", "minLength": 2 },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "timezone": { "type": "string", "minLength": 3 },
+    "ad_account_id": { "type": ["string", "null"], "pattern": "^act_[0-9]+$" },
+    "avg_treatment_value": { "type": ["number", "null"] },
+    "pipeline_id": { "type": ["string", "null"] },
+    "treatment_field_id": { "type": ["string", "null"] },
+    "stage_map": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["lead", "engaged", "qualified", "booked", "no_show", "showed", "treatment", "terms_sent", "terms_signed", "onboarding", "live", null]
+      }
+    },
+    "booking": {
+      "type": "object",
+      "properties": {
+        "model": { "enum": ["calendar_page", "in_page_widget", "ai_booked", "external"] },
+        "calendar_ids": { "type": "array", "items": { "type": "string" } },
+        "payment_product_names": { "type": "array", "items": { "type": "string" } },
+        "external_system": { "type": ["string", "null"] }
+      }
+    },
+    "phone": {
+      "type": "object",
+      "properties": {
+        "tracked_number": { "type": ["string", "null"] },
+        "compliance_status": { "enum": ["not_submitted", "submitted", "approved", "rejected", null] }
+      }
+    },
+    "tracking": {
+      "type": "object",
+      "required": ["client_key_snippet", "worker_url"],
+      "properties": {
+        "client_key_snippet": { "type": "string" },
+        "worker_url": { "type": "string", "format": "uri" },
+        "allowed_origins": { "type": "array", "items": { "type": "string", "format": "uri" } },
+        "clarity_project_id": { "type": ["string", "null"] },
+        "meta_pixel_id": { "type": ["string", "null"] },
+        "widget_selector": { "type": ["string", "null"] },
+        "slot_selector": { "type": ["string", "null"] },
+        "confirmation_page_mode": { "type": "boolean" }
+      }
+    },
+    "ai_agents": {
+      "type": "object",
+      "properties": {
+        "chat_primary": { "type": ["string", "null"] },
+        "chat_booking": { "type": ["string", "null"] },
+        "voice_inbound": { "type": ["string", "null"] },
+        "voice_outbound": { "type": ["string", "null"] }
+      }
+    },
+    "secrets_pointers": {
+      "type": "object",
+      "properties": { "pit_vault_secret_name": { "type": ["string", "null"] } }
+    },
+    "ids_harvested": { "type": "boolean" },
+    "version_stamps": {
+      "type": "object",
+      "properties": {
+        "plugin_sha": { "type": "string" },
+        "dependencies": { "type": "object", "additionalProperties": { "type": "string" } },
+        "designed_on": { "type": "string" }
+      }
+    },
+    "field_lifecycle": {
+      "type": "object",
+      "additionalProperties": { "enum": ["design-time", "harvest", "execution-discovered"] }
+    }
+  }
+}
