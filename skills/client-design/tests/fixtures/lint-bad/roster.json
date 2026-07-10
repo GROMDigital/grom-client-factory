@@ -1,0 +1,4 @@
+{ "version": 1, "roles": [
+  { "id": "alpha-role", "phase": "1", "doc": "alpha", "skip_if": null, "per_item": null },
+  { "id": "beta-role",  "phase": "1", "doc": "beta",  "skip_if": null, "per_item": null }
+] }
