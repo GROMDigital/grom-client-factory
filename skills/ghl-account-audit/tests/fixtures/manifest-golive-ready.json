@@ -1,0 +1,14 @@
+{
+  "manifest_version": 1,
+  "client_key": "ready-clinic",
+  "ids_harvested": true,
+  "phone": { "tracked_number": "+61400000000" },
+  "tracking": { "clarity_project_id": "abc123", "meta_pixel_id": "1781516416158353", "widget_selector": "#booking" },
+  "field_lifecycle": {
+    "phone.tracked_number": "execution-discovered",
+    "tracking.clarity_project_id": "execution-discovered",
+    "tracking.meta_pixel_id": "execution-discovered",
+    "tracking.widget_selector": "execution-discovered",
+    "currency": "design-time"
+  }
+}

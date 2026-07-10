@@ -1,0 +1,12 @@
+{
+  "manifest_version": 1,
+  "client_key": "gapped-clinic",
+  "ids_harvested": false,
+  "phone": { "tracked_number": null },
+  "tracking": { "clarity_project_id": null, "meta_pixel_id": "1781516416158353" },
+  "field_lifecycle": {
+    "phone.tracked_number": "execution-discovered",
+    "tracking.clarity_project_id": "execution-discovered",
+    "tracking.meta_pixel_id": "execution-discovered"
+  }
+}
