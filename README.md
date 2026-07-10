@@ -25,7 +25,7 @@ set that must hold so dashboards, portal, and tracking work without hand-wiring.
 |---|---|---|
 | `doctor` | Environment + per-client prerequisite checks | Local config only |
 | `client-design` (Plan 3) | Full design run: strategy gate, registry, module fan-out, reconcile | Local files only |
-| `ghl-account-audit` (Plan 2) | Live-state capture, post-build verify, manifest harvest | Read-only vs GHL |
+| `ghl-account-audit` | Live-state capture, post-build verify, manifest harvest | Read-only vs GHL |
 | `create-ghl-workflows` (Plan 4) | Launches the ghl-workflow-api-docs process against design specs | LIVE sub-account writes, gated |
 
 ## Layout
