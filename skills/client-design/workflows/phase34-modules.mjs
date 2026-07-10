@@ -1,0 +1,100 @@
+export const meta = {
+  name: 'client-design-phase34',
+  description: 'Grom client design, phases 3-4: module fan-out in waves + audit and bounded fix loop',
+  phases: [
+    { title: 'Wave 3a', detail: 'registry-only modules' },
+    { title: 'Wave 3b', detail: 'modules consuming 3a' },
+    { title: 'LP build', detail: 'brief -> prompt -> code per LP' },
+    { title: 'Audit', detail: '3 auditors + fix loop' },
+    { title: 'Close', detail: 'fill guide + assembler' },
+  ],
+}
+
+const A = args
+const R = A.registrySummary
+const activeIds = new Set(A.activeRoleIds)
+const rolesIn = (phase) => A.roster.roles.filter((r) => r.phase === phase && activeIds.has(r.id) && r.per_item === null)
+
+const boot = (roleId, extra) => `You are the "${roleId}" agent in the Grom client-design factory.
+READ FIRST, in this order:
+1. ${A.pluginRoot}/baseline/guardrails.md
+2. ${A.promptsDir}/${roleId}.md (your role prompt; follow it exactly)
+3. THE BINDING REGISTRY: ${A.registryPath} (its spellings and doc index are law)
+4. The other inputs your role prompt lists
+Client folder (absolute): ${A.clientFolder}
+Run date: ${A.runDate}
+Write your deliverable per the registry doc index, and your claims sidecar to
+${A.clientFolder}/build/${A.runDate}/claims/. Your final message is data, not prose.
+${extra ?? ''}`
+
+const STATUS = {
+  type: 'object',
+  required: ['doc', 'status', 'summary'],
+  properties: {
+    doc: { type: 'string' },
+    status: { enum: ['done', 'blocked'] },
+    summary: { type: 'string' },
+    fill_tokens_introduced: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+phase('Wave 3a')
+const wave3a = await parallel(rolesIn('3a').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3a', schema: STATUS })))
+
+// LP chain runs as its own pipeline, overlapping wave 3b: brief -> prompt -> coded page per LP.
+const lpChain = R.no_lps ? Promise.resolve([]) : pipeline(
+  R.lps,
+  (lp) => agent(boot('lp-strategist', `THIS RUN COVERS ONE LANDING PAGE ONLY: ${JSON.stringify(lp)}. Write the brief section for this LP.`), { model: 'sonnet', label: `lp-brief:${lp.slug}`, phase: 'LP build', schema: STATUS }),
+  (brief, lp) => agent(boot('lp-prompt-engineer', `LP: ${JSON.stringify(lp)}. The strategist's brief status: ${JSON.stringify(brief)}. Read the landing-pages doc for this LP's brief, and the tracking doc for the snippet contract, then write the build prompt.`), { model: 'sonnet', label: `lp-prompt:${lp.slug}`, phase: 'LP build', schema: STATUS }),
+  (prompt, lp) => agent(boot('lp-design-engineer', `LP: ${JSON.stringify(lp)}. Execute the engineered build prompt for this LP (in the landing-pages doc) and write the coded page(s) under ${A.clientFolder}/lp/${lp.slug}/ with the tracking snippet embedded.`), { model: 'sonnet', label: `lp-code:${lp.slug}`, phase: 'LP build', schema: STATUS })
+)
+
+phase('Wave 3b')
+const wave3b = await parallel(rolesIn('3b').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: STATUS })))
+const lpResults = (await lpChain).flat().filter(Boolean)
+
+const moduleStatuses = [...wave3a, ...wave3b, ...lpResults].filter(Boolean)
+const blockedModules = moduleStatuses.filter((m) => m.status === 'blocked')
+
+phase('Audit')
+const FINDINGS = {
+  type: 'object',
+  required: ['findings'],
+  properties: {
+    findings: { type: 'array', items: { type: 'object', required: ['doc', 'issue', 'fix', 'severity'], properties: { doc: { type: 'string' }, issue: { type: 'string' }, fix: { type: 'string' }, severity: { enum: ['blocker', 'important', 'minor'] } } } },
+  },
+}
+const auditorIds = ['registry-reconciler', 'journey-leak-auditor', 'compliance-brand-auditor']
+let auditRounds = []
+let findings = (await parallel(auditorIds.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, phase: 'Audit', schema: FINDINGS }))))
+  .filter(Boolean).flatMap((r) => r.findings)
+auditRounds.push(findings.length)
+
+let residualConflicts = []
+for (let round = 1; round <= 2 && findings.length > 0; round++) {
+  const byDoc = new Map()
+  for (const f of findings) { if (!byDoc.has(f.doc)) byDoc.set(f.doc, []); byDoc.get(f.doc).push(f) }
+  const ownerOf = (docFile) => (R.doc_index.find((d) => d.file === docFile) || {}).owner_role
+  await parallel([...byDoc.entries()].map(([docFile, fs]) => () => {
+    const owner = ownerOf(docFile)
+    if (!owner) return Promise.resolve(null)
+    return agent(boot(owner, `FIX ROUND ${round}. Your doc ${docFile} received these audit fix-notes. Apply them in place, update your claims sidecar, change nothing else:
+${JSON.stringify(fs)}`), { model: 'sonnet', label: `fix:${docFile}`, phase: 'Audit', schema: STATUS })
+  }))
+  const recheck = await agent(boot('registry-reconciler', `RE-CHECK ROUND ${round}. Only re-verify the docs that just changed: ${[...byDoc.keys()].join(', ')}. Report remaining or newly introduced findings only.`), { model: 'sonnet', label: `recheck-${round}`, phase: 'Audit', schema: FINDINGS })
+  findings = recheck ? recheck.findings : []
+  auditRounds.push(findings.length)
+}
+residualConflicts = findings
+
+phase('Close')
+const fillGuide = await agent(boot('fill-guide-compiler', `Residual conflicts to record as precedence notes: ${JSON.stringify(residualConflicts)}`), { model: 'sonnet', label: 'fill-guide', phase: 'Close', schema: STATUS })
+const overview = await agent(boot('assembler', `Module statuses: ${JSON.stringify(moduleStatuses.map((m) => ({ doc: m.doc, status: m.status })))}. Blocked modules: ${JSON.stringify(blockedModules)}.`), { model: 'sonnet', label: 'assembler', phase: 'Close', schema: STATUS })
+
+return {
+  moduleStatuses,
+  blockedModules,
+  fixLoopReport: { roundsFindingCounts: auditRounds },
+  residualConflicts,
+  deliverables: [fillGuide, overview].filter(Boolean),
+}
