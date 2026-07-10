@@ -1,0 +1,6 @@
+{
+  "name": "grom-client-factory",
+  "description": "Grom Digital client setup factory. Skills: client-design (design-doc orchestration), ghl-account-audit (read-only live capture), create-ghl-workflows (launcher over ghl-workflow-api-docs), doctor (environment + prerequisite checks).",
+  "version": "0.1.0",
+  "author": { "name": "Grom Digital" }
+}

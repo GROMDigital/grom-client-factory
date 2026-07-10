@@ -1,0 +1,7 @@
+{
+  "name": "grom-client-factory",
+  "owner": { "name": "Grom Digital" },
+  "plugins": [
+    { "name": "grom-client-factory", "source": "./" }
+  ]
+}
