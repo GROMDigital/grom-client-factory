@@ -25,15 +25,17 @@ test("valid client folder passes", () => {
 test("invalid folder fails and names every violated rule", () => {
   const r = run(fixture("invalid"));
   assert.equal(r.code, 1);
-  for (const rule of [
-    "MANIFEST_REQUIRED_FIELD",
-    "MANIFEST_BAD_CANONICAL_STEP",
-    "EM_DASH",
-    "PLATFORM_NAME_IN_LP",
-    "BAD_LP_EVENT",
-    "MALFORMED_FILL_TOKEN",
-  ]) {
-    assert.match(r.out, new RegExp(rule), `expected ${rule} in output:\n${r.out}`);
+  const expected = [
+    ["MANIFEST_REQUIRED_FIELD", "client-manifest.json"],
+    ["MANIFEST_BAD_CANONICAL_STEP", "client-manifest.json"],
+    ["EM_DASH", path.join("design", "01-brief.md")],
+    ["MALFORMED_FILL_TOKEN", path.join("design", "01-brief.md")],
+    ["PLATFORM_NAME_IN_LP", path.join("lp", "index.html")],
+    ["BAD_LP_EVENT", path.join("lp", "index.html")],
+  ];
+  for (const [rule, file] of expected) {
+    const pat = new RegExp("^" + rule + "\\t" + file.replace(/[.\\]/g, "\\$&") + "\\t", "m");
+    assert.match(r.out, pat, `expected ${rule} on ${file} in output:\n${r.out}`);
   }
 });
 
@@ -41,4 +43,10 @@ test("missing manifest is its own rule", () => {
   const r = run(fixture("no-manifest"));
   assert.equal(r.code, 1);
   assert.match(r.out, /MANIFEST_MISSING/);
+});
+
+test("malformed manifest JSON is its own rule", () => {
+  const r = run(fixture("bad-json"));
+  assert.equal(r.code, 1);
+  assert.match(r.out, /MANIFEST_INVALID_JSON/);
 });
