@@ -1,0 +1,13 @@
+{
+  "manifest_version": 1,
+  "client_key": "test-clinic",
+  "label": "Test Clinic",
+  "status": "design",
+  "ghl_location_id": null,
+  "market": "AUS",
+  "currency": "AUD",
+  "timezone": "Australia/Melbourne",
+  "stage_map": { "stage-uuid-1": "lead", "stage-uuid-2": "booked" },
+  "tracking": { "client_key_snippet": "test-clinic", "worker_url": "https://grom-lp-events.gromdigital001.workers.dev" },
+  "ids_harvested": false
+}

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 1,
+  "client_key": "bad-clinic",
+  "label": "Bad Clinic",
+  "status": "design",
+  "ghl_location_id": null,
+  "market": "AUS",
+  "timezone": "Australia/Melbourne",
+  "stage_map": { "stage-uuid-1": "lead_captured" },
+  "tracking": { "client_key_snippet": "bad-clinic", "worker_url": "https://x.example" },
+  "ids_harvested": false
+}
