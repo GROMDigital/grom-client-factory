@@ -1,0 +1,18 @@
+{
+  "run_date": "",
+  "mode": "fresh",
+  "client_folder": "",
+  "plugin_sha": "",
+  "dependency_shas": {},
+  "phase_status": {
+    "phase0_intake": "pending",
+    "phase12_workflow": "pending",
+    "post_registry_gate": "pending",
+    "phase34_workflow": "pending",
+    "pm_assembly": "pending"
+  },
+  "registry_hash": "",
+  "docs": {},
+  "workflow_run_ids": {},
+  "notes": []
+}
