@@ -103,5 +103,12 @@ Then run `golive_check.mjs` and include its output in the report.
   fetch, stop on 429/403 (see capture/PROVENANCE.md)
 - No auth headers, session tokens, cookies, or CAPI tokens in any committable
   file: the sanitizer is not optional
+- Sanitizer coverage boundary: it redacts values under secret-named keys, cookie
+  values, and shaped tokens (Bearer, JWT, Meta CAPI) anywhere including inside
+  arrays and embedded in longer strings. It does NOT recognize an opaque secret
+  with no known shape sitting under a non-secret-named key (e.g. a raw provider
+  key pasted into a free-text note or a custom header string). Eyeball each
+  sanitized capture for stray secrets before committing; `--check` is a floor,
+  not a guarantee
 - No em dashes in authored reports; platform naming rules do not apply to
   these internal reports but DO apply if any text is destined for a client
