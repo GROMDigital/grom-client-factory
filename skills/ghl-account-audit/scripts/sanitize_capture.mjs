@@ -53,7 +53,7 @@ function redactString(key, val, jsonPath) {
 
 function walk(node, jsonPath, key) {
   if (typeof node === "string") return redactString(key, node, jsonPath);
-  if (Array.isArray(node)) return node.map((v, i) => walk(v, `${jsonPath}[${i}]`, ""));
+  if (Array.isArray(node)) return node.map((v, i) => walk(v, `${jsonPath}[${i}]`, key));
   if (node && typeof node === "object") {
     const out = {};
     for (const [k, v] of Object.entries(node)) out[k] = walk(v, `${jsonPath}.${k}`, k);

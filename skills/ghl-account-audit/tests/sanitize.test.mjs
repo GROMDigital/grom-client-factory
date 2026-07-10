@@ -64,4 +64,8 @@ test("embedded secrets: array-element and substring tokens are redacted in place
   assert.ok(url.includes("<REDACTED:meta-capi>"), `capi token not redacted: ${url}`);
   assert.ok(!url.includes("EAAGm0PX4"), `capi token leaked in url: ${url}`);
   assert.ok(url.startsWith("https://graph.facebook.com/") && url.endsWith("&fields=id"), `url structure not preserved: ${url}`);
+  const apiKeys = s.steps[0].config.apiKeys;
+  assert.equal(apiKeys[0], "<REDACTED:secret-key>", `secret in key-named array leaked: ${apiKeys[0]}`);
+  const cookieArr = s.steps[0].config.Cookie;
+  assert.equal(cookieArr[0], "<REDACTED:cookie>", `cookie in array leaked: ${cookieArr[0]}`);
 });

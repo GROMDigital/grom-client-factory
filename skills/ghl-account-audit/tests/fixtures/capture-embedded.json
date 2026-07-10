@@ -4,7 +4,9 @@
     {
       "config": {
         "webhookHeaders": ["Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl"],
-        "url": "https://graph.facebook.com/v19.0/act_1/events?access_token=EAAGm0PX4ZCpsBAKZBZBZBxyzabcdefghijklmnop&fields=id"
+        "url": "https://graph.facebook.com/v19.0/act_1/events?access_token=EAAGm0PX4ZCpsBAKZBZBZBxyzabcdefghijklmnop&fields=id",
+        "apiKeys": ["sk_live_4242424242424242"],
+        "Cookie": ["session=abc123; ghl=xyz"]
       }
     }
   ]
