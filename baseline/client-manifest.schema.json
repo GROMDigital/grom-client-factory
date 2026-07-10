@@ -18,6 +18,7 @@
     "treatment_field_id": { "type": ["string", "null"] },
     "stage_map": {
       "type": "object",
+      "minProperties": 1,
       "additionalProperties": {
         "enum": ["lead", "engaged", "qualified", "booked", "no_show", "showed", "treatment", "terms_sent", "terms_signed", "onboarding", "live", null]
       }
