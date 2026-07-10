@@ -34,3 +34,14 @@ set that must hold so dashboards, portal, and tracking work without hand-wiring.
 validator). `skills/` are the entry points. Living dependencies
 (`GROMDigital/client-lp-tracking`, `uxieee/ghl-workflow-api-docs`) are cloned
 locally and read fresh each run; see `doctor`.
+
+## Tests
+
+The baseline validator has a `node:test` suite. Run it with a glob, not a bare
+directory (a bare directory arg fails on some Node builds):
+
+    node --test 'baseline/tests/*.test.mjs'
+
+`node baseline/validate.mjs <client-folder>` runs the validator directly:
+exit 0 clean, exit 1 with one `RULE<TAB>file<TAB>detail` line per violation,
+exit 2 on a usage error.
