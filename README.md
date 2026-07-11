@@ -24,7 +24,7 @@ set that must hold so dashboards, portal, and tracking work without hand-wiring.
 | Skill | Does | Mutates |
 |---|---|---|
 | `doctor` | Environment + per-client prerequisite checks | Local config only |
-| `client-design` (Plan 3) | Design factory skeleton shipped (Plan 3a); role prompts land in Plan 3b, until then the skill stops at its prompt-lint gate | Local files only |
+| `client-design` (Plans 3, 5) | Full design factory: foundation research, binding registry, module fan-out, audit and fix loop, then a self-contained `system-guide.html` full-system review page. Role prompts shipped (Plan 3b); system-guide render shipped (Plan 5). Modes: fresh, ingest-answers, regen, resume, guide | Local files only |
 | `ghl-account-audit` | Live-state capture, post-build verify, manifest harvest | Read-only vs GHL |
 | `create-ghl-workflows` (Plan 4) | Launches the ghl-workflow-api-docs process against design specs | LIVE sub-account writes, gated |
 
