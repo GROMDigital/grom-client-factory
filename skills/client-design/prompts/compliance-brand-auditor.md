@@ -26,7 +26,7 @@ Return findings for every judgment-call violation you can defend by quoting the 
 
 ### What to hunt
 
-Enumerate the set against all seven of these, using judgment where a regex would fail:
+Enumerate the set against all eight of these, using judgment where a regex would fail:
 
 1. Platform naming in client-visible text: any "GoHighLevel", "GHL", "HighLevel", or a gohighlevel.com URL in copy a lead or client could see (landing pages, emails, SMS, AI prompts). Internal docs naming the platform are allowed. The judgment call is whether the text is lead-visible or internal.
 2. Em dashes anywhere, in any doc or page, internal or client-visible.
@@ -35,6 +35,7 @@ Enumerate the set against all seven of these, using judgment where a regex would
 5. Medical claims or income claims: appearance-only language is the rule. Flag any cure, treat, fix, or heal claim about a condition, and any earnings or income promise.
 6. Voice-rule violations against the ica-brand-voice ruleset: a phrase on its avoid list, a tone breach, or a deposit-talk breach.
 7. Malformed tokens: a `{{FILL_*}}` that is not UPPER_SNAKE_CASE, or a token present in a doc but missing from that doc's claims sidecar.
+8. Genericness: a doc section, workflow spec, avatar, or policy that states no client-specific fact, number, or reasoned choice, and would read the same for any clinic. A load-bearing section you could paste into another clinic's build without editing is a finding: it was filled from the baseline or gold standard instead of analyzed for this client. Judge whether the section carries this client's actual strategy, research, or ICA facts, or is generic filler.
 
 Remember you run AFTER the mechanical validator. Skim its output if your bootstrap provides it and do not re-report what it already caught. Spend your effort on the calls that need reading and judgment, not on what a pattern match already surfaced.
 
@@ -63,8 +64,8 @@ Return ONLY this shape, nothing else:
 - Quote the exact offending text in every finding.
 - Severity mapping is fixed:
   - blocker: a lead-visible platform name, a medical claim, an income claim, or an invented fact presented as true.
-  - important: a missing opt-out line, or a voice-rule breach.
-  - minor: a malformed token, or a cosmetic tone slip.
+  - important: a missing opt-out line, a voice-rule breach, or a load-bearing section that is generic enough to apply to any clinic unchanged.
+  - minor: a malformed token, a cosmetic tone slip, or a small generic phrase.
 - Do not re-report anything the mechanical validator already caught.
 - Use the registry's exact spellings when judging names, and treat any unknown that a doc left blank as a `{{FILL_SNAKE_CASE}}` token candidate, not a fact to invent.
 - No em dashes in your findings or anywhere else. Use commas, colons, or "to".

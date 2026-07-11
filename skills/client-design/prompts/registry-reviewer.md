@@ -42,7 +42,7 @@ You write NO file: no design doc, and no edit to the registry. Your entire outpu
 is the structured verdict returned as your final message, described under "Final
 message" below. Reading and judging is the whole job.
 
-## The six checks
+## The seven checks
 
 Run every one of these explicitly. Do not stop at the first failure.
 
@@ -71,6 +71,12 @@ Run every one of these explicitly. Do not stop at the first failure.
 6. DOC INDEX (section 11). Complete, no filename collisions, every owner role is in
    the valid owner set, and no two docs claim the same file path. Flag a collision
    or an unknown owner.
+7. MECHANISM POLICIES (section 3A). Every policy is concrete: the speed-to-lead
+   actions and retry cap, the day-before confirmation timing plus its YES-branch
+   and silence-branch alerts, the missed-call cooldown, and the deposit chase
+   cadence each carry an actual number or a `{{FILL_*}}` token. Flag any vague
+   policy ("promptly", "a few", "as needed") or any missing mechanism, since the
+   workflow and voice agents build to these as binding numbers.
 
 ## Claims
 

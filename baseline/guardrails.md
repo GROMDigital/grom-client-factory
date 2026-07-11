@@ -29,3 +29,8 @@ You are designing for a real clinic. These rules are absolute:
 9. Client-visible copy never quotes internal fee structures, and pilot-offer
    copy carries no fixed fees. Compliance lines (consent, opt-out) are kept in
    marketing-adjacent SMS.
+10. Analyze before you write. Every design choice states its reason, grounded in
+   this client's strategy, research, or ICA doc. Any section that could apply to
+   any clinic unchanged is a failure: adapt it or token it as a question.
+   Baseline and gold-standard docs are structure references, never content to
+   fill in.

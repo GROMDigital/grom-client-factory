@@ -19,6 +19,7 @@ Strategy doc: ${A.strategyPath}
 Pre-build capture: ${A.capturePath ?? 'none (greenfield account)'}
 Materials inventory: ${A.materialsInventory}
 ${extra ?? ''}
+Analyze before you write: every choice states its reason grounded in this client's inputs, and any section that could apply to any clinic unchanged is a failure, so adapt it or token it as a question.
 Write your deliverable and claims sidecar exactly where your role prompt says.
 Your final message is data for the orchestrator, not prose for a human.`
 

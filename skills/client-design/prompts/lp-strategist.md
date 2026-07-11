@@ -43,13 +43,13 @@ Honest urgency only: "first-time" or "introductory" framing is allowed; no count
 
 ## Claims
 
-Write a claims sidecar to `<clientFolder>/build/<runDate>/claims/landing-pages.json` with this exact shape:
+Write a claims sidecar for THIS LP to `<clientFolder>/build/<runDate>/claims/lp-<slug>.json`, using the slug of the one landing page your bootstrap names (a per-LP file, not a shared landing-pages sidecar), with this exact shape:
 
 `{"defines": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}, "references": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}}`
 
 Put every offer, product, and calendar name you cite from the registry under `references`. Put every `{{FILL_SNAKE_CASE}}` token you introduced (a proof asset, a testimonial, a stat) under `defines.fill_tokens`.
 
-MERGE, do not clobber: several LP runs share this one sidecar. Read the existing file if it is present and ADD your LP's entries to the existing arrays. Never overwrite prior LPs' entries. If the file does not exist, create it with the shape above.
+This per-LP file is shared only within your own LP's chain: you create it, and the prompt engineer and the design engineer for the SAME LP append to it later. MERGE, do not clobber: if it already exists, read it and ADD your entries to the existing arrays; if not, create it with the shape above. Never touch another LP's `lp-<other-slug>.json`.
 
 ## Boundaries
 

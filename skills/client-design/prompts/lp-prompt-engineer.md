@@ -49,11 +49,11 @@ At the end of THIS LP's section, list every `{{FILL_*}}` token you introduced (y
 
 ## Claims
 
-Write your claims sidecar to `<clientFolder>/build/<runDate>/claims/landing-pages.json`. MERGE into it: preserve every other page's entries, do not clobber. Shape, exact:
+Write your claims sidecar to `<clientFolder>/build/<runDate>/claims/lp-<slug>.json`, using the slug of the one landing page your bootstrap names (a per-LP file, not a shared landing-pages sidecar). The strategist for this same LP created this file; MERGE into it, preserve its entries, do not clobber. Shape, exact:
 
 `{"defines": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}, "references": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}}`
 
-Put the offer name, product name, calendar name, and any workflow you cite into `references`. Put every `{{FILL_*}}` copy or asset token you introduced into `defines.fill_tokens`. You define no workflows, tags, fields, or alerts here; leave those `defines` arrays empty.
+Put the offer name, product name, calendar name, and any workflow you cite into `references`. Put every `{{FILL_*}}` copy or asset token you introduced into `defines.fill_tokens`. You define no workflows, tags, fields, or alerts here; leave those `defines` arrays empty. Never touch another LP's `lp-<other-slug>.json`.
 
 ## Boundaries
 

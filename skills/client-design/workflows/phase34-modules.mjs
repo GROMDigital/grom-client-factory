@@ -23,6 +23,7 @@ READ FIRST, in this order:
 4. The other inputs your role prompt lists
 Client folder (absolute): ${A.clientFolder}
 Run date: ${A.runDate}
+Analyze before you write: every choice states its reason grounded in this client's inputs, and any section that could apply to any clinic unchanged is a failure, so adapt it or token it as a question.
 Write your deliverable per the registry doc index, and your claims sidecar to
 ${A.clientFolder}/build/${A.runDate}/claims/. Your final message is data, not prose.
 ${extra ?? ''}`
@@ -50,7 +51,12 @@ const lpChain = R.no_lps ? Promise.resolve([]) : pipeline(
 )
 
 phase('Wave 3b')
-const wave3b = await parallel(rolesIn('3b').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: STATUS })))
+const wave3bRoles = rolesIn('3b')
+// nurture-copywriter's voice-consistency pass reads the workflow-designer doc, so it runs AFTER the rest of 3b, not alongside it.
+const wave3bMain = await parallel(wave3bRoles.filter((r) => r.id !== 'nurture-copywriter').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: STATUS })))
+const nurtureActive = wave3bRoles.some((r) => r.id === 'nurture-copywriter')
+const nurtureResult = nurtureActive ? await agent(boot('nurture-copywriter'), { model: 'sonnet', label: 'nurture-copywriter', phase: 'Wave 3b', schema: STATUS }) : null
+const wave3b = [...wave3bMain, ...(nurtureResult ? [nurtureResult] : [])]
 const lpResults = (await lpChain).flat().filter(Boolean)
 
 const moduleStatuses = [...wave3a, ...wave3b, ...lpResults].filter(Boolean)

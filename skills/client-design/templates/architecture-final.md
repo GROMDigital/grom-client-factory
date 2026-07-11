@@ -19,6 +19,18 @@ Numbered, flat chronological. Number, exact name, trigger(s), one-line job,
 kill-switch relationships. This list IS the workflow roster; module docs may
 not invent workflows absent here.
 
+## 3A. Mechanism policies (binding)
+Concrete policy, with numbers, for each key journey moment, decided HERE and never
+deferred to a module agent. Every unknown is a {{FILL_*}} token, never vague prose
+("promptly", "a few", "as needed").
+- Speed to lead: the in-hours action, the out-of-hours action, the fallback when
+  no AI conversation exists, and the retry cap.
+- Day-before confirmation ask: when it fires; the YES branch (who replies, which
+  team alert); the silence branch (after how many hours, which alert).
+- Missed-call cooldown: the window and the once-per rule.
+- Deposit chase cadence (only if the offer takes a deposit): each touch and its wait.
+Module agents (workflows, voice) build to these numbers exactly, as binding as names.
+
 ## 4. AI agent lineup
 Which agents exist (chat primary/booking, voice inbound/outbound), persona
 name and one-line character, handoff contract bullets. Set no_voice/no_chat_ai

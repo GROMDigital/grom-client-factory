@@ -60,8 +60,12 @@ only hard constraints.
 Compute registry_hash (`shasum -a 256 <registry file>`), store in run manifest.
 Present to the user: the architect's summary_for_human, the final active
 roster (all roster roles minus skip_if flags true in the registry summary,
-plus per-LP roles times number of LPs), the doc index, the reviewer's verdict
-and any non-blocker findings, and the validate.mjs floor output. Ask for an
+plus per-LP roles times number of LPs), the doc index, the Mechanism policies
+section (3A) from the registry file surfaced line by line (the concrete
+speed-to-lead actions and retry cap, the day-before confirmation timing and its
+alerts, the missed-call cooldown, and the deposit chase cadence, that every
+workflow and voice agent will build to), the reviewer's verdict and any
+non-blocker findings, and the validate.mjs floor output. Ask for an
 explicit go. This is the last cheap moment to stop; everything after spends
 the fan-out budget. On "no": capture what to change, re-run the architect via
 Workflow A resume or a fresh run, re-gate.
