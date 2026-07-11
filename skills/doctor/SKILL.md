@@ -17,7 +17,8 @@ value (never guess paths):
       "plugin_path": "<this plugin's clone path>",
       "deps": {
         "client-lp-tracking": { "path": "<clone path>", "remote": "https://github.com/GROMDigital/client-lp-tracking.git", "author_of": false },
-        "ghl-workflow-api-docs": { "path": "<clone path>", "remote": "https://github.com/uxieee/ghl-workflow-api-docs.git", "author_of": false }
+        "ghl-workflow-api-docs": { "path": "<clone path>", "remote": "https://github.com/uxieee/ghl-workflow-api-docs.git", "author_of": false },
+        "ghl-plugin": { "path": "<clone path>", "remote": "https://github.com/uxieee/uxie-ghl-factory.git", "author_of": false }
       }
     }
 
@@ -45,6 +46,15 @@ key, or secret into it.
    Xander/Tom to add their seat to the location.
 4. Open-PR warnings: run `gh pr list` on each dependency repo and surface open
    PRs as "process may be mid-change" warnings.
+5. Workflow-creation engine (only when the user intends to create, build, or
+   publish a GHL workflow programmatically): confirm the `create-ghl-workflow`
+   skill is reachable inside the clone at `deps["ghl-plugin"].path`
+   (`plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`, the
+   engine's entry doc). If `peer:uxie-ghl-factory` already failed in step 1,
+   this check is moot — fix that first; grantor: Xander (author of the peer
+   plugin) to register or share the clone. Include `deps["ghl-plugin"].remote`
+   in the open-PR sweep from item 4 above, since it's the engine about to be
+   driven.
 
 ## Step 3: report
 

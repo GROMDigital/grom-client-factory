@@ -29,33 +29,45 @@ for repo in GROMDigital/grom-client-factory GROMDigital/client-lp-tracking uxiee
   fi
 done
 
+# check_clone <config_key> <check_id> <fail_hint>
+# Applies the shared freshness/dirty/author_of rules for a single git-clone
+# dependency and emits one `say` line under <check_id>. <fail_hint> is used
+# only when the dep is unconfigured or not cloned.
+check_clone() {
+  dep_key="$1"
+  check_id="$2"
+  fail_hint="$3"
+  p=$(jq -r ".deps[\"$dep_key\"].path // empty" "$CONFIG")
+  if [ -n "$p" ] && [ -d "$p/.git" ]; then
+    git -C "$p" fetch -q 2>/dev/null
+    behind=$(git -C "$p" rev-list --count HEAD..@{u} 2>/dev/null || echo "?")
+    dirty=$(git -C "$p" status --porcelain | head -1)
+    author=$(jq -r ".deps[\"$dep_key\"].author_of // false" "$CONFIG")
+    if [ -n "$dirty" ] && [ "$author" != "true" ]; then
+      say "$check_id" FAIL "clone dirty on non-author machine ($p); reset or reclone"
+    elif [ "$behind" = "?" ]; then
+      if [ "$author" = "true" ]; then
+        say "$check_id" PASS "$p on a local branch with no upstream (author-owned)"
+      else
+        say "$check_id" FAIL "no upstream tracking branch; switch to a tracked branch ($p)"
+      fi
+    elif [ "$behind" != "0" ]; then
+      say "$check_id" FAIL "behind remote by $behind commits; pull ($p)"
+    elif [ -n "$dirty" ]; then
+      say "$check_id" PASS "$p current (dirty, author-owned)"
+    else
+      say "$check_id" PASS "$p clean and current"
+    fi
+  else
+    say "$check_id" FAIL "$fail_hint"
+  fi
+}
+
 if [ -f "$CONFIG" ]; then
   for dep in client-lp-tracking ghl-workflow-api-docs; do
-    p=$(jq -r ".deps[\"$dep\"].path // empty" "$CONFIG")
-    if [ -n "$p" ] && [ -d "$p/.git" ]; then
-      git -C "$p" fetch -q 2>/dev/null
-      behind=$(git -C "$p" rev-list --count HEAD..@{u} 2>/dev/null || echo "?")
-      dirty=$(git -C "$p" status --porcelain | head -1)
-      author=$(jq -r ".deps[\"$dep\"].author_of // false" "$CONFIG")
-      if [ -n "$dirty" ] && [ "$author" != "true" ]; then
-        say "dep:$dep" FAIL "clone dirty on non-author machine ($p); reset or reclone"
-      elif [ "$behind" = "?" ]; then
-        if [ "$author" = "true" ]; then
-          say "dep:$dep" PASS "$p on a local branch with no upstream (author-owned)"
-        else
-          say "dep:$dep" FAIL "no upstream tracking branch; switch to a tracked branch ($p)"
-        fi
-      elif [ "$behind" != "0" ]; then
-        say "dep:$dep" FAIL "behind remote by $behind commits; pull ($p)"
-      elif [ -n "$dirty" ]; then
-        say "dep:$dep" PASS "$p current (dirty, author-owned)"
-      else
-        say "dep:$dep" PASS "$p clean and current"
-      fi
-    else
-      say "dep:$dep" FAIL "not cloned; doctor will clone it"
-    fi
+    check_clone "$dep" "dep:$dep" "not cloned; doctor will clone it"
   done
+  check_clone "ghl-plugin" "peer:uxie-ghl-factory" "uxie-ghl-factory not configured; install /plugin marketplace add uxieee/uxie-ghl-factory or register the local clone (grantor: Xander)"
   root=$(jq -r '.client_root // empty' "$CONFIG")
   if [ -n "$root" ] && [ -d "$root" ]; then say client-root PASS "$root"; else say client-root FAIL "client_root missing in config"; fi
   pp=$(jq -r '.plugin_path // empty' "$CONFIG")
