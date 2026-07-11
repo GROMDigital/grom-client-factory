@@ -57,7 +57,7 @@ const REGISTRY_SUMMARY = {
     summary_for_human: { type: 'string' },
   },
 }
-const registrySummary = await agent(
+let registrySummary = await agent(
   boot('systems-architect', `Registry template: ${A.pluginRoot}/skills/client-design/templates/architecture-final.md
 Version stamps to copy into section 13: ${JSON.stringify(A.versionStamps)}
 Write the registry to ${A.clientFolder}/build/${A.runDate}/architecture-final.md`),
@@ -79,11 +79,12 @@ let reviewVerdict = await agent(
 )
 if (reviewVerdict && reviewVerdict.verdict === 'revise' && reviewVerdict.findings.some((f) => f.severity === 'blocker')) {
   log('registry blocked by reviewer; one revision round')
-  await agent(
+  const revised = await agent(
     boot('systems-architect', `REVISION ROUND. Your registry at ${A.clientFolder}/build/${A.runDate}/architecture-final.md was reviewed with these findings, fix them in place and append the changes to section 12:
 ${JSON.stringify(reviewVerdict.findings)}`),
     { model: 'sonnet', label: 'architect-revise', schema: REGISTRY_SUMMARY }
   )
+  if (revised) registrySummary = revised
   reviewVerdict = await agent(
     boot('registry-reviewer', `Re-review after revision: ${A.clientFolder}/build/${A.runDate}/architecture-final.md. Prior findings: ${JSON.stringify(reviewVerdict.findings)}`),
     { model: 'sonnet', label: 'registry-rereview', schema: REVIEW }
