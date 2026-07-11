@@ -22,6 +22,7 @@
     { "id": "journey-leak-auditor",   "phase": "4",  "doc": null,                        "skip_if": null,        "per_item": null },
     { "id": "compliance-brand-auditor","phase": "4", "doc": null,                        "skip_if": null,        "per_item": null },
     { "id": "fill-guide-compiler",    "phase": "4",  "doc": "fill-guide",                "skip_if": null,        "per_item": null },
-    { "id": "assembler",              "phase": "4",  "doc": "build-overview",            "skip_if": null,        "per_item": null }
+    { "id": "assembler",              "phase": "4",  "doc": "build-overview",            "skip_if": null,        "per_item": null },
+    { "id": "system-guide",           "phase": "4",  "doc": null,                        "skip_if": null,        "per_item": null }
   ]
 }
