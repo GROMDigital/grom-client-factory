@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Wave 3b', detail: 'modules consuming 3a' },
     { title: 'LP build', detail: 'brief -> prompt -> code per LP' },
     { title: 'Audit', detail: '3 auditors + fix loop' },
-    { title: 'Close', detail: 'fill guide + assembler' },
+    { title: 'Close', detail: 'fill guide + assembler + system guide' },
   ],
 }
 
