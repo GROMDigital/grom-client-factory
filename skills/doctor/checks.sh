@@ -34,9 +34,10 @@ done
 # dependency and emits one `say` line under <check_id>. <fail_hint> is used
 # only when the dep is unconfigured or not cloned.
 check_clone() {
-  dep_key="$1"
-  check_id="$2"
-  fail_hint="$3"
+  local dep_key="$1"
+  local check_id="$2"
+  local fail_hint="$3"
+  local p behind dirty author
   p=$(jq -r ".deps[\"$dep_key\"].path // empty" "$CONFIG")
   if [ -n "$p" ] && [ -d "$p/.git" ]; then
     git -C "$p" fetch -q 2>/dev/null

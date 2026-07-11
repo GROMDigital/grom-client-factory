@@ -51,7 +51,7 @@ key, or secret into it.
    skill is reachable inside the clone at `deps["ghl-plugin"].path`
    (`plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`, the
    engine's entry doc). If `peer:uxie-ghl-factory` already failed in step 1,
-   this check is moot — fix that first; grantor: Xander (author of the peer
+   this check is moot, so fix that first; grantor: Xander (author of the peer
    plugin) to register or share the clone. Include `deps["ghl-plugin"].remote`
    in the open-PR sweep from item 4 above, since it's the engine about to be
    driven.
