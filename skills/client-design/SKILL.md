@@ -1,6 +1,6 @@
 ---
 name: client-design
-description: Design a complete Grom client build from an approved Meta ads strategy. Orchestrates the full agent factory (foundation research, binding registry, module fan-out, audit and fix loop) to produce the design doc set, coded landing pages, client manifest, go-live checklist, and fill guide in a client folder. Requires the ads strategy as input and confirms everything with the user before spawning agents. Modes: fresh, ingest-answers, regen, resume. Design only: writes local files, never touches a live account.
+description: Design a complete Grom client build from an approved Meta ads strategy. Orchestrates the full agent factory (foundation research, binding registry, module fan-out, audit and fix loop) to produce the design doc set, client manifest, go-live checklist, and fill guide in a client folder. Landing pages are built separately, not by this factory. Requires the ads strategy as input and confirms everything with the user before spawning agents. Modes: fresh, ingest-answers, regen, resume. Design only: writes local files, never touches a live account.
 ---
 
 # client-design
@@ -59,8 +59,8 @@ only hard constraints.
 
 Compute registry_hash (`shasum -a 256 <registry file>`), store in run manifest.
 Present to the user: the architect's summary_for_human, the final active
-roster (all roster roles minus skip_if flags true in the registry summary,
-plus per-LP roles times number of LPs), the doc index, the Mechanism policies
+roster (all roster roles minus skip_if flags true in the registry summary),
+the doc index, the Mechanism policies
 section (3A) from the registry file surfaced line by line (the concrete
 speed-to-lead actions and retry cap, the day-before confirmation timing and its
 alerts, the missed-call cooldown, and the deposit chase cadence, that every

@@ -42,18 +42,9 @@ const STATUS = {
 phase('Wave 3a')
 const wave3a = await parallel(rolesIn('3a').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3a', schema: STATUS })))
 
-// LP chain runs as its own pipeline, overlapping wave 3b: brief -> prompt -> coded page per LP.
-// Per LP: a research/design team appends to that LP's section, ending in ONE comprehensive
-// build prompt (the deliverable). Headless coding is NOT in the default flow; a design
-// session runs the prompt (lp-design-engineer stays available for optional manual builds).
-const lpChain = R.no_lps ? Promise.resolve([]) : pipeline(
-  R.lps,
-  (lp) => agent(boot('lp-brand-researcher', `THIS RUN COVERS ONE LANDING PAGE ONLY: ${JSON.stringify(lp)}. Research this brand's real visual identity and append the Brand identity block for this LP.`), { model: 'sonnet', label: `lp-brand:${lp.slug}`, phase: 'LP build', schema: STATUS }),
-  (brand, lp) => agent(boot('lp-strategist', `LP: ${JSON.stringify(lp)}. Brand research status: ${JSON.stringify(brand)}. Write the CRO strategy and structure brief section for this LP.`), { model: 'sonnet', label: `lp-strategy:${lp.slug}`, phase: 'LP build', schema: STATUS }),
-  (strat, lp) => agent(boot('lp-copywriter', `LP: ${JSON.stringify(lp)}. Strategy status: ${JSON.stringify(strat)}. Read this LP's section (brand + strategy) and write the finished page copy.`), { model: 'sonnet', label: `lp-copy:${lp.slug}`, phase: 'LP build', schema: STATUS }),
-  (copy, lp) => agent(boot('lp-designer', `LP: ${JSON.stringify(lp)}. Copy status: ${JSON.stringify(copy)}. Read this LP's brand, strategy, and copy, then write the design brief, applying the frontend-design, ui-ux-pro-max, and responsive-design methodology.`), { model: 'sonnet', label: `lp-design:${lp.slug}`, phase: 'LP build', schema: STATUS }),
-  (design, lp) => agent(boot('lp-prompt-engineer', `LP: ${JSON.stringify(lp)}. Design brief status: ${JSON.stringify(design)}. Read this LP's full section (brand, strategy, copy, design brief) and the tracking doc, then assemble the one comprehensive build prompt a design session will execute.`), { model: 'sonnet', label: `lp-prompt:${lp.slug}`, phase: 'LP build', schema: STATUS })
-)
+// Landing pages are NOT built by this factory. The funnel's LP(s) are designed and built
+// separately (Grom design), so there is no LP role and no LP chain here. The tracking-pixel
+// and workflow modules still account for the LP as a funnel step.
 
 phase('Wave 3b')
 const wave3bRoles = rolesIn('3b')
@@ -62,9 +53,8 @@ const wave3bMain = await parallel(wave3bRoles.filter((r) => r.id !== 'nurture-co
 const nurtureActive = wave3bRoles.some((r) => r.id === 'nurture-copywriter')
 const nurtureResult = nurtureActive ? await agent(boot('nurture-copywriter'), { model: 'sonnet', label: 'nurture-copywriter', phase: 'Wave 3b', schema: STATUS }) : null
 const wave3b = [...wave3bMain, ...(nurtureResult ? [nurtureResult] : [])]
-const lpResults = (await lpChain).flat().filter(Boolean)
 
-const moduleStatuses = [...wave3a, ...wave3b, ...lpResults].filter(Boolean)
+const moduleStatuses = [...wave3a, ...wave3b].filter(Boolean)
 const blockedModules = moduleStatuses.filter((m) => m.status === 'blocked')
 
 phase('Audit')

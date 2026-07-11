@@ -40,10 +40,9 @@ engagement signal. Counts are distinct sessions.
 **Owner:** `client-lp-tracking/worker/src/ingest.ts` (`EVENT_NAMES`).
 Verified against client-lp-tracking@main on 2026-07-10.
 
-These events presuppose a landing page. Every Grom funnel routes the Meta lead
-form to a booking/deposit landing page where the lead books and pays the deposit,
-and where these events fire. A build sets `no_lps: true` only when it genuinely
-has no booking page anywhere, which is rare and must be justified in the registry.
+These events fire on the funnel's landing page. Landing pages are built separately
+(Grom design), not by this factory; the factory only records that the funnel has
+one and wires tracking to it.
 
 ## 3. Non-lead contact sources (speed-to-lead exclusion)
 
