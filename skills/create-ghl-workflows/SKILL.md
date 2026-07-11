@@ -103,8 +103,11 @@ For each workflow in the gated worklist, in order:
 1. READ THE ENGINE'S OWN DOCS FRESH. Every run, not from memory (the
    engine is actively developed and its input format changes): read
    `${ghl-plugin}/plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`
-   in full, plus `references/build-recipe.md`, `references/step-shapes.md`,
-   and `engine/COVERAGE.md` for current step/trigger coverage. Trust what
+   in full, plus every reference doc it points to (its `references/` set,
+   currently build-recipe.md, step-shapes.md, and discovery.md) and whatever
+   source it names for the current step and trigger coverage (the supported
+   node types). Do not assume a fixed filename for that coverage source, the
+   engine moves it; follow the SKILL.md's own current pointer. Trust what
    these say over any summary of them, including this one.
 2. TRANSLATE the spec into the engine's IR. Source material: the
    journey-and-workflows doc's per-workflow card for this workflow (Name,
