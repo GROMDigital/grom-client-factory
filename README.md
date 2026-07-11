@@ -26,14 +26,15 @@ set that must hold so dashboards, portal, and tracking work without hand-wiring.
 | `doctor` | Environment + per-client prerequisite checks | Local config only |
 | `client-design` (Plans 3, 5) | Full design factory: foundation research, binding registry, module fan-out, audit and fix loop, then a self-contained `system-guide.html` full-system review page. Role prompts shipped (Plan 3b); system-guide render shipped (Plan 5). Modes: fresh, ingest-answers, regen, resume, guide | Local files only |
 | `ghl-account-audit` | Live-state capture, post-build verify, manifest harvest | Read-only vs GHL |
-| `create-ghl-workflows` (Plan 4) | Launches the ghl-workflow-api-docs process against design specs | LIVE sub-account writes, gated |
+| `create-ghl-workflows` (Plan 4) | Drives the uxie-ghl-factory engine to create a client's designed workflows as DRAFTS from the registry and journey doc; hard mutation gate, one location per session, canonical names from the registry; the human reviews and publishes each draft in the UI (this skill never publishes) | LIVE sub-account writes (drafts only), gated |
 
 ## Layout
 
 `baseline/` is the shared content library (contracts, defaults, templates,
 validator). `skills/` are the entry points. Living dependencies
-(`GROMDigital/client-lp-tracking`, `uxieee/ghl-workflow-api-docs`) are cloned
-locally and read fresh each run; see `doctor`.
+(`GROMDigital/client-lp-tracking`, `uxieee/ghl-workflow-api-docs`, and the
+`uxieee/uxie-ghl-factory` workflow-creation engine) are cloned locally and
+read fresh each run; see `doctor`.
 
 ## Tests
 
