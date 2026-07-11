@@ -28,8 +28,8 @@ only hard constraints.
 3. RESOLVE the client folder: argument if given, else cwd. Never guess.
 4. STRATEGY GATE. Find the ads strategy under `<client>/strategy/`. If absent,
    refuse: name what is missing, do not offer to generate it.
-5. MODE. fresh | ingest-answers | regen <module> | resume (from argument or
-   ask). For non-fresh modes see "Other modes" below.
+5. MODE. fresh | ingest-answers | regen <module> | resume | guide (from
+   argument or ask). For non-fresh modes see "Other modes" below.
 6. BROWNFIELD CAPTURE (mandatory when a GHL location exists for this client):
    if `<client>/captures/` has no capture from the last 14 days, run
    grom-client-factory:ghl-account-audit mode=capture first. Greenfield (no
@@ -100,7 +100,9 @@ Workflow A resume or a fresh run, re-gate.
   ONE agent with the same bootstrap contract as Workflow B (read guardrails,
   role prompt, registry; write doc + claims). Then run the registry-reconciler
   scoped to that doc, apply its fix-notes via the owner role if any, and re-run
-  the fill-guide-compiler. Update the run manifest.
+  the fill-guide-compiler. Update the run manifest. Finish by regenerating the
+  guide (guide mode) as the last refresh step, so `system-guide.html` never
+  goes stale relative to the doc you just changed.
 - ingest-answers: the client replied to the fill-guide questions. Steps:
   1. Read the fill guide's token registry and the reply (ask the user to paste
      it or point at a file).
@@ -115,6 +117,20 @@ Workflow A resume or a fresh run, re-gate.
      doc index), then scoped reconcile + fill-guide recompile.
   5. Report: tokens filled, tokens remaining, docs regenerated, registry
      amendments.
+  6. Finish by regenerating the guide (guide mode) as the last refresh step,
+     so `system-guide.html` never goes stale relative to the docs you just
+     changed.
+- guide: regenerate the system guide standalone for any client folder that
+  already has a completed `design/` set and a registry. Run ONE agent with the
+  same bootstrap contract Workflow B uses: read guardrails,
+  `prompts/system-guide.md`, the binding registry, and the other inputs its
+  prompt lists (the doc set under `design/`, the fill guide, the go-live
+  checklist, the client manifest, and `lp/` if present); write
+  `<clientFolder>/system-guide.html`. This mode is read-only over the design
+  docs, it renders the finished set, it never edits them. Use it any time the
+  guide needs a standalone refresh outside a full fresh/resume build (for
+  example, right after an ingest-answers or regen pass, per those modes'
+  final step above).
 
 ## Boundaries
 

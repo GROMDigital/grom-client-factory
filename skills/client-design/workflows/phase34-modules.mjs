@@ -91,11 +91,12 @@ residualConflicts = findings
 phase('Close')
 const fillGuide = await agent(boot('fill-guide-compiler', `Residual conflicts to record as precedence notes: ${JSON.stringify(residualConflicts)}`), { model: 'sonnet', label: 'fill-guide', phase: 'Close', schema: STATUS })
 const overview = await agent(boot('assembler', `Module statuses: ${JSON.stringify(moduleStatuses.map((m) => ({ doc: m.doc, status: m.status })))}. Blocked modules: ${JSON.stringify(blockedModules)}.`), { model: 'sonnet', label: 'assembler', phase: 'Close', schema: STATUS })
+const guide = await agent(boot('system-guide'), { model: 'sonnet', label: 'system-guide', phase: 'Close', schema: STATUS })
 
 return {
   moduleStatuses,
   blockedModules,
   fixLoopReport: { roundsFindingCounts: auditRounds },
   residualConflicts,
-  deliverables: [fillGuide, overview].filter(Boolean),
+  deliverables: [fillGuide, overview, guide].filter(Boolean),
 }
