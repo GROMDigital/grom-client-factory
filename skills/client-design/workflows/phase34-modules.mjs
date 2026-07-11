@@ -10,7 +10,7 @@ export const meta = {
   ],
 }
 
-const A = args
+const A = typeof args === 'string' ? JSON.parse(args) : args
 const R = A.registrySummary
 const activeIds = new Set(A.activeRoleIds)
 const rolesIn = (phase) => A.roster.roles.filter((r) => r.phase === phase && activeIds.has(r.id) && r.per_item === null)
@@ -43,11 +43,16 @@ phase('Wave 3a')
 const wave3a = await parallel(rolesIn('3a').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3a', schema: STATUS })))
 
 // LP chain runs as its own pipeline, overlapping wave 3b: brief -> prompt -> coded page per LP.
+// Per LP: a research/design team appends to that LP's section, ending in ONE comprehensive
+// build prompt (the deliverable). Headless coding is NOT in the default flow; a design
+// session runs the prompt (lp-design-engineer stays available for optional manual builds).
 const lpChain = R.no_lps ? Promise.resolve([]) : pipeline(
   R.lps,
-  (lp) => agent(boot('lp-strategist', `THIS RUN COVERS ONE LANDING PAGE ONLY: ${JSON.stringify(lp)}. Write the brief section for this LP.`), { model: 'sonnet', label: `lp-brief:${lp.slug}`, phase: 'LP build', schema: STATUS }),
-  (brief, lp) => agent(boot('lp-prompt-engineer', `LP: ${JSON.stringify(lp)}. The strategist's brief status: ${JSON.stringify(brief)}. Read the landing-pages doc for this LP's brief, and the tracking doc for the snippet contract, then write the build prompt.`), { model: 'sonnet', label: `lp-prompt:${lp.slug}`, phase: 'LP build', schema: STATUS }),
-  (prompt, lp) => agent(boot('lp-design-engineer', `LP: ${JSON.stringify(lp)}. Execute the engineered build prompt for this LP (in the landing-pages doc) and write the coded page(s) under ${A.clientFolder}/lp/${lp.slug}/ with the tracking snippet embedded.`), { model: 'sonnet', label: `lp-code:${lp.slug}`, phase: 'LP build', schema: STATUS })
+  (lp) => agent(boot('lp-brand-researcher', `THIS RUN COVERS ONE LANDING PAGE ONLY: ${JSON.stringify(lp)}. Research this brand's real visual identity and append the Brand identity block for this LP.`), { model: 'sonnet', label: `lp-brand:${lp.slug}`, phase: 'LP build', schema: STATUS }),
+  (brand, lp) => agent(boot('lp-strategist', `LP: ${JSON.stringify(lp)}. Brand research status: ${JSON.stringify(brand)}. Write the CRO strategy and structure brief section for this LP.`), { model: 'sonnet', label: `lp-strategy:${lp.slug}`, phase: 'LP build', schema: STATUS }),
+  (strat, lp) => agent(boot('lp-copywriter', `LP: ${JSON.stringify(lp)}. Strategy status: ${JSON.stringify(strat)}. Read this LP's section (brand + strategy) and write the finished page copy.`), { model: 'sonnet', label: `lp-copy:${lp.slug}`, phase: 'LP build', schema: STATUS }),
+  (copy, lp) => agent(boot('lp-designer', `LP: ${JSON.stringify(lp)}. Copy status: ${JSON.stringify(copy)}. Read this LP's brand, strategy, and copy, then write the design brief, applying the frontend-design, ui-ux-pro-max, and responsive-design methodology.`), { model: 'sonnet', label: `lp-design:${lp.slug}`, phase: 'LP build', schema: STATUS }),
+  (design, lp) => agent(boot('lp-prompt-engineer', `LP: ${JSON.stringify(lp)}. Design brief status: ${JSON.stringify(design)}. Read this LP's full section (brand, strategy, copy, design brief) and the tracking doc, then assemble the one comprehensive build prompt a design session will execute.`), { model: 'sonnet', label: `lp-prompt:${lp.slug}`, phase: 'LP build', schema: STATUS })
 )
 
 phase('Wave 3b')

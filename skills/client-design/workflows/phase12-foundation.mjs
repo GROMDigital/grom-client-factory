@@ -7,7 +7,7 @@ export const meta = {
   ],
 }
 
-const A = args
+const A = typeof args === 'string' ? JSON.parse(args) : args
 const boot = (roleId, extra) => `You are the "${roleId}" agent in the Grom client-design factory.
 READ FIRST, in this order:
 1. ${A.pluginRoot}/baseline/guardrails.md (binding, verbatim rules)
@@ -78,17 +78,19 @@ let reviewVerdict = await agent(
   boot('registry-reviewer', `Registry to review: ${A.clientFolder}/build/${A.runDate}/architecture-final.md`),
   { model: 'sonnet', label: 'registry-review', schema: REVIEW }
 )
-if (reviewVerdict && reviewVerdict.verdict === 'revise' && reviewVerdict.findings.some((f) => f.severity === 'blocker')) {
-  log('registry blocked by reviewer; one revision round')
+// Revise until the reviewer finds no blocker (bounded to 3 rounds). All findings
+// (blockers and importants) go to the reviser; only a surviving blocker loops.
+for (let round = 1; round <= 3 && reviewVerdict && reviewVerdict.verdict === 'revise' && reviewVerdict.findings.some((f) => f.severity === 'blocker'); round++) {
+  log(`registry blocked by reviewer; revision round ${round}`)
   const revised = await agent(
-    boot('systems-architect', `REVISION ROUND. Your registry at ${A.clientFolder}/build/${A.runDate}/architecture-final.md was reviewed with these findings, fix them in place and append the changes to section 12:
+    boot('systems-architect', `REVISION ROUND ${round}. Your registry at ${A.clientFolder}/build/${A.runDate}/architecture-final.md was reviewed with these findings, fix every one of them in place (blockers and importants) and append the changes to section 12:
 ${JSON.stringify(reviewVerdict.findings)}`),
-    { model: 'sonnet', label: 'architect-revise', schema: REGISTRY_SUMMARY }
+    { model: 'sonnet', label: `architect-revise-${round}`, schema: REGISTRY_SUMMARY }
   )
   if (revised) registrySummary = revised
   reviewVerdict = await agent(
-    boot('registry-reviewer', `Re-review after revision: ${A.clientFolder}/build/${A.runDate}/architecture-final.md. Prior findings: ${JSON.stringify(reviewVerdict.findings)}`),
-    { model: 'sonnet', label: 'registry-rereview', schema: REVIEW }
+    boot('registry-reviewer', `Re-review after revision round ${round}: ${A.clientFolder}/build/${A.runDate}/architecture-final.md. Prior findings: ${JSON.stringify(reviewVerdict.findings)}`),
+    { model: 'sonnet', label: `registry-rereview-${round}`, schema: REVIEW }
   )
 }
 

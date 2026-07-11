@@ -4,6 +4,13 @@ The median clinic's automation spine. Adapt freely per strategy; record
 divergences. Flat chronological naming: `01 Name` .. `NN Name`, no folders.
 Every internal/client notification is an embedded step in its workflow.
 
+## Standard funnel shape (always includes a landing page)
+Every Grom funnel is: Meta Ad -> Meta Lead Form -> redirect to a booking/deposit
+landing page -> book and pay the deposit. The landing page is the booking surface
+and where the LP events fire. Assume at least one landing page per funnel or offer;
+`no_lps` is true only when a build has no booking page at all, which is rare and
+must be justified in the registry.
+
 ## 01 Meta Lead Capture + Nurture
 Trigger: FB Lead Form Submitted (one trigger per form). Goals end nurture on
 reply/booking. Stamp fields + `funnel:<slug>` tag, create opportunity, internal

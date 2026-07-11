@@ -56,7 +56,10 @@ Run every one of these explicitly. Do not stop at the first failure.
    `baseline/doc-set-template.md`: every module the client needs is owned in the
    doc index (section 11), and every "not this client" omission is justified in the
    registry (for example no_voice, no_lps, no_chat_ai flags with a reason). Flag a
-   silently dropped module.
+   silently dropped module. Grom funnels standardly include a booking/deposit
+   landing page (the Meta lead form redirects to it), so treat `no_lps: true` as
+   a BLOCKER unless the registry justifies why this build has no booking page
+   anywhere.
 4. EDGE-CASE OWNERSHIP. Each of reschedule, insisted cancel, no-show, after-hours,
    double-book, and payment-failed has a named home: a specific workflow number or
    a named AI agent. Name any with no owner. An edge case handled "somewhere" is
