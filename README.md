@@ -11,13 +11,36 @@ set that must hold so dashboards, portal, and tracking work without hand-wiring.
 
 ## Install (team)
 
-1. `gh auth login` with an account that can read the GROMDigital private repos.
-2. Clone this repo anywhere, e.g. `~/grom/grom-client-factory`.
-3. In Claude Code: `/plugin marketplace add <path-to-clone>` then
-   `/plugin install grom-client-factory@grom-client-factory`, or run Claude
-   with `--plugin-dir <path-to-clone>` for a session-only load.
-4. Run the `grom-client-factory:doctor` skill first. It creates `~/.grom-factory.json`, checks every
-   prerequisite, and names the human who can grant anything missing.
+Prerequisite: your GitHub account needs read access to the GROMDigital private
+repos (`grom-client-factory`, `client-lp-tracking`). Grantor: Xander. Then
+authenticate git locally: `gh auth login` (and `gh auth setup-git`).
+
+**Standard install (straight from GitHub, recommended):**
+
+1. In Claude Code: `/plugin marketplace add GROMDigital/grom-client-factory`
+2. `/plugin install grom-client-factory@grom-client-factory`
+3. Run the `grom-client-factory:doctor` skill first. It creates
+   `~/.grom-factory.json`, checks every prerequisite (including cloning the
+   dependency repos), and names the human who can grant anything missing.
+
+**Developer install (working clone, Xander's setup):**
+
+Clone this repo anywhere, then `/plugin marketplace add <path-to-clone>` and
+install as above, or run Claude with `--plugin-dir <path-to-clone>` for a
+session-only load. A clone install picks up local edits immediately; register
+the clone as `plugin_path` in `~/.grom-factory.json` so doctor freshness-checks
+it.
+
+## Updating
+
+All plugin updates land on `main` of this repo; installing is never a fork.
+
+- Marketplace install: `/plugin marketplace update grom-client-factory`, then
+  reinstall/restart if prompted.
+- Clone install: `git pull` in the clone (doctor's `plugin-fresh` check tells
+  you when you are behind).
+- Dependency repos (`client-lp-tracking`, the workflow engine): doctor fetches
+  and reports behind/dirty state every run; pull when it says so.
 
 ## Skills
 
