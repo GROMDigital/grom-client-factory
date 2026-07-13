@@ -55,9 +55,18 @@ All plugin updates land on `main` of this repo; installing is never a fork.
 
 `baseline/` is the shared content library (contracts, defaults, templates,
 validator). `skills/` are the entry points. Living dependencies
-(`GROMDigital/client-lp-tracking`, `uxieee/ghl-workflow-api-docs`, and the
-`uxieee/uxie-ghl-factory` workflow-creation engine) are cloned locally and
-read fresh each run; see `doctor`.
+(`GROMDigital/client-lp-tracking` and `uxieee/ghl-workflow-api-docs`) are
+cloned locally and read fresh each run; see `doctor`.
+
+The workflow-creation engine lives at
+https://github.com/uxieee/uxie-ghl-factory and resolves two ways, in this
+order: (1) as an installed Claude Code plugin
+(`/plugin marketplace add uxieee/uxie-ghl-factory`, preferred; its skills,
+e.g. `uxie-ghl-factory:create-ghl-workflow`, are then visible in-session), or
+(2) as a local clone registered in `~/.grom-factory.json` under
+`deps["ghl-plugin"].path`. If neither resolves, `create-ghl-workflows` and
+`doctor` fail with the marketplace install command. Either way the engine's
+docs are read fresh each run.
 
 ## Tests
 

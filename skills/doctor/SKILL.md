@@ -22,6 +22,12 @@ value (never guess paths):
       }
     }
 
+The `ghl-plugin` entry is the local-clone FALLBACK for the workflow engine
+(https://github.com/uxieee/uxie-ghl-factory). It is optional when the
+uxie-ghl-factory plugin is installed via the plugin marketplace
+(`/plugin marketplace add uxieee/uxie-ghl-factory`), which is the preferred
+setup; skip creating it in that case.
+
 `author_of: true` belongs ONLY on the machine of the person actively developing
 that dependency (Xander today). It permits reading a dirty working tree as
 truth; everywhere else a dirty clone is an error.
@@ -47,14 +53,25 @@ key, or secret into it.
 4. Open-PR warnings: run `gh pr list` on each dependency repo and surface open
    PRs as "process may be mid-change" warnings.
 5. Workflow-creation engine (only when the user intends to create, build, or
-   publish a GHL workflow programmatically): confirm the `create-ghl-workflow`
-   skill is reachable inside the clone at `deps["ghl-plugin"].path`
-   (`plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`, the
-   engine's entry doc). If `peer:uxie-ghl-factory` already failed in step 1,
-   this check is moot, so fix that first; grantor: Xander (author of the peer
-   plugin) to register or share the clone. Include `deps["ghl-plugin"].remote`
-   in the open-PR sweep from item 4 above, since it's the engine about to be
-   driven.
+   publish a GHL workflow programmatically). This agent-level check is
+   AUTHORITATIVE over the mechanical `peer:uxie-ghl-factory` line from step 1
+   (checks.sh only best-effort scans `~/.claude/plugins` for an installed
+   copy). PASS if either resolves:
+   - the uxie-ghl-factory plugin is installed and this session can see its
+     skills (`uxie-ghl-factory:create-ghl-workflow`,
+     `uxie-ghl-factory:build-workflow`,
+     `uxie-ghl-factory:ghl-workflow-specialist`); this is the preferred
+     source, or
+   - the `create-ghl-workflow` skill is reachable inside the configured clone
+     at `deps["ghl-plugin"].path`
+     (`plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`) and the
+     clone is fresh.
+   If neither resolves, the remedy is: `/plugin marketplace add
+   uxieee/uxie-ghl-factory` (repo: https://github.com/uxieee/uxie-ghl-factory),
+   then install the plugin it offers; or register a local clone (grantor:
+   Xander, author of the peer plugin). When running from a clone, include
+   `deps["ghl-plugin"].remote` in the open-PR sweep from item 4 above, since
+   it's the engine about to be driven.
 
 ## Step 3: report
 

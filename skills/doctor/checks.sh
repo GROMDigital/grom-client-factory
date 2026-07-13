@@ -68,7 +68,20 @@ if [ -f "$CONFIG" ]; then
   for dep in client-lp-tracking ghl-workflow-api-docs; do
     check_clone "$dep" "dep:$dep" "not cloned; doctor will clone it"
   done
-  check_clone "ghl-plugin" "peer:uxie-ghl-factory" "uxie-ghl-factory not configured; install /plugin marketplace add uxieee/uxie-ghl-factory or register the local clone (grantor: Xander)"
+  # peer:uxie-ghl-factory passes when the engine plugin is INSTALLED
+  # (best-effort: a plugin cache dir under ~/.claude/plugins whose name
+  # contains uxie-ghl-factory; the authoritative check is agent-level,
+  # SKILL.md step 2: can the session see the uxie-ghl-factory skills)
+  # OR when the configured clone is present and fresh.
+  plugin_hit=$(find "$HOME/.claude/plugins" -maxdepth 4 -type d -name '*uxie-ghl-factory*' 2>/dev/null | head -1)
+  ghl_clone=$(jq -r '.deps["ghl-plugin"].path // empty' "$CONFIG")
+  if [ -n "$plugin_hit" ]; then
+    say "peer:uxie-ghl-factory" PASS "installed plugin detected ($plugin_hit)"
+  elif [ -n "$ghl_clone" ] && [ -d "$ghl_clone/.git" ]; then
+    check_clone "ghl-plugin" "peer:uxie-ghl-factory" "unreachable"
+  else
+    say "peer:uxie-ghl-factory" FAIL "engine not found; install the plugin: /plugin marketplace add uxieee/uxie-ghl-factory (https://github.com/uxieee/uxie-ghl-factory), or register a local clone as deps[\"ghl-plugin\"].path (grantor: Xander)"
+  fi
   root=$(jq -r '.client_root // empty' "$CONFIG")
   if [ -n "$root" ] && [ -d "$root" ]; then say client-root PASS "$root"; else say client-root FAIL "client_root missing in config"; fi
   pp=$(jq -r '.plugin_path // empty' "$CONFIG")

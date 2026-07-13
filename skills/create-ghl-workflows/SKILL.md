@@ -19,12 +19,42 @@ it there; that publish click IS the mutation-approval gate for this whole
 system. Nothing this skill does sends a message to a real lead or goes
 live.
 
+## Engine resolution (which uxie-ghl-factory you drive)
+
+The engine lives at https://github.com/uxieee/uxie-ghl-factory and is
+installable as a Claude Code plugin. Resolve it in this order; the first
+source that resolves wins:
+
+1. THE INSTALLED PLUGIN. If the uxie-ghl-factory plugin is installed and
+   its skills are visible in this session, use them. Prefer
+   `uxie-ghl-factory:create-ghl-workflow` (or
+   `uxie-ghl-factory:build-workflow`) as the build engine. Before
+   constructing any spec or IR, also read
+   `uxie-ghl-factory:ghl-workflow-specialist` and
+   `uxie-ghl-factory:ghl-orientation` for the current trigger and action
+   knowledge (the supported node types and known anti-patterns).
+2. THE CONFIGURED LOCAL CLONE. Otherwise, the clone at
+   `~/.grom-factory.json`'s `deps["ghl-plugin"].path`; the engine's docs
+   and skills live under `plugins/uxie-ghl-factory/` inside that clone.
+3. FAIL. If neither resolves, stop and give the install instructions:
+   `/plugin marketplace add uxieee/uxie-ghl-factory`, then install the
+   plugin it offers (repo: https://github.com/uxieee/uxie-ghl-factory),
+   or register a local clone in `~/.grom-factory.json`.
+
+Whichever source wins, the read-the-engine-docs-fresh rule holds in
+full: read the engine's own current SKILL.md and reference docs from the
+winning source every run, never from memory. Below, "the resolved
+engine" means that winning source.
+
 ## Phase 0: gates (in this exact order)
 
 1. DOCTOR FLOOR. Read `~/.grom-factory.json`; run
    `bash <plugin>/skills/doctor/checks.sh`. This includes the
-   `peer:uxie-ghl-factory` check (the engine's clone must be configured,
-   cloned, and current). Any FAIL: stop, point at `grom-client-factory:doctor`.
+   `peer:uxie-ghl-factory` check, which passes when the engine plugin is
+   installed OR its clone is configured, cloned, and current; the
+   agent-level truth is whether this session can see the
+   uxie-ghl-factory skills (see "Engine resolution" above). Any FAIL:
+   stop, point at `grom-client-factory:doctor`.
 2. RESOLVE the client folder: argument if given, else cwd. Never guess.
 3. REGISTRY GATE. Find the most recent `<client>/build/<YYYY-MM-DD>/`
    directory whose `run-manifest.json` shows a completed client-design run
@@ -51,14 +81,14 @@ live.
    abort per-workflow anyway, but catching it here saves the run.
 5. WRITE-RAILS + AUTH. This skill issues writes against GHL's internal
    builder API. Before the first write in this workspace, both gates in
-   `${ghl-plugin}/plugins/uxie-ghl-factory/docs/write-rails.md` apply in
-   full (Gate 1: owned-account check, every session; Gate 2: TOS
-   disclosure, once per workspace, recorded at `.ghl/tos-acknowledged`).
-   Auth capture (JWT, header format, token lifetime) is
-   `${ghl-plugin}/plugins/uxie-ghl-factory/docs/auth-jwt-capture.md`. Read
-   both fresh; do not paraphrase from memory or from an earlier session's
-   notes. `${ghl-plugin}` is the path in `~/.grom-factory.json`'s
-   `deps["ghl-plugin"].path`.
+   the resolved engine's `docs/write-rails.md` apply in full (Gate 1:
+   owned-account check, every session; Gate 2: TOS disclosure, once per
+   workspace, recorded at `.ghl/tos-acknowledged`). Auth capture (JWT,
+   header format, token lifetime) is the resolved engine's
+   `docs/auth-jwt-capture.md`. In the installed plugin these docs sit at
+   the plugin's install root; in a clone they sit under
+   `<clone>/plugins/uxie-ghl-factory/docs/`. Read both fresh; do not
+   paraphrase from memory or from an earlier session's notes.
 6. LOCATION + IDENTITY. Resolve the target `locationId` from
    `client-manifest.json`'s `ghl_location_id`. Confirm the client's name.
    Both feed the mutation gate in Phase 1; if either is missing, stop.
@@ -144,14 +174,19 @@ before continuing. A stale gate does not cover a changed list.
 For each workflow in the gated worklist, in the Phase 1 creation order:
 
 1. READ THE ENGINE'S OWN DOCS FRESH. Every run, not from memory (the
-   engine is actively developed and its input format changes): read
-   `${ghl-plugin}/plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`
-   in full, plus every reference doc it points to (its `references/` set,
+   engine is actively developed and its input format changes): read the
+   resolved engine's `create-ghl-workflow` SKILL.md in full (the
+   installed plugin's `uxie-ghl-factory:create-ghl-workflow` skill, or
+   `<clone>/plugins/uxie-ghl-factory/skills/create-ghl-workflow/SKILL.md`),
+   plus every reference doc it points to (its `references/` set,
    currently build-recipe.md, step-shapes.md, and discovery.md) and whatever
    source it names for the current step and trigger coverage (the supported
    node types). Do not assume a fixed filename for that coverage source, the
    engine moves it; follow the SKILL.md's own current pointer. Trust what
-   these say over any summary of them, including this one.
+   these say over any summary of them, including this one. When the
+   installed plugin won resolution, also lean on its
+   `ghl-workflow-specialist` and `ghl-orientation` skills for trigger and
+   action knowledge before translating specs.
 2. TRANSLATE the spec into the engine's IR. Source material: the
    journey-and-workflows doc's per-workflow card for this workflow (Name,
    Trigger(s), Enrollment guards, Steps, Exit conditions, Tags/fields
@@ -180,7 +215,8 @@ For each workflow in the gated worklist, in the Phase 1 creation order:
      record in the IR file and in the creation log exactly which step is
      deferred and which workflow it must point at. Genuinely circular
      pairs always defer at least one side to pass 2.
-3. INVOKE the engine from its own skill directory:
+3. INVOKE the engine from the resolved engine's `create-ghl-workflow`
+   skill directory (installed plugin or clone):
    ```
    node scripts/build.mjs <ir.json> <LOC>
    ```
@@ -288,9 +324,10 @@ Once pass 1 and pass 2 are both complete:
   If the engine cannot build it, the fix is in the design docs or the
   engine, not a hand-rolled POST.
 - Never write Grom client data (registry contents, journey specs, client
-  names, IR files, logs) into the peer plugin's repo (`ghl-plugin`). The
-  dependency is one-way: this skill reads the engine's code and docs, it
-  never writes into that clone. All client artifacts stay under
+  names, IR files, logs) into the peer plugin, whether it resolved as an
+  installed plugin or as the `ghl-plugin` clone. The dependency is
+  one-way: this skill reads the engine's code and docs, it never writes
+  into that install or clone. All client artifacts stay under
   `<client>/build/<runDate>/`.
 - No em dashes anywhere.
 - This skill file is internal tooling documentation; the platform-naming
