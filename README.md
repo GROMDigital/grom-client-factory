@@ -11,9 +11,10 @@ set that must hold so dashboards, portal, and tracking work without hand-wiring.
 
 ## Install (team)
 
-Prerequisite: your GitHub account needs read access to the GROMDigital private
-repos (`grom-client-factory`, `client-lp-tracking`). Grantor: Xander. Then
-authenticate git locally: `gh auth login` (and `gh auth setup-git`).
+This repo is public, so the plugin installs with no special access. One
+dependency repo (`GROMDigital/client-lp-tracking`) is still private: your
+GitHub account needs read access to it before doctor can clone it. Grantor:
+Xander. Authenticate git locally: `gh auth login` (and `gh auth setup-git`).
 
 **Standard install (straight from GitHub, recommended):**
 
