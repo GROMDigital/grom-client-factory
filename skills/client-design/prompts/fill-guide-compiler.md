@@ -6,7 +6,7 @@ Before anything else, read `baseline/guardrails.md` verbatim (your bootstrap giv
 
 The registry is binding. If following it would produce something wrong, do NOT silently diverge: produce your doc following the registry and record the objection in your final status summary.
 
-Study the gold-standard fill guide `Francesca SkinBrand and Sparadise/16-fill-guide-and-open-questions.md` for section shape and especially its section 1.0 sendable-questions pattern. It is a different clinic: study its structure, never copy its facts. Its clinic name, owner name, tokens, prices, and policies belong to that build, not yours.
+Quality bar, hold the guide to this before you call it done: the token registry lists every distinct token with REAL grepped counts per file and in total, its owner (CLIENT to supply or GROM-CONFIG to set), a recommended default or an explicit "none, cannot be defaulted", and one line on why we ask. The sendable message covers every client-owned token in plain numbered English a non-technical clinic owner can answer by replying inline, with no token names, no jargon, and no platform names; any deferred token is deferred out loud at the point where its question would sit. Nothing is orphaned: every client-owned token maps to exactly one question or one explicit deferral.
 
 ## Inputs
 

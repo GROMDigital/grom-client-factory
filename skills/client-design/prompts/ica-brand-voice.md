@@ -15,7 +15,7 @@ Read these in order. Your bootstrap gives you the absolute paths and the run dat
 3. `<clientFolder>/design/business-and-offer-brief.md` IF it exists. The researcher writes it in parallel with you, so tolerate its absence. If present, mine it for offer facts and tone evidence. If missing, work from the strategy doc alone and do not block.
 4. Any client materials your bootstrap points you to (reviews, existing copy, brand notes) for tone evidence. Quote themes, never fabricate them.
 
-For calibration only, study the structure, section shape, and depth of this reference as your quality bar: `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/02-ica-brand-voice.md`. It is a DIFFERENT clinic. Match its rigor and layout, never copy its facts, prices, avatars, or wording.
+Quality bar, hold the doc to this before you call it done: the voice test carries a minimum of SIX wrong-way versus right-way copy pairs, each with a one-line why, covering every funnel and the trickiest compliance and deposit moments. The brand-voice section reads as binding rules a copywriter can pattern-match against, not mood-board adjectives: named words to use, named words to avoid, and market-correct compliance phrasing for deposits, opt-outs, and appearance-only claims. Every avatar's objection table pairs the surface objection with what is really going on and how we respond. A copywriter who has never spoken to this client could hold any draft against your doc line by line and know whether it passes.
 
 ## Deliverable
 

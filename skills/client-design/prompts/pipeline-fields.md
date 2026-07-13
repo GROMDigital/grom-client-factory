@@ -34,7 +34,7 @@ Write these sections, dense and buildable:
 6. **Custom values.** Every custom value key and its value, tokens where the value is not yet known.
 7. **Who-writes-what table.** One row per writer (workflow, AI agent, Meta mapping, or human) listing every field and tag it writes. This table must cover every field and every tag in the doc.
 
-Reference bars, structure only: study `Francesca SkinBrand and Sparadise/03-pipeline-and-stages.md` and `Francesca SkinBrand and Sparadise/04-custom-fields-and-tags.md` for the section shape, table density, and the level of per-stage and per-tag detail expected. These are a DIFFERENT clinic: copy their structure and rigour, NEVER their facts, names, prices, or objects.
+Quality bar, hold every section to this before you call it done: every stage carries explicit entry and exit criteria. Every stage transition names exactly ONE owner, a workflow by registry number and name or a named human action, never two. Every field row states its type, its exact `contact.snake_case` key, who writes it, and who reads it. Every tag is namespaced, grouped by namespace, with an add-owner and a remove-owner. A reader could build the pipeline, fields, and tags from your doc alone without asking a single question.
 
 List every `{{FILL_...}}` token you introduce in a placeholders section at the bottom of the doc.
 

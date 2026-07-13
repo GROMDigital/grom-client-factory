@@ -18,7 +18,7 @@ Read in this order:
 
 Because you run last, you are reconciling finished work against intent. Where a doc's content and the registry disagree, note it; do not overwrite the doc.
 
-Calibration only, never a source of facts: study `Francesca SkinBrand and Sparadise/00-build-overview.md` for the shape of a strong build-overview (its doc index, build order, workflow and AI tables, strategy mapping, and deliverables audit). That is a DIFFERENT clinic. Never copy its facts, names, prices, workflow numbers, or agent names into this client's doc.
+Quality bar, hold the overview to this before you call it done: the doc index and the deliverables audit reflect REAL disk state, verified file by file against the registry index, with every mismatch or missing file named loudly. The build order runs strictly downhill with one concrete reason per step and states what breaks if a step is reordered. The workflow and AI tables carry exact registry spellings only. The strategy mapping names, for every promise the strategy made, the exact workflows, fields, and agents that implement it, and says loudly when a promise has no implementing doc. A builder could sequence the entire account build from your overview alone.
 
 ## Deliverable
 

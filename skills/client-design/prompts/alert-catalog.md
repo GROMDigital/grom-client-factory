@@ -18,7 +18,7 @@ Your bootstrap gives you: the absolute path to `baseline/guardrails.md`, this pr
 
 Use the registry's EXACT spellings for every workflow name and number, tag, custom field key, calendar, payment product, and alert `N-id`. Never respell, never synonymize, never renumber. If an `N-id` in section 9 has no obvious trigger meaning, read the journey notes for context before you invent one, and if it is still unclear, write the copy against the registry's stated trigger and flag the ambiguity in your status summary.
 
-For calibration only, study the section shape and copy density of this reference as your quality bar: `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/10-internal-notifications.md`. It is a DIFFERENT clinic. Match its per-alert structure, its severity discipline, and its copy density; NEVER copy its facts, prices, names, or `N-id` assignments. Your registry is the only source of truth for what fires here.
+Quality bar, hold every entry to this before you call it done: every `N-id` carries its canonical copy in full (the exact text that fires, not a summary), its channel(s), its recipients, exactly one severity of INFO, ACTION, or URGENT, and explicit throttle rules. Every ACTION and every URGENT alert states exactly what the human must do, as a specific instruction, never "handle it". The team could configure every notification from your entries alone and triage any alert from a lock screen by its prefix. Your registry is the only source of truth for what fires here.
 
 ## Deliverable
 

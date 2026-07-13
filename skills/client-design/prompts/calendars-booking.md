@@ -19,7 +19,7 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 
 Where the business brief is silent on a value, that value becomes a `{{FILL_SNAKE_CASE}}` token at the bottom of your doc, never an invented fact.
 
-For calibration only, study the per-calendar subsection shape and the settings-table density of this reference as your quality bar: `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/15-calendars-and-booking-setup.md`. It is a DIFFERENT clinic. Match its structure and thoroughness; NEVER copy its facts, prices, calendar names, or objects.
+Quality bar, hold the doc to this before you call it done: every calendar is its own labelled subsection with a settings table stating duration, buffers before and after, availability windows, max bookings per day, the owning staff user, minimum notice, booking window, reschedule and cancel handling, and the native-notifications-OFF line. Every payment product states its exact registry name, its amount from the business brief, and the ONE workflow that filters on it, cited by registry number and name. The deposit link-source rule is stated as a hard rule naming its one workflow. A builder could configure every calendar and product from your tables alone without opening another doc.
 
 ## Deliverable
 

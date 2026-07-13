@@ -13,7 +13,7 @@ Read these in order. Your bootstrap gives you the absolute path for each.
 
 Client-supplied strategy facts (offers, pricing, deposits, targeting) are binding for the build even when the public web is silent. The web's job is to corroborate identity and surface contradictions, not to overrule the strategy.
 
-For calibration only, study the structure, section shape, and factual density of this reference as your quality bar: `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/01-business-and-offer-brief.md`. It is a DIFFERENT clinic. Match its rigor, its source-ledger discipline, and its verbatim pricing treatment; never copy its facts, prices, names, or wording.
+Quality bar, hold every line to this before you call it done: every material fact in the doc has a row in the source ledger naming the source that supports it, and a fact with no ledger row does not belong in the doc. Pricing and deposit mechanics are quoted VERBATIM from source, never rounded, cleaned up, or harmonized. Contradictions between sources are listed with both values and both sources, never resolved. Every unknown is a `{{FILL_...}}` token with a note on who must supply it. A downstream agent could trace any sentence in your brief back to its evidence in under a minute.
 
 ## Deliverable
 

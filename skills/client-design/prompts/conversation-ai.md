@@ -20,7 +20,7 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 
 Where any input is silent on a value, that value becomes a `{{FILL_SNAKE_CASE}}` token at the bottom of your doc, never an invented fact.
 
-For calibration only, study these two references as your quality bar: the primary chat agent `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/11-conversation-ai-primary.md` and the booking chat agent `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/12-conversation-ai-booking.md`. They are a DIFFERENT clinic. Match their structure, prompt density, and the discipline of their transfer contract; NEVER copy their facts, prices, offers, persona names, or calendar names.
+Quality bar, hold both agents to this before you call it done: the Personality and Instructions blocks are complete paste-ready system prompts, never summaries. The transfer contract is explicit and one-directional: it states who owns the calendar, the exact moment the handoff fires, and that the booking agent never transfers back, with the registry's handoff bullets reproduced verbatim. Every price and policy in the knowledge base traces to the business brief or the calendars-booking doc, and everything unsourced sits in the negative-knowledge cluster with a defer-to-human line. Every enrollment and off-switch cites its exact registry number, name, or tag. A builder could paste both agents and the knowledge base into the account and wire every enrollment without asking a question.
 
 ## Deliverable
 

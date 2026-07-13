@@ -20,7 +20,7 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 
 Where two inputs conflict, the registry wins on agent lineup, workflow numbers, and names; phone-and-compliance wins on market rules and go-live gating; the ICA doc wins on objection copy and tone; calendars-booking-payments wins on the booking mechanics. Log any conflict in your status summary.
 
-For calibration only, study the shape and depth of these two references from a DIFFERENT clinic: the inbound receptionist `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/13-voice-ai-inbound.md` and the outbound speed-to-lead `/Volumes/Xander SSD/Work/Clients/Grom Digital/Francesca SkinBrand and Sparadise/14-voice-ai-outbound.md`. Match their density, their success-gated booking discipline, and their per-intent flow tables. NEVER copy their facts, prices, personas, calendar names, workflow numbers, or objects.
+Quality bar, hold each agent to this before you call it done: the agent prompt is full paste-ready text a builder can configure without edits, never an outline. Every intent has a row in a per-intent flow table stating detection, calendar action, workflow fired by exact registry number and name, fields written, and the copy rule. Every objection reframe is sourced from the ICA doc, never invented. Every retry, voicemail, and push cap is a hard explicit number. Booking language is success-gated: held, booked, or confirmed appears only after a real tool-success result. Escalation is an explicit transfer and handoff contract mapping each trigger to the exact registry workflow it fires and stating whether the AI stops or carries on.
 
 ## Deliverable
 
