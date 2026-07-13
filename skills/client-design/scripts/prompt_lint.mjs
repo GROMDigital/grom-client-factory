@@ -22,7 +22,7 @@ for (const role of roster.roles) {
     const re = new RegExp(`^${section.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "m");
     if (!re.test(text)) problems.push(`LINT\t${role.id}\tmissing section ${section}`);
   }
-  if (text.includes("—")) problems.push(`LINT\t${role.id}\tcontains em dash`);
+  if (text.includes("\u2014")) problems.push(`LINT\t${role.id}\tcontains em dash`);
 }
 
 const rosterIds = new Set(roster.roles.map((r) => r.id));

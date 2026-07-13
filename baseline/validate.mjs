@@ -43,7 +43,7 @@ for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp
   const text = fs.readFileSync(f, "utf8");
   const lines = text.split("\n");
   lines.forEach((line, i) => {
-    if (line.includes("—")) v("EM_DASH", rel(f), `line ${i + 1}`);
+    if (line.includes("\u2014")) v("EM_DASH", rel(f), `line ${i + 1}`);
     const badToken = line.match(/\{\{FILL_(?![A-Z0-9_]+\}\})[^}]*\}\}/);
     if (badToken) v("MALFORMED_FILL_TOKEN", rel(f), `line ${i + 1}: ${badToken[0]}`);
   });

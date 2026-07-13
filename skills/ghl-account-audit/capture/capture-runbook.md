@@ -49,9 +49,9 @@ channel: APP
 version: 2021-07-28
 ```
 
-Copy the `authorization` value and strip the leading `Bearer ` — the `eyJ...` part is the JWT (`TOKEN`). Reject tokens from requests whose `referer` is `https://app.gohighlevel.com/`; those are not scoped for the workflow backend and usually return `401`.
+Copy the `authorization` value and strip the leading `Bearer `; the `eyJ...` part is the JWT (`TOKEN`). Reject tokens from requests whose `referer` is `https://app.gohighlevel.com/`; those are not scoped for the workflow backend and usually return `401`.
 
-> **Auth note (GHL migrated 2026-07):** the backend now authenticates via `Authorization: Bearer <JWT>`. The old `token-id` header returns `401`. If you still see requests using `token-id`, you're on stale traffic — use the `authorization` header.
+> **Auth note (GHL migrated 2026-07):** the backend now authenticates via `Authorization: Bearer <JWT>`. The old `token-id` header returns `401`. If you still see requests using `token-id`, you're on stale traffic; use the `authorization` header.
 
 If no `authorization: Bearer` header appears, ask the user to reload the workflow page or manually open the workflow in their logged-in browser, then inspect network requests again.
 
