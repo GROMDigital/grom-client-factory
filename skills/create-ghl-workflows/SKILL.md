@@ -1,6 +1,6 @@
 ---
 name: create-ghl-workflows
-description: Create a client's GHL workflows as DRAFTS from its already-designed build (the binding registry's workflow list plus the journey-and-workflows doc), by conducting the uxie-ghl-factory peer plugin's create-ghl-workflow engine one workflow at a time. This skill creates GHL workflows as DRAFTS ONLY and NEVER publishes: every build runs without --publish, and a human reviews each draft in the GHL builder UI and publishes it there. Requires a completed registry, journey-and-workflows doc, and client-manifest.json for the client; requires an explicit mutation-gate yes naming the target location and the exact numbered workflow list before any write happens. Verifies each draft read-only immediately after creation, logs a per-workflow outcome table, and closes by pointing at grom-client-factory:ghl-account-audit verify mode to confirm the published state once the human has published in the UI.
+description: Create a client's GHL workflows as DRAFTS from its already-designed build (the binding registry's workflow list plus the journey-and-workflows doc), by conducting the uxie-ghl-factory peer plugin's create-ghl-workflow engine one workflow at a time. This skill creates GHL workflows as DRAFTS ONLY and NEVER publishes: every build runs without --publish, and a human reviews each draft in the GHL builder UI and publishes it there. Requires a completed registry, journey-and-workflows doc, and client-manifest.json for the client; requires an explicit mutation-gate yes naming the target location and the exact numbered workflow list before any write happens. Resolves every prerequisite (fields, tags, custom values, calendars, payment products, AI agents, and other workflows) before the gate, marks workflows with missing prerequisites BLOCKED, orders creation by dependency, and cross-wires workflow-to-workflow references in a second pass. Verifies each draft read-only immediately after creation, logs a per-workflow outcome table, and closes by pointing at grom-client-factory:ghl-account-audit verify mode to confirm the published state once the human has published in the UI.
 ---
 
 # create-ghl-workflows
@@ -63,13 +63,49 @@ live.
    `client-manifest.json`'s `ghl_location_id`. Confirm the client's name.
    Both feed the mutation gate in Phase 1; if either is missing, stop.
 
-## Phase 1: build the worklist and gate the mutation
+## Phase 1: build the worklist, resolve prerequisites, order it
 
 1. Take the registry's section 3 workflow list (the LAW numbering and
    exact names) in number order. Ask the user if any workflow numbers
    should be excluded from this run (default: none excluded, full list).
-2. Compute the worklist: full registry list minus exclusions, still in
-   number order.
+2. Compute the candidate worklist: full registry list minus exclusions.
+3. PREREQUISITE RESOLUTION (before the mutation gate, always). Parse
+   every workflow spec in the candidate worklist (the journey doc's
+   per-workflow card plus its registry row) and extract every object it
+   references:
+   - custom fields (by exact key), custom values, tags, calendars, and
+     payment products;
+   - AI agents (Conversation AI or Voice AI) referenced by any step;
+   - OTHER WORKFLOWS: every triggerWorkflow action, every Remove From
+     Workflow step, and every goal reference that names another
+     workflow.
+   Build a dependency table: one row per worklist workflow listing its
+   non-workflow prerequisites and the other workflows it references.
+4. VERIFY every non-workflow prerequisite EXISTS LIVE. Check the
+   harvested `client-manifest.json` first; for anything the manifest
+   lacks, make a read-only MCP call against the target location. Any
+   missing prerequisite marks every workflow that needs it BLOCKED, with
+   the exact missing object named (for example "BLOCKED: calendar
+   'Consult Calendar' not found live"). Say it explicitly and treat it as
+   hard: an AI agent referenced by any workflow step MUST exist in the
+   account before that workflow is drafted; a missing agent BLOCKs the
+   workflow exactly like a missing calendar or field. BLOCKED workflows
+   are excluded from the buildable worklist and presented as excluded at
+   the mutation gate; the user can approve building the rest.
+5. CREATION ORDER. Topologically order the buildable worklist so that a
+   workflow is drafted before any workflow that references it. Where the
+   registry's numbering already satisfies the dependencies, keep number
+   order; break ties by number. Cycles (A references B and B references
+   A) are expected and legal in GHL: they cannot be ordered away, so
+   order the members of a cycle by number and resolve their mutual
+   references in pass 2 (Phase 4).
+6. OPEN THE CREATION LOG. Start
+   `<client>/build/<runDate>/workflow-creation-log.md` with a dependency
+   section: the dependency table from step 3, every BLOCKED workflow with
+   its exact missing prerequisite, and the chosen creation order with a
+   one-line why (number order kept, or which dependency forced a
+   deviation). Pass-2 wiring actions are appended to this section in
+   Phase 4.
 
 ## MUTATION GATE (hard stop, explicit yes required)
 
@@ -77,12 +113,19 @@ Present, in one message, before any write:
 
 - Target location ID (from client-manifest.json).
 - Client name.
-- The exact numbered worklist about to be created, e.g.:
+- The exact numbered worklist about to be created, in creation order,
+  e.g.:
   1. 01 New Lead Response
   2. 02 Appointment Confirmation
   3. 03 No-Show Follow-Up
-  ... (every workflow in the worklist, in order, spelled exactly as the
-  registry spells it)
+  ... (every buildable workflow, in the Phase 1 creation order, spelled
+  exactly as the registry spells it; note where and why the order
+  deviates from registry number order)
+- Every BLOCKED workflow, presented as EXCLUDED from this run, each with
+  its exact missing prerequisite named. A yes to this gate approves
+  building the non-blocked list only; a BLOCKED workflow enters a later
+  run only after its prerequisite exists live and this gate is
+  re-presented.
 - This sentence, unchanged: "This skill creates GHL workflows as DRAFTS
   ONLY and NEVER publishes. Every build runs without --publish. You will
   review each draft in the GHL workflow builder and publish it yourself
@@ -96,9 +139,9 @@ added mid-run, a workflow the engine could not resolve and had to be
 dropped, a doc-index correction), stop and re-present this gate in full
 before continuing. A stale gate does not cover a changed list.
 
-## Phase 2: per-workflow build loop (one at a time, registry number order)
+## Phase 2: pass 1 build loop (one at a time, in creation order)
 
-For each workflow in the gated worklist, in order:
+For each workflow in the gated worklist, in the Phase 1 creation order:
 
 1. READ THE ENGINE'S OWN DOCS FRESH. Every run, not from memory (the
    engine is actively developed and its input format changes): read
@@ -127,6 +170,16 @@ For each workflow in the gated worklist, in order:
      `<client>/build/<runDate>/workflow-ir/<NN-slug>.json` (runDate =
      today, the date of this creation session; create the directory if
      absent) so each IR is inspectable and reusable on retry.
+   - PASS-1 CROSS-WIRING RULE. A step that references another workflow
+     (a triggerWorkflow action, a Remove From Workflow step, or a goal
+     naming another workflow) is wired in pass 1 ONLY if the engine
+     supports referencing an already-created workflow by ID at creation
+     time AND the target's live ID is already in the build map. Otherwise
+     leave that step out of the pass-1 IR as a documented placeholder
+     (the engine cannot point at a workflow ID that does not exist yet):
+     record in the IR file and in the creation log exactly which step is
+     deferred and which workflow it must point at. Genuinely circular
+     pairs always defer at least one side to pass 2.
 3. INVOKE the engine from its own skill directory:
    ```
    node scripts/build.mjs <ir.json> <LOC>
@@ -170,15 +223,43 @@ Log the outcome (created-draft / failed / skipped, with a one-line reason
 for failed/skipped) to
 `<client>/build/<runDate>/workflow-creation-log.md`, appending one row per
 workflow as you go so the file is a live checkpoint, not a final summary
-written at the end.
+written at the end. Each created-draft row also records the draft's LIVE
+WORKFLOW ID and any deferred cross-workflow steps: these rows are the
+BUILD MAP (registry number, exact name, live workflow ID) that pass 2
+wires from, so an unrecorded ID means pass 2 cannot wire it.
 
-## Phase 4: close
+## Phase 4: pass 2, cross-wire the workflow references
 
-Once every workflow in the worklist has been attempted:
+Runs once, after every workflow in the gated worklist has been attempted
+in pass 1 and the build map holds a live ID for every created draft.
+
+1. For each draft with deferred cross-workflow steps (per the pass-1
+   placeholder records in the creation log), revisit it via the engine
+   and wire each deferred step to the live workflow ID the build map
+   holds for its target. If the engine supports referencing by ID at
+   creation time, most references were already wired in pass 1 and this
+   pass touches only the genuinely circular ones.
+2. If a deferred step's target has no live ID in the build map (it
+   failed or was skipped in pass 1), do NOT guess or improvise an ID:
+   leave the step unwired, log it as `unwired` with the missing target
+   named, and surface it plainly in the close report.
+3. READBACK-VERIFY. After wiring, GET each touched draft's config
+   read-only (same technique as Phase 3) and confirm every
+   cross-workflow step now points at the intended live ID and the draft
+   is still `draft`. A missing or wrong reference is logged as failed
+   wiring and surfaced, never silently accepted.
+4. Append every pass-2 wiring action (workflow, step, target live ID,
+   readback verified yes/no) to the creation log's dependency section.
+
+## Phase 5: close
+
+Once pass 1 and pass 2 are both complete:
 
 1. Report the outcome table (from the log): workflow number, name, status,
    GHL builder URL for each created-draft (the build report prints one per
-   workflow), and the reason for any failed/skipped.
+   workflow), the reason for any failed/skipped, and any unwired
+   cross-references or BLOCKED workflows with their missing
+   prerequisites.
 2. Tell the human explicitly: review each draft in the GHL workflow
    builder, publish there when satisfied. This skill will not do it for
    you and cannot be asked to.
@@ -195,6 +276,13 @@ Once every workflow in the worklist has been attempted:
   mutation-approval gate.
 - One location (one client) per session. Do not switch clients mid-run
   without a fresh Phase 0.
+- Prerequisites are verified, never assumed. A workflow whose spec
+  references a field, tag, custom value, calendar, payment product, AI
+  agent, or workflow that does not exist live (and is not created by this
+  run) is BLOCKED and excluded at the gate, not built on faith.
+- Cross-workflow references are wired only from the build map's recorded
+  live IDs and readback-verified; never point a step at a guessed or
+  hand-typed workflow ID.
 - Stop on ANY engine error (abort, round-trip issue, 401, unresolved
   dependency) rather than improvising a raw API call to work around it.
   If the engine cannot build it, the fix is in the design docs or the
