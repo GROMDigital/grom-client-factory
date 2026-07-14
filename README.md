@@ -1,8 +1,10 @@
 # grom-client-factory
 
 Grom Digital's client-setup plugin for Claude Code. One invocation in a client
-folder designs the whole build (docs, landing pages, manifest, go-live checklist);
-sibling skills audit the live account and create workflows from the specs.
+folder designs the whole build (docs, manifest, go-live checklist); sibling
+skills audit the live account, create workflows from the specs, and reconcile a
+hand-built landing page to the tracking design. Landing pages are built outside
+the factory, directly with the user, not generated here.
 
 **The rule every skill carries:** the strategy defines the build; the baseline
 defines how the build plugs into Grom's systems. There is no one-size-fits-all
@@ -50,6 +52,7 @@ All plugin updates land on `main` of this repo; installing is never a fork.
 | `doctor` | Environment + per-client prerequisite checks | Local config only |
 | `client-design` (Plans 3, 5) | Full design factory: foundation research, binding registry, module fan-out, audit and fix loop, then a self-contained `system-guide.html` full-system review page. Role prompts shipped (Plan 3b); system-guide render shipped (Plan 5). Modes: fresh, ingest-answers, regen, resume, guide | Local files only |
 | `ghl-account-audit` | Live-state capture, post-build verify, manifest harvest | Read-only vs GHL |
+| `reconcile-lp-tracking` | Reconcile a landing page built outside the factory (an HTML file on disk) against the client's tracking design and the live `client-lp-tracking` contract: report + paste-ready head snippet + DOM hooks to add. Advise only | Nothing (reads only) |
 | `create-ghl-workflows` (Plan 4) | Drives the uxie-ghl-factory engine to create a client's designed workflows as DRAFTS from the registry and journey doc; hard mutation gate, one location per session, canonical names from the registry; the human reviews and publishes each draft in the UI (this skill never publishes) | LIVE sub-account writes (drafts only), gated |
 
 ## Layout

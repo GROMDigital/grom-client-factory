@@ -33,7 +33,7 @@ Write to the filename the registry's doc index assigns to your row. Find your ro
    - Payments: products and links must exist and produce URLs before any workflow sends a deposit link.
    - Workflows: build shells first where one workflow triggers another by id, then wire copy and embedded alerts, then publish.
    - Chat AI, then voice AI: agents reference published workflows, calendars, and fields, so they come after those exist.
-   - Forms and landing pages: built with the exact field strings, mapped and test-submitted.
+   - Forms: built with the exact field strings, mapped and test-submitted. Landing pages are built outside this factory and reconciled to tracking by the `grom-client-factory:reconcile-lp-tracking` skill; they are not a factory build step in this sequence.
    - End-to-end test last: one real lead per entry point walked all the way through.
    State plainly what breaks if a step is reordered.
 

@@ -109,9 +109,11 @@ Workflow A resume or a fresh run, re-gate.
   2. Classify each answer: TOKEN FILL (pure value) vs DESIGN-CHANGING (touches
      the registry: new/removed calendar, offer change, policy that alters a
      workflow).
-  3. Token fills: replace {{FILL_X}} across design/ and lp/, verifying the
+  3. Token fills: replace {{FILL_X}} across design/, verifying the
      occurrence count per token matches the fill guide's count before and
      after (report any mismatch, do not force). Update the fill guide.
+     (Landing pages are built outside this factory, so there is no lp/ to
+     token-fill.)
   4. Design-changing answers: amend the registry (section 12, dated), bump
      registry_hash, then regen each affected module doc (owner roles from the
      doc index), then scoped reconcile + fill-guide recompile.
@@ -125,7 +127,7 @@ Workflow A resume or a fresh run, re-gate.
   same bootstrap contract Workflow B uses: read guardrails,
   `prompts/system-guide.md`, the binding registry, and the other inputs its
   prompt lists (the doc set under `design/`, the fill guide, the go-live
-  checklist, the client manifest, and `lp/` if present); write
+  checklist, and the client manifest); write
   `<clientFolder>/system-guide.html`. This mode is read-only over the design
   docs, it renders the finished set, it never edits them. Use it any time the
   guide needs a standalone refresh outside a full fresh/resume build (for

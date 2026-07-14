@@ -20,8 +20,10 @@ authoritative index; the count flexes per client.
 - [ ] calendars + booking + payments (settings, products with canonical names)
 - [ ] phone + compliance (number plan, submission-ready bundle content)
 - [ ] domains + deliverability (sending domain, DNS records, LP domain, warm-up)
-- [ ] landing pages: built separately (Grom design), NOT a factory deliverable;
-      recorded in the registry for tracking and workflow context only
+- [ ] landing pages: built outside the factory (directly with the user), NOT a
+      factory deliverable; recorded in the registry for tracking and workflow
+      context only, then reconciled to tracking by the
+      `grom-client-factory:reconcile-lp-tracking` skill
 - [ ] tracking + pixel (first-party slice, Clarity, pixel plan, CAPI map)
 - [ ] post-launch onboarding runbook (instantiated, honest step labels)
 - [ ] fill guide (token registry + sendable client questions message)

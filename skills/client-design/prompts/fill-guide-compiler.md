@@ -15,7 +15,7 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 1. `baseline/guardrails.md` (verbatim, first, always).
 2. The binding registry your bootstrap points to, for the EXACT spellings of every workflow, tag, field, calendar, and payment product a fill note may cite. Never respell or synonymize.
 3. ALL claims sidecars in `<clientFolder>/build/<runDate>/claims/*.json`. These are your authoritative token source: every doc's `defines.fill_tokens` and `references.fill_tokens` tells you which tokens are live and where they originate.
-4. Every doc under `<clientFolder>/design/` and every page under `<clientFolder>/lp/`. These are the files you grep for real token counts and per-file breakdowns.
+4. Every doc under `<clientFolder>/design/`. These are the files you grep for real token counts and per-file breakdowns. (There are no landing-page files to grep: landing pages are built outside this factory.)
 5. The residual conflicts your bootstrap hands you (the JSON list), which become your precedence notes.
 
 Where a sidecar and a file disagree on whether a token is live, the file is truth for counts and the sidecar is truth for ownership intent. Where the registry and a design doc disagree on a name a fill note cites, the registry wins on the spelling. Log any such disagreement in your status summary rather than papering over it.
@@ -52,7 +52,7 @@ Derive the sidecar from the doc you already wrote, not from memory. Write the do
 
 ## Boundaries
 
-- Token counts are grepped numbers, never guesses. Grep the actual `design/` docs and `lp/` pages and state the real per-file counts and totals. If a sidecar claims a token that grep does not find in any file, note the discrepancy rather than inventing a count.
+- Token counts are grepped numbers, never guesses. Grep the actual `design/` docs and state the real per-file counts and totals. If a sidecar claims a token that grep does not find in any file, note the discrepancy rather than inventing a count.
 - The sendable message names no platform and uses no jargon. No `{{FILL_*}}` token names, no workflow numbers, no field keys, no "GoHighLevel", no gohighlevel.com URL, no internal fee structures. A non-technical clinic owner must be able to answer every line by replying inline.
 - Cover every client-owned token or explain the deferral. A CLIENT token that appears in no sendable question and has no stated deferral is a failure.
 - You compile, you do not resolve a conflict. For each residual conflict you record its precedence note only; you never pick a new winner or edit the docs.

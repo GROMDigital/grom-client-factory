@@ -55,9 +55,12 @@ workflow enrollments wired; test paths: interested, price shopper, not ready,
 wants info, wants booking, reschedule, no response.
 
 ## 8. Landing pages and thank-you pages
-Built per design; copy/brand verified; forms, calendars, CTAs working; full
-lead + booking flow tested; mobile responsive; page speed sane. HEAD-PASTE
-WARNING: paste ADDS, check existing head content first.
+Built outside the factory (directly with the user); copy/brand verified; forms,
+calendars, CTAs working; full lead + booking flow tested; mobile responsive;
+page speed sane. Reconciled to the tracking design by the
+`grom-client-factory:reconcile-lp-tracking` skill (five events, selectors,
+snippet, CSP) before this line is checked. HEAD-PASTE WARNING: paste ADDS, check
+existing head content first.
 
 ## 9. Tracking and analytics
 First-party snippet live on every LP (page-level paste); booking steps firing;
