@@ -1,5 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -13,6 +20,7 @@ const frozenInputs = Object.freeze({
   timezone: 'Australia/Sydney',
   contextHash: 'a',
   coverageProfileHash: 'b',
+  metricProfileHash: 'metric-1',
   rulesetHash: 'c',
   codeHash: 'code-1',
   auditProfileHash: 'profile-1',
@@ -23,8 +31,12 @@ const frozenInputs = Object.freeze({
   capabilityReceiptHashes: ['receipt-1'],
   capabilityAttestationHashes: ['attestation-1'],
   capabilityProofExpiries: [2000],
-  capabilityManifestHashes: ['d'],
-  target: { accountId: 'account-1' },
+  capabilityManifestHashes: ['manifest-1'],
+  target: {
+    targetKind: 'location',
+    operatingProfile: 'client',
+    locationId: 'L1',
+  },
 });
 
 function openFixtureState() {
@@ -55,6 +67,39 @@ test('canonical JSON sorts object keys while preserving array order', () => {
   assert.notEqual(sha256([1, 2]), sha256([2, 1]));
 });
 
+test('canonical JSON rejects values that JSON.stringify would erase or alias', () => {
+  const cycle = {};
+  cycle.self = cycle;
+  const sparse = [];
+  sparse[1] = 'present';
+  const withHiddenValue = { visible: true };
+  Object.defineProperty(withHiddenValue, 'hidden', { value: true });
+  class Example {}
+
+  for (const value of [
+    undefined,
+    Number.NaN,
+    Infinity,
+    -Infinity,
+    -0,
+    () => {},
+    Symbol('value'),
+    1n,
+    new Date(),
+    new Map(),
+    new Set(),
+    new Example(),
+    sparse,
+    cycle,
+    { nested: undefined },
+    [() => {}],
+    withHiddenValue,
+  ]) {
+    assert.throws(() => canonicalJson(value), /CANONICAL_JSON_UNSUPPORTED/);
+  }
+  assert.throws(() => sha256({ nested: undefined }), /CANONICAL_JSON_UNSUPPORTED/);
+});
+
 test('audit paths are frozen, location-bound, and traversal-safe', () => {
   const paths = auditPaths('/tmp/project', 'L1');
   assert.ok(Object.isFrozen(paths));
@@ -67,6 +112,25 @@ test('audit paths are frozen, location-bound, and traversal-safe', () => {
   assert.equal(paths.stateDb, '/tmp/project/audits/ghl/L1/.state/auditor.sqlite');
   for (const locationId of ['', ' ', '..', 'a/../b', 'a/b', 'a\\b']) {
     assert.throws(() => auditPaths('/tmp/project', locationId), /INVALID_LOCATION_ID/);
+  }
+});
+
+test('state opening refuses a location symlink before writing outside the audit root', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-path-'));
+  const external = mkdtempSync(join(tmpdir(), 'ghl-audit-external-'));
+  const locationPath = join(projectRoot, 'audits', 'ghl', 'L1');
+  try {
+    mkdirSync(join(projectRoot, 'audits', 'ghl'), { recursive: true });
+    symlinkSync(external, locationPath, 'dir');
+    assert.throws(
+      () => openState({ projectRoot, locationId: 'L1' }),
+      /AUDIT_PATH_SYMLINK/,
+    );
+    assert.equal(existsSync(join(external, '.state', 'auditor.sqlite')), false);
+    assert.deepEqual(readdirSync(external), []);
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
   }
 });
 
@@ -88,6 +152,33 @@ test('runs are idempotent only for identical frozen inputs', () => withFixture((
   );
 }));
 
+test('createRun rejects omitted, unknown, and invalid frozen-input fields', () => withFixture(({ state }) => {
+  for (const field of Object.keys(frozenInputs)) {
+    const incomplete = { ...frozenInputs };
+    delete incomplete[field];
+    assert.throws(
+      () => state.createRun({ runId: `missing-${field}`, frozenInputs: incomplete }),
+      /INVALID_FROZEN_INPUTS/,
+      field,
+    );
+  }
+  assert.throws(
+    () => state.createRun({ runId: 'unknown', frozenInputs: { ...frozenInputs, unexpected: true } }),
+    /INVALID_FROZEN_INPUTS/,
+  );
+  assert.throws(
+    () => state.createRun({ runId: 'invalid', frozenInputs: { ...frozenInputs, cutoff: Number.NaN } }),
+    /INVALID_FROZEN_INPUTS/,
+  );
+  assert.throws(
+    () => state.createRun({
+      runId: 'invalid-target',
+      frozenInputs: { ...frozenInputs, target: { ...frozenInputs.target, extra: true } },
+    }),
+    /INVALID_FROZEN_INPUTS/,
+  );
+}));
+
 test('run state survives closing and reopening the location database', () => withFixture(({ state, projectRoot }) => {
   state.createRun({ runId: 'r1', frozenInputs, now: 1000 });
   state.close();
@@ -105,10 +196,34 @@ test('resume rejects changed frozen inputs', () => withFixture(({ state }) => {
     ...frozenInputs,
     cutoff: 2000,
   }), /RESUME_INPUT_MISMATCH/);
+  assert.throws(
+    () => state.assertResumeInputs('r1', { ...frozenInputs, unexpected: true }),
+    /INVALID_FROZEN_INPUTS/,
+  );
+  for (const field of ['metricProfileHash', 'target']) {
+    const incomplete = { ...frozenInputs };
+    delete incomplete[field];
+    assert.throws(
+      () => state.assertResumeInputs('r1', incomplete),
+      /INVALID_FROZEN_INPUTS/,
+      field,
+    );
+  }
 }));
 
-test('proof resume mutations reject and create no checkpoint under the old run', () => withFixture(({ state }) => {
+test('proof resume mutations leave the old run and checkpoint set unchanged', () => withFixture(({ state }) => {
   state.createRun({ runId: 'r1', frozenInputs });
+  state.saveCheckpoint({
+    runId: 'r1',
+    phase: 'proof-inputs',
+    inputHash: 'input-1',
+    outputHash: 'output-1',
+    payload: { receipts: ['receipt-1'] },
+  });
+  const oldState = canonicalJson({
+    run: state.assertResumeInputs('r1', frozenInputs),
+    checkpoints: state.listCheckpoints('r1'),
+  });
 
   for (const [name, changedInputs] of [
     ['proof index', { ...frozenInputs, capabilityProofIndexHash: 'proof-index-2' }],
@@ -121,7 +236,10 @@ test('proof resume mutations reject and create no checkpoint under the old run',
       new RegExp(`RESUME_INPUT_MISMATCH`, 'u'),
       name,
     );
-    assert.equal(state.getCheckpoint({ runId: 'r1', phase: name }), undefined);
+    assert.equal(canonicalJson({
+      run: state.assertResumeInputs('r1', frozenInputs),
+      checkpoints: state.listCheckpoints('r1'),
+    }), oldState);
   }
 }));
 

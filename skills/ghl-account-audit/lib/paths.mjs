@@ -1,4 +1,9 @@
-import { relative, resolve } from 'node:path';
+import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
+
+function codedError(code) {
+  return Object.assign(new Error(code), { code });
+}
 
 function invalidLocationId(locationId) {
   return typeof locationId !== 'string'
@@ -11,7 +16,31 @@ function invalidLocationId(locationId) {
 
 function isWithin(parent, child) {
   const pathFromParent = relative(parent, child);
-  return pathFromParent === '' || (!pathFromParent.startsWith('..') && !pathFromParent.startsWith('/') && !pathFromParent.includes('..'));
+  return pathFromParent === ''
+    || (!isAbsolute(pathFromParent) && pathFromParent !== '..' && !pathFromParent.startsWith(`..${sep}`));
+}
+
+function lstatIfExists(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+function ensureDirectory(path, missingCode) {
+  let entry = lstatIfExists(path);
+  if (!entry) {
+    mkdirSync(path);
+    entry = lstatSync(path);
+  }
+  if (entry.isSymbolicLink()) throw codedError('AUDIT_PATH_SYMLINK');
+  if (!entry.isDirectory()) throw codedError(missingCode);
+}
+
+function assertRealpathWithin(auditRoot, candidate) {
+  if (!isWithin(auditRoot, realpathSync(candidate))) throw codedError('AUDIT_PATH_ESCAPE');
 }
 
 export function auditPaths(projectRoot, locationId) {
@@ -37,4 +66,44 @@ export function auditPaths(projectRoot, locationId) {
     stateDir: resolve(root, '.state'),
     stateDb: resolve(root, '.state', 'auditor.sqlite'),
   });
+}
+
+export function ensureAuditPaths(paths) {
+  const projectEntry = lstatIfExists(paths.project);
+  if (!projectEntry || !projectEntry.isDirectory()) throw codedError('INVALID_PROJECT_ROOT');
+  if (projectEntry.isSymbolicLink()) throw codedError('AUDIT_PATH_SYMLINK');
+
+  const auditContainer = resolve(paths.project, 'audits');
+  const memory = resolve(paths.root, 'memory');
+  const privateRoot = resolve(paths.root, 'private');
+  const directories = [
+    auditContainer,
+    paths.auditRoot,
+    paths.root,
+    paths.weekly,
+    memory,
+    paths.memoryEvents,
+    privateRoot,
+    paths.privateRaw,
+    paths.privateLogs,
+    paths.privateCheckpoints,
+    paths.stateDir,
+  ];
+  for (const directory of directories) ensureDirectory(directory, 'AUDIT_PATH_INVALID');
+
+  const auditRoot = realpathSync(paths.auditRoot);
+  for (const directory of directories.slice(1)) assertRealpathWithin(auditRoot, directory);
+
+  const database = lstatIfExists(paths.stateDb);
+  if (database?.isSymbolicLink()) throw codedError('AUDIT_PATH_SYMLINK');
+  if (database && !database.isFile()) throw codedError('AUDIT_DATABASE_INVALID');
+  return auditRoot;
+}
+
+export function verifyAuditDatabasePath(paths, auditRoot) {
+  const database = lstatIfExists(paths.stateDb);
+  if (!database) throw codedError('AUDIT_DATABASE_MISSING');
+  if (database.isSymbolicLink()) throw codedError('AUDIT_PATH_SYMLINK');
+  if (!database.isFile()) throw codedError('AUDIT_DATABASE_INVALID');
+  assertRealpathWithin(auditRoot, paths.stateDb);
 }

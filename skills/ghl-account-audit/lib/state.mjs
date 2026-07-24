@@ -1,7 +1,6 @@
-import { mkdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { canonicalJson, sha256 } from './canonical.mjs';
-import { auditPaths } from './paths.mjs';
+import { auditPaths, ensureAuditPaths, verifyAuditDatabasePath } from './paths.mjs';
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -46,17 +45,115 @@ function assertTimestamp(value, code) {
   if (!Number.isFinite(value)) throw codedError(code);
 }
 
+const FROZEN_INPUT_FIELDS = Object.freeze([
+  'locationId',
+  'target',
+  'cutoff',
+  'timezone',
+  'contextHash',
+  'coverageProfileHash',
+  'metricProfileHash',
+  'rulesetHash',
+  'codeHash',
+  'auditProfileHash',
+  'providerToolProfileHash',
+  'windowDefinitionsHash',
+  'collectionBudgetHash',
+  'capabilityManifestHashes',
+  'capabilityProofIndexHash',
+  'capabilityReceiptHashes',
+  'capabilityAttestationHashes',
+  'capabilityProofExpiries',
+]);
+
+function isPlainObject(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function invalidFrozenInputs() {
+  throw codedError('INVALID_FROZEN_INPUTS');
+}
+
+function assertExactFields(value, fields) {
+  if (!isPlainObject(value)) invalidFrozenInputs();
+  const keys = Object.keys(value).sort();
+  const expected = [...fields].sort();
+  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) invalidFrozenInputs();
+}
+
+function assertFrozenString(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) invalidFrozenInputs();
+}
+
+function assertFrozenHashArray(value) {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item.trim().length === 0)) {
+    invalidFrozenInputs();
+  }
+}
+
+function assertFrozenExpiryArray(value) {
+  if (!Array.isArray(value) || value.some((item) => !Number.isSafeInteger(item) || item < 0)) {
+    invalidFrozenInputs();
+  }
+}
+
+function validateTarget(target) {
+  if (!isPlainObject(target)) invalidFrozenInputs();
+  const allowed = target.companyId === undefined
+    ? ['targetKind', 'operatingProfile', 'locationId']
+    : ['targetKind', 'operatingProfile', 'locationId', 'companyId'];
+  assertExactFields(target, allowed);
+  if (target.targetKind !== 'location') invalidFrozenInputs();
+  if (!['client', 'grom_internal'].includes(target.operatingProfile)) invalidFrozenInputs();
+  assertFrozenString(target.locationId);
+  if (target.companyId !== undefined) assertFrozenString(target.companyId);
+}
+
+function validateFrozenInputs(frozenInputs) {
+  try {
+    canonicalJson(frozenInputs);
+  } catch {
+    invalidFrozenInputs();
+  }
+  assertExactFields(frozenInputs, FROZEN_INPUT_FIELDS);
+  assertFrozenString(frozenInputs.locationId);
+  validateTarget(frozenInputs.target);
+  if (!Number.isSafeInteger(frozenInputs.cutoff) || frozenInputs.cutoff < 0) invalidFrozenInputs();
+  assertFrozenString(frozenInputs.timezone);
+  try {
+    Intl.DateTimeFormat('en', { timeZone: frozenInputs.timezone });
+  } catch {
+    invalidFrozenInputs();
+  }
+  for (const field of [
+    'contextHash',
+    'coverageProfileHash',
+    'metricProfileHash',
+    'rulesetHash',
+    'codeHash',
+    'auditProfileHash',
+    'providerToolProfileHash',
+    'windowDefinitionsHash',
+    'collectionBudgetHash',
+    'capabilityProofIndexHash',
+  ]) assertFrozenString(frozenInputs[field]);
+  for (const field of [
+    'capabilityManifestHashes',
+    'capabilityReceiptHashes',
+    'capabilityAttestationHashes',
+  ]) assertFrozenHashArray(frozenInputs[field]);
+  assertFrozenExpiryArray(frozenInputs.capabilityProofExpiries);
+}
+
 export class AuditState {
   constructor({ paths, locationId }) {
     this.paths = paths;
     this.locationId = locationId;
-    mkdirSync(paths.weekly, { recursive: true });
-    mkdirSync(paths.memoryEvents, { recursive: true });
-    mkdirSync(paths.privateRaw, { recursive: true });
-    mkdirSync(paths.privateLogs, { recursive: true });
-    mkdirSync(paths.privateCheckpoints, { recursive: true });
-    mkdirSync(paths.stateDir, { recursive: true });
+    const auditRoot = ensureAuditPaths(paths);
     this.db = new DatabaseSync(paths.stateDb);
+    verifyAuditDatabasePath(paths, auditRoot);
     this.db.exec(SCHEMA);
   }
 
@@ -83,7 +180,8 @@ export class AuditState {
   createRun({ runId, frozenInputs, now = Date.now() }) {
     assertNonEmptyString(runId, 'INVALID_RUN_ID');
     assertTimestamp(now, 'INVALID_TIMESTAMP');
-    if (!frozenInputs || frozenInputs.locationId !== this.locationId) {
+    validateFrozenInputs(frozenInputs);
+    if (frozenInputs.locationId !== this.locationId || frozenInputs.target.locationId !== this.locationId) {
       throw codedError('LOCATION_MISMATCH');
     }
 
@@ -138,11 +236,17 @@ export class AuditState {
 
   assertResumeInputs(runId, frozenInputs) {
     assertNonEmptyString(runId, 'INVALID_RUN_ID');
+    validateFrozenInputs(frozenInputs);
     const run = this.db.prepare(
       'SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?',
     ).get(runId);
     if (!run) throw codedError('RUN_NOT_FOUND');
-    if (run.location_id !== this.locationId || sha256(frozenInputs) !== run.frozen_inputs_hash) {
+    if (
+      run.location_id !== this.locationId
+      || frozenInputs.locationId !== this.locationId
+      || frozenInputs.target.locationId !== this.locationId
+      || sha256(frozenInputs) !== run.frozen_inputs_hash
+    ) {
       throw codedError('RESUME_INPUT_MISMATCH');
     }
     return this.#runRecord(run);
@@ -191,6 +295,14 @@ export class AuditState {
       FROM checkpoints WHERE run_id = ? AND phase = ?
     `).get(runId, phase);
     return checkpoint ? this.#checkpointRecord(checkpoint) : undefined;
+  }
+
+  listCheckpoints(runId) {
+    assertNonEmptyString(runId, 'INVALID_RUN_ID');
+    return this.db.prepare(`
+      SELECT run_id, phase, input_hash, output_hash, payload_json
+      FROM checkpoints WHERE run_id = ? ORDER BY phase ASC
+    `).all(runId).map((checkpoint) => this.#checkpointRecord(checkpoint));
   }
 
   #runRecord(row) {
