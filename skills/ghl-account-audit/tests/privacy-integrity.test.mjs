@@ -5,11 +5,12 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -31,6 +32,17 @@ const PRIVATE_CANARIES = Object.freeze([
   'RAW MESSAGE BODY PRIVATE CANARY',
   'https://example.invalid/magic-login?token=magic-private-canary',
   'key-reference-private-canary',
+]);
+const PRIVATE_CANARY_KINDS = Object.freeze([
+  'credential',
+  'credential',
+  'pii',
+  'pii',
+  'pii',
+  'private-content',
+  'private-content',
+  'credential',
+  'key-reference',
 ]);
 
 const privateFixture = {
@@ -68,12 +80,22 @@ function withProject(callback) {
 test('publishable artifacts contain no seeded private canaries', () => {
   const result = sanitizeForPublication(privateFixture, {
     pseudonymKey: Buffer.alloc(32, 7),
+    privateValues: PRIVATE_CANARIES.map((value, index) => ({
+      source: 'seeded_private_fixture',
+      kind: PRIVATE_CANARY_KINDS[index],
+      value,
+    })),
   });
   const text = JSON.stringify(result);
   for (const canary of PRIVATE_CANARIES) assert.equal(text.includes(canary), false, canary);
   assert.match(result.contact.email, /^psn_[a-f0-9]{32}$/u);
   assert.equal(result.contact.email, sanitizeForPublication(privateFixture, {
     pseudonymKey: Buffer.alloc(32, 7),
+    privateValues: PRIVATE_CANARIES.map((value, index) => ({
+      source: 'seeded_private_fixture',
+      kind: PRIVATE_CANARY_KINDS[index],
+      value,
+    })),
   }).contact.email);
   assert.match(result.finding.summary, /psn_[a-f0-9]{32}/u);
   assert.equal(result.finding.summary.includes(PRIVATE_CANARIES[4]), false);
@@ -85,10 +107,7 @@ test('protected key-file adapter accepts only an absolute current-user 0600 file
   const encryptionKey = Buffer.alloc(32, 11);
   const pseudonymKey = Buffer.alloc(32, 12);
   try {
-    writeFileSync(keyPath, JSON.stringify({
-      encryptionKey: encryptionKey.toString('base64'),
-      pseudonymKey: pseudonymKey.toString('base64'),
-    }), { mode: 0o600 });
+    writeFileSync(keyPath, Buffer.concat([encryptionKey, pseudonymKey]), { mode: 0o600 });
     const resolved = resolveVaultKeys({
       keyReference: { type: 'protected-file', path: keyPath },
     });
@@ -154,6 +173,40 @@ test('OS-keychain adapter returns copied key buffers and clears provider materia
   assert.ok(providerMaterial.every((byte) => byte === 0));
   resolved.encryptionKey.fill(0);
   resolved.pseudonymKey.fill(0);
+});
+
+test('key providers accept mutable binary material only and zero rejected buffers', () => {
+  for (const material of [
+    JSON.stringify({
+      encryptionKey: Buffer.alloc(32, 1).toString('base64'),
+      pseudonymKey: Buffer.alloc(32, 2).toString('base64'),
+    }),
+    {
+      encryptionKey: Buffer.alloc(32, 1),
+      pseudonymKey: Buffer.alloc(32, 2),
+    },
+  ]) {
+    assert.throws(
+      () => resolveVaultKeys({
+        keyReference: { type: 'os-keychain', name: 'binary-only' },
+        keyProvider: { readKeychain: () => material },
+      }),
+      /VAULT_KEY_MATERIAL_INVALID/u,
+    );
+    if (typeof material === 'object') {
+      assert.ok(material.encryptionKey.every((byte) => byte === 0));
+      assert.ok(material.pseudonymKey.every((byte) => byte === 0));
+    }
+  }
+  const wrongLength = Buffer.alloc(63, 71);
+  assert.throws(
+    () => resolveVaultKeys({
+      keyReference: { type: 'os-keychain', name: 'wrong-length' },
+      keyProvider: { readKeychain: () => wrongLength },
+    }),
+    /VAULT_KEY_MATERIAL_INVALID/u,
+  );
+  assert.ok(wrongLength.every((byte) => byte === 0));
 });
 
 test('vault encrypts raw evidence under 0700 paths and zeroes handed-off keys', () => withProject(({ paths }) => {
@@ -235,6 +288,30 @@ exit 0
     assert.match(output, /audit-vault-key\tPASS\tprotected vault key file reference and permissions are valid/u);
     assert.equal(output.includes(keyPath), false);
     assert.equal(output.includes('RAW-KEY-BYTES-PRIVATE-CANARY'), false);
+
+    const doctorSource = readFileSync(doctor, 'utf8');
+    assert.match(doctorSource, /SecItemCopyMatching/u);
+    assert.equal(doctorSource.includes('dump-keychain'), false);
+    assert.equal(doctorSource.includes('kSecReturnData'), false);
+
+    const invalidConfig = JSON.parse(readFileSync(join(home, '.grom-factory.json'), 'utf8'));
+    invalidConfig.audit.vault_key_reference.material = 'forbidden-material-canary';
+    writeFileSync(join(home, '.grom-factory.json'), JSON.stringify(invalidConfig));
+    const invalid = spawnSync('bash', [doctor], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
+    assert.equal(invalid.status, 1);
+    assert.match(
+      invalid.stdout,
+      /audit-vault-key\tFAIL\t(?:vault key reference fields are invalid|raw vault key material is forbidden in config)/u,
+    );
+    assert.equal(invalid.stdout.includes('forbidden-material-canary'), false);
+    assert.equal(invalid.stdout.includes(keyPath), false);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -264,3 +341,118 @@ test('purge removes ciphertext and creates an immutable expiry event', () => wit
   assert.equal(event.purgeResult, 'deleted');
   vault.close();
 }));
+
+test('AES-GCM authenticates every retention and identity metadata field before purge', () => {
+  const mutations = {
+    schemaVersion: '2.0.0',
+    format: 'tampered-format',
+    source: 'context',
+    opaqueRef: 'raw_ffffffffffffffffffffffffffffffff',
+    rawHash: 'f'.repeat(64),
+    expiresAt: '2026-06-01T00:00:00.000Z',
+  };
+  for (const [field, replacement] of Object.entries(mutations)) {
+    withProject(({ paths }) => {
+      const vault = openVault({
+        paths,
+        encryptionKey: Buffer.alloc(32, 51),
+        pseudonymKey: Buffer.alloc(32, 52),
+      });
+      const sealed = vault.sealRaw({
+        source: 'internal_ghl',
+        bytes: Buffer.from(`authenticated-${field}`, 'utf8'),
+        expiresAt: '2026-07-01T00:00:00.000Z',
+      });
+      const recordPath = join(paths.privateRaw, `${sealed.opaqueRef}.json`);
+      const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+      record[field] = replacement;
+      writeFileSync(recordPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+      assert.throws(
+        () => vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' }),
+        /RAW_EVIDENCE_AUTHENTICATION_FAILED/u,
+        field,
+      );
+      assert.equal(existsSync(recordPath), true, field);
+      vault.close();
+    });
+  }
+});
+
+test('purge event write failure leaves ciphertext retryable', () => withProject(({ paths }) => {
+  const vault = openVault({
+    paths,
+    encryptionKey: Buffer.alloc(32, 61),
+    pseudonymKey: Buffer.alloc(32, 62),
+  });
+  const sealed = vault.sealRaw({
+    source: 'internal_ghl',
+    bytes: Buffer.from('durable-purge-canary', 'utf8'),
+    expiresAt: '2026-07-01T00:00:00.000Z',
+  });
+  const recordPath = join(paths.privateRaw, `${sealed.opaqueRef}.json`);
+  chmodSync(paths.memoryEvents, 0o500);
+  assert.throws(
+    () => vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' }),
+    /RAW_EXPIRY_EVENT_WRITE_FAILED/u,
+  );
+  assert.equal(existsSync(recordPath), true);
+  chmodSync(paths.memoryEvents, 0o700);
+  assert.equal(vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' }).purged, 1);
+  assert.equal(existsSync(recordPath), false);
+  vault.close();
+}));
+
+test('pending purge tombstone recovers crashes before and after ciphertext deletion', () => {
+  for (const hookName of ['afterPending', 'afterUnlink']) {
+    withProject(({ paths }) => {
+      let interrupted = false;
+      const vault = openVault({
+        paths,
+        encryptionKey: Buffer.alloc(32, 71),
+        pseudonymKey: Buffer.alloc(32, 72),
+        hooks: {
+          [hookName]() {
+            if (!interrupted) {
+              interrupted = true;
+              throw new Error('injected private failure detail');
+            }
+          },
+        },
+      });
+      const sealed = vault.sealRaw({
+        source: 'internal_ghl',
+        bytes: Buffer.from(`recover-${hookName}`, 'utf8'),
+        expiresAt: '2026-07-01T00:00:00.000Z',
+      });
+      const recordPath = join(paths.privateRaw, `${sealed.opaqueRef}.json`);
+      assert.throws(
+        () => vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' }),
+        (error) => error.code === 'PURGE_INTERRUPTED'
+          && !String(error.stack).includes('injected private failure detail'),
+      );
+      const eventFiles = readdirSync(paths.memoryEvents);
+      assert.equal(eventFiles.length, 1);
+      const pending = JSON.parse(readFileSync(join(paths.memoryEvents, eventFiles[0]), 'utf8'));
+      assert.equal(pending.type, 'raw_evidence_expired');
+      assert.equal(pending.deletionState, 'pending');
+      assert.equal(existsSync(recordPath), hookName === 'afterPending');
+      vault.close();
+
+      const recovery = openVault({
+        paths,
+        encryptionKey: Buffer.alloc(32, 71),
+        pseudonymKey: Buffer.alloc(32, 72),
+      });
+      const result = recovery.purgeExpired({ now: '2026-07-24T00:00:00.000Z' });
+      assert.equal(existsSync(recordPath), false);
+      assert.equal(result.events.length, 1);
+      const completed = JSON.parse(readFileSync(
+        join(paths.memoryEvents, `${result.events[0]}.json`),
+        'utf8',
+      ));
+      assert.equal(completed.deletionState, 'deleted');
+      assert.equal(completed.purgeResult, 'deleted');
+      recovery.close();
+    });
+  }
+});

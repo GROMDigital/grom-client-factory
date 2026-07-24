@@ -9,6 +9,33 @@ say() {
   return 0
 }
 
+check_exact_keychain_reference() {
+  local keychain_reference="$1"
+  if ! command -v swift >/dev/null 2>&1; then return 1; fi
+  # The reference travels through inherited descriptor 9, never argv or env.
+  # SecItemCopyMatching requests attributes only and never secret data.
+  exec 9<<<"$keychain_reference"
+  swift - 9<&9 >/dev/null 2>&1 <<'SWIFT'
+import Foundation
+import Security
+
+let input = FileHandle(fileDescriptor: 9).readDataToEndOfFile()
+guard let raw = String(data: input, encoding: .utf8) else { exit(2) }
+let service = raw.trimmingCharacters(in: .newlines)
+let query = [
+  kSecClass: kSecClassGenericPassword,
+  kSecAttrService: service,
+  kSecMatchLimit: kSecMatchLimitOne,
+  kSecReturnAttributes: true,
+] as CFDictionary
+var result: CFTypeRef?
+exit(SecItemCopyMatching(query, &result) == errSecSuccess ? 0 : 1)
+SWIFT
+  local result=$?
+  exec 9<&-
+  return "$result"
+}
+
 if [ -f "$CONFIG" ] && jq -e . "$CONFIG" >/dev/null 2>&1; then
   say config PASS "$CONFIG parses"
 else
@@ -22,7 +49,7 @@ check_audit_vault_reference() {
   local key_ref_json key_ref_type key_file key_mode key_name
   if ! jq -e '
     ([.. | objects | keys[]?]
-      | any(. == "encryptionKey" or . == "pseudonymKey" or . == "encryption_key" or . == "pseudonym_key"))
+      | any(test("^(encryption_?key|pseudonym_?key|key_?bytes|material)$"; "i")))
     | not
   ' "$CONFIG" >/dev/null 2>&1; then
     say audit-vault-key FAIL "raw vault key material is forbidden in config"
@@ -41,6 +68,22 @@ check_audit_vault_reference() {
     return
   fi
   key_ref_type=$(printf '%s' "$key_ref_json" | jq -r '.type // .provider // empty' 2>/dev/null)
+  if ! printf '%s' "$key_ref_json" | jq -e '
+    ((has("type") and (has("provider") | not))
+      or (has("provider") and (has("type") | not)))
+    and if ((.type // .provider) == "protected-file" or (.type // .provider) == "file")
+      then has("path")
+        and ((keys - ["type", "provider", "path"]) | length == 0)
+      elif ((.type // .provider) == "os-keychain" or (.type // .provider) == "keychain")
+      then ((has("name") and (has("reference") | not))
+          or (has("reference") and (has("name") | not)))
+        and ((keys - ["type", "provider", "name", "reference"]) | length == 0)
+      else false
+    end
+  ' >/dev/null 2>&1; then
+    say audit-vault-key FAIL "vault key reference fields are invalid"
+    return
+  fi
   case "$key_ref_type" in
     protected-file|file)
       key_file=$(printf '%s' "$key_ref_json" | jq -r '.path // empty' 2>/dev/null)
@@ -73,18 +116,11 @@ check_audit_vault_reference() {
       ;;
     os-keychain|keychain)
       key_name=$(printf '%s' "$key_ref_json" | jq -r '.name // .reference // empty' 2>/dev/null)
-      if [ -z "$key_name" ] || ! command -v security >/dev/null 2>&1; then
+      if [ -z "$key_name" ]; then
         say audit-vault-key FAIL "OS keychain reference is missing or unavailable"
         return
       fi
-      if security dump-keychain 2>/dev/null | {
-        while IFS= read -r keychain_line; do
-          case "$keychain_line" in
-            *\""$key_name\""*) exit 0 ;;
-          esac
-        done
-        exit 1
-      }; then
+      if check_exact_keychain_reference "$key_name"; then
         say audit-vault-key PASS "OS keychain reference exists"
       else
         say audit-vault-key FAIL "OS keychain reference is unavailable"
