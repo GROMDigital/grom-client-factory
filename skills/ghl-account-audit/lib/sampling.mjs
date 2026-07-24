@@ -154,11 +154,16 @@ export function selectConversationSample({
     inclusionProbability: probability,
     selectionReasons: reasons,
   })).sort((left, right) => left.interactionRef.localeCompare(right.interactionRef));
+  const mandatoryCount = universe.filter(({ flags }) => flags.length > 0).length;
   const manifest = {
     schemaVersion: '1.0.0',
     seed,
     mode,
     universeCount: universe.length,
+    requestedMaxSample: maxSample,
+    actualSampleCount: selections.length,
+    mandatoryCount,
+    mandatoryOverflowCount: Math.max(0, mandatoryCount - maxSample),
     selections,
     populationPrevalence: mode === 'CENSUS' ? 'CENSUS_ONLY' : null,
     prevalenceScope: {

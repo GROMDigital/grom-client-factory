@@ -103,6 +103,7 @@ function recordNode(record) {
     'milestone',
     'definitionHash',
     'effectiveDefinitionHash',
+    'cohortInstanceRef',
   ]) {
     if (typeof record[field] === 'string') node[field] = record[field];
   }

@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { buildEvidenceGraph } from '../lib/evidence-graph.mjs';
 import { buildWindows, computeJourneyMetrics } from '../lib/metrics.mjs';
+import { normalizeEvidence } from '../lib/normalize.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const gromProfile = JSON.parse(readFileSync(join(here, '../profiles/grom-internal.v1.json'), 'utf8'));
+
+function gromFixture() {
+  return JSON.parse(readFileSync(
+    join(here, 'fixtures/weekly/grom-dual-journey-portal-complete/input.json'),
+    'utf8',
+  ));
+}
 
 function freeze(value) {
   for (const child of Object.values(value)) {
@@ -119,8 +134,181 @@ test('adjacent-stage metrics use mature flow cohorts, deduplicate re-entry and l
     coverage: 'COMPLETE',
     reasonCode: null,
   });
-  assert.equal(result.currentStock.first_engagement, 2);
+  assert.equal(result.currentStock.journey_client_sales.first_engagement, 2);
   assert.equal(result.cohorts.currentClosedWeek.journey_client_sales, 3);
+});
+
+test('maturityDays globally excludes immature cohorts before rates can be proven', () => {
+  const nodes = [
+    event('m1', 'psn_maturitymaturity', 'journey_client_sales', 'lead_created', '2026-03-02T09:00:00-08:00'),
+    event('m2', 'psn_maturitymaturity', 'journey_client_sales', 'first_engagement', '2026-03-02T10:00:00-08:00'),
+  ];
+  const metricContracts = {
+    version: '1.0.0',
+    edges: [contract('engagement', 'lead_created', 'first_engagement', {
+      allowedLag: { amount: 1, unit: 'days' },
+      minimumSample: 1,
+    })],
+  };
+  const mature = computeJourneyMetrics({
+    graph: graph(nodes),
+    metricContracts,
+    windows: buildWindows({
+      cutoff: '2026-03-09T10:00:00-07:00',
+      timezone: 'America/Los_Angeles',
+      maturityDays: 0,
+    }),
+  }).metrics.currentClosedWeek.engagement;
+  const immature = computeJourneyMetrics({
+    graph: graph(nodes),
+    metricContracts,
+    windows: buildWindows({
+      cutoff: '2026-03-09T10:00:00-07:00',
+      timezone: 'America/Los_Angeles',
+      maturityDays: 14,
+    }),
+  }).metrics.currentClosedWeek.engagement;
+  assert.deepEqual([mature.state, mature.numerator, mature.denominator], ['OBSERVED', 1, 1]);
+  assert.deepEqual(
+    [immature.state, immature.numerator, immature.denominator, immature.reasonCode],
+    ['UNKNOWN', null, null, 'IMMATURE_COHORT'],
+  );
+});
+
+test('real Task 5 graph proves Grom metrics and current stock without descriptor-node contamination', () => {
+  const value = gromFixture();
+  const records = normalizeEvidence(value.collections, value.context);
+  const realGraph = buildEvidenceGraph({ records, context: value.context, profile: gromProfile });
+  const windows = buildWindows({
+    cutoff: '2026-07-20T10:00:00Z',
+    timezone: 'UTC',
+    maturityDays: 0,
+  });
+  const metricContracts = {
+    version: '1.0.0',
+    edges: [
+      contract('grom_acquisition', 'enquiry', 'won', {
+        journeyId: 'agency_new_business',
+        journeyInstanceId: 'journey_agency_new_business',
+        allowedLag: { amount: 2, unit: 'days' },
+        minimumSample: 1,
+      }),
+      contract('grom_onboarding', 'onboarding_started', 'assets_confirmed', {
+        journeyId: 'client_onboarding',
+        journeyInstanceId: 'journey_client_onboarding',
+        allowedLag: { amount: 2, unit: 'days' },
+        minimumSample: 1,
+      }),
+    ],
+  };
+  const result = computeJourneyMetrics({ graph: realGraph, metricContracts, windows });
+  assert.deepEqual(
+    [result.metrics.currentClosedWeek.grom_acquisition.state,
+      result.metrics.currentClosedWeek.grom_acquisition.numerator,
+      result.metrics.currentClosedWeek.grom_acquisition.denominator],
+    ['OBSERVED', 1, 1],
+  );
+  assert.deepEqual(
+    [result.metrics.currentClosedWeek.grom_onboarding.state,
+      result.metrics.currentClosedWeek.grom_onboarding.numerator,
+      result.metrics.currentClosedWeek.grom_onboarding.denominator],
+    ['OBSERVED', 1, 1],
+  );
+  assert.deepEqual(result.currentStock, {
+    journey_agency_new_business: { won: 1 },
+    journey_client_onboarding: { assets_confirmed: 1 },
+  });
+});
+
+test('real Task 5 graph preserves explicit cohort instances for re-entry deduplication', () => {
+  const value = gromFixture();
+  for (const item of value.collections[0].items) {
+    if (item.journeyId === 'agency_new_business' && ['enquiry', 'won'].includes(item.stage)) {
+      item.cohortInstanceRef = 'cohort_acquisition_one';
+    }
+  }
+  const reentry = value.collections[0].items
+    .filter(({ journeyId, stage }) => (
+      journeyId === 'agency_new_business' && ['enquiry', 'won'].includes(stage)
+    ))
+    .map((item, index) => ({
+      ...item,
+      nativeId: `${item.nativeId}-reentry`,
+      evidenceRef: `ev_${index ? 'dddddddddddddddd' : 'cccccccccccccccc'}`,
+      cohortInstanceRef: 'cohort_acquisition_two',
+      eventTime: index
+        ? '2026-07-16T03:00:00.000Z'
+        : '2026-07-16T02:00:00.000Z',
+    }));
+  const reopenedDuplicate = {
+    ...reentry.find(({ stage }) => stage === 'won'),
+    nativeId: 'event-won-reentry-reopened',
+    evidenceRef: 'ev_eeeeeeeeeeeeeeee',
+    eventTime: '2026-07-16T04:00:00.000Z',
+  };
+  value.collections[0].items.push(...reentry, reopenedDuplicate);
+  value.collections[0].page.reportedCount += reentry.length + 1;
+  value.collections[0].page.collectedCount += reentry.length + 1;
+  const records = normalizeEvidence(value.collections, value.context);
+  const realGraph = buildEvidenceGraph({ records, context: value.context, profile: gromProfile });
+  const eventNodes = realGraph.nodes.filter(({ type, journeyInstanceId }) => (
+    type === 'journey_event' && journeyInstanceId === 'journey_agency_new_business'
+  ));
+  assert.deepEqual(
+    [...new Set(eventNodes.map(({ cohortInstanceRef }) => cohortInstanceRef))].sort(),
+    ['cohort_acquisition_one', 'cohort_acquisition_two'],
+  );
+  const baseContract = {
+    ...contract('reentry', 'enquiry', 'won', {
+      journeyId: 'agency_new_business',
+      journeyInstanceId: 'journey_agency_new_business',
+      allowedLag: { amount: 2, unit: 'days' },
+      minimumSample: 1,
+    }),
+  };
+  const windows = buildWindows({
+    cutoff: '2026-07-20T10:00:00Z',
+    timezone: 'UTC',
+    maturityDays: 0,
+  });
+  const newInstance = computeJourneyMetrics({
+    graph: realGraph,
+    metricContracts: {
+      version: '1.0.0',
+      edges: [{ ...baseContract, reentryRule: 'new_journey_instance' }],
+    },
+    windows,
+  }).metrics.currentClosedWeek.reentry;
+  const sameInstance = computeJourneyMetrics({
+    graph: realGraph,
+    metricContracts: {
+      version: '1.0.0',
+      edges: [{ ...baseContract, reentryRule: 'same_journey_instance' }],
+    },
+    windows,
+  }).metrics.currentClosedWeek.reentry;
+  assert.deepEqual([newInstance.numerator, newInstance.denominator], [2, 2]);
+  assert.deepEqual([sameInstance.numerator, sameInstance.denominator], [1, 1]);
+
+  const noExplicitValue = gromFixture();
+  const noExplicitRecords = normalizeEvidence(noExplicitValue.collections, noExplicitValue.context);
+  const noExplicitGraph = buildEvidenceGraph({
+    records: noExplicitRecords,
+    context: noExplicitValue.context,
+    profile: gromProfile,
+  });
+  const missingContract = computeJourneyMetrics({
+    graph: noExplicitGraph,
+    metricContracts: {
+      version: '1.0.0',
+      edges: [{ ...baseContract, reentryRule: 'new_journey_instance' }],
+    },
+    windows,
+  }).metrics.currentClosedWeek.reentry;
+  assert.deepEqual(
+    [missingContract.state, missingContract.reasonCode],
+    ['UNKNOWN', 'MISSING_COHORT_INSTANCE'],
+  );
 });
 
 test('versioned re-entry rules either preserve distinct cohort instances or deduplicate the subject', () => {

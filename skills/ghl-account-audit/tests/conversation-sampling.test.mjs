@@ -97,3 +97,23 @@ test('sampling rejects unsafe refs, duplicate interactions, and impossible contr
     maxSample: 0,
   }), /SAMPLE_CONTRACT_INVALID/);
 });
+
+test('mandatory cases exceeding maxSample remain included and are disclosed as diagnostic oversampling', () => {
+  const interactions = Array.from({ length: 60 }, (_, index) => interaction(index + 1, {
+    flags: ['complaint'],
+  }));
+  const sample = selectConversationSample({
+    interactions,
+    seed: 'mandatory-overflow',
+    censusThreshold: 50,
+    maxSample: 50,
+  });
+  assert.equal(sample.selections.length, 60);
+  assert.equal(sample.requestedMaxSample, 50);
+  assert.equal(sample.mandatoryOverflowCount, 10);
+  assert.equal(sample.populationPrevalence, null);
+  assert.equal(sample.prevalenceScope.kind, 'SAMPLE_BOUNDED');
+  assert.ok(sample.selections.every(({ inclusionProbability, selectionReasons }) => (
+    inclusionProbability === 1 && selectionReasons.includes('mandatory:complaint')
+  )));
+});

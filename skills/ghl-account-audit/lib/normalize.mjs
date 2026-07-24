@@ -120,6 +120,10 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
       Object.hasOwn(item, 'effectiveDefinitionHash')
       && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash)
     )
+    || (
+      Object.hasOwn(item, 'cohortInstanceRef')
+      && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef)
+    )
   ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
   const effectiveClassification = provenance.completeness === 'COMPLETE'
     ? (item.classification ?? 'OBSERVED')
@@ -193,6 +197,7 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
     'workflowNativeId',
     'normalizedEmail',
     'normalizedPhone',
+    'cohortInstanceRef',
   ]) {
     if (Object.hasOwn(item, field) && (typeof item[field] !== 'string' || item[field].length === 0)) {
       throw codedError('EVIDENCE_RECORD_INVALID', TypeError);

@@ -108,6 +108,11 @@ function addLag(eventTime, allowedLag, window) {
 }
 
 function subjectKey(node) {
+  if (node.organizationNativeId && (node.opportunityNativeId || node.projectNativeId)) {
+    return `${node.journeyInstanceId}:organization:${node.organizationNativeId}:commercial:${
+      node.opportunityNativeId ?? node.projectNativeId
+    }`;
+  }
   const subject = node.subjectRef
     ?? node.subjectNativeId
     ?? node.organizationNativeId
@@ -136,9 +141,10 @@ function sortEvents(left, right) {
     || left.nodeId.localeCompare(right.nodeId);
 }
 
-function unknownMetric(window, threshold) {
+function unknownMetric(window, threshold, reasonCode = 'MISSING_REQUIRED_EVIDENCE') {
   return {
     ...UNKNOWN,
+    reasonCode,
     eligible: null,
     threshold,
     rankEligible: false,
@@ -148,7 +154,10 @@ function unknownMetric(window, threshold) {
 }
 
 function journeyHasUncertainty(graph, journeyInstanceId, nodes) {
-  if (nodes.some((node) => (
+  const metricEvidenceNodes = nodes.filter(({ type }) => (
+    ['journey_event', 'portal_milestone'].includes(type)
+  ));
+  if (metricEvidenceNodes.some((node) => (
     node.journeyInstanceId === journeyInstanceId
       && (!isObserved(node) || node.classification !== 'OBSERVED')
   ))) return true;
@@ -187,7 +196,7 @@ function hasProvingJoin(graph, nodeId) {
   ));
 }
 
-function computeEdge(graph, nodes, contract, window, analysisCutoff) {
+function computeEdge(graph, nodes, contract, window, analysisCutoff, matureAsOf) {
   const configuredThreshold = contract.eligibilityRule?.minimumSample;
   const threshold = Number.isInteger(configuredThreshold) && configuredThreshold >= 0
     ? configuredThreshold
@@ -211,6 +220,13 @@ function computeEdge(graph, nodes, contract, window, analysisCutoff) {
   if (events.some(({ nodeId }) => !hasProvingJoin(graph, nodeId))) {
     return unknownMetric(window, threshold);
   }
+  if (
+    contract.reentryRule === 'new_journey_instance'
+    && events.some((node) => (
+      [contract.fromStage, contract.toStage].includes(stageOf(node))
+        && typeof node.cohortInstanceRef !== 'string'
+    ))
+  ) return unknownMetric(window, threshold, 'MISSING_COHORT_INSTANCE');
   const fromByKey = new Map();
   for (const node of events) {
     if (stageOf(node) !== contract.fromStage || !inside(node.eventTime, window)) continue;
@@ -220,9 +236,21 @@ function computeEdge(graph, nodes, contract, window, analysisCutoff) {
   const mature = [];
   for (const [key, node] of fromByKey) {
     const maturity = addLag(node.eventTime, contract.allowedLag, window);
-    if (Temporal.Instant.compare(maturity, instant(analysisCutoff)) <= 0) mature.push([key, node]);
+    if (
+      Temporal.Instant.compare(instant(node.eventTime), instant(matureAsOf)) < 0
+      && Temporal.Instant.compare(maturity, instant(analysisCutoff)) <= 0
+    ) mature.push([key, node]);
   }
-  if (fromByKey.size > 0 && mature.length === 0) return unknownMetric(window, threshold);
+  if (fromByKey.size > 0 && mature.length === 0) {
+    const globallyImmature = [...fromByKey.values()].every((node) => (
+      Temporal.Instant.compare(instant(node.eventTime), instant(matureAsOf)) >= 0
+    ));
+    return unknownMetric(
+      window,
+      threshold,
+      globallyImmature ? 'IMMATURE_COHORT' : 'MISSING_REQUIRED_EVIDENCE',
+    );
+  }
 
   let numerator = 0;
   let value = 0;
@@ -263,18 +291,23 @@ function computeEdge(graph, nodes, contract, window, analysisCutoff) {
 
 function stockFor(nodes, end, analysisCutoff) {
   const latest = new Map();
-  for (const node of nodes.filter(isObserved).sort(sortEvents)) {
+  for (const node of nodes.filter((candidate) => (
+    isObserved(candidate)
+      && ['journey_event', 'portal_milestone'].includes(candidate.type)
+  )).sort(sortEvents)) {
     if (Temporal.Instant.compare(instant(node.eventTime), instant(end)) >= 0) continue;
     if (Temporal.Instant.compare(
       instant(node.capturedAt ?? node.eventTime),
       instant(analysisCutoff),
     ) > 0) continue;
-    latest.set(eventKey(node), node);
+    latest.set(subjectKey(node), node);
   }
   const counts = {};
   for (const node of latest.values()) {
     const stage = stageOf(node);
-    counts[stage] = (counts[stage] ?? 0) + 1;
+    const journey = counts[node.journeyInstanceId] ?? {};
+    journey[stage] = (journey[stage] ?? 0) + 1;
+    counts[node.journeyInstanceId] = journey;
   }
   return counts;
 }
@@ -340,6 +373,7 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
         contract,
         window,
         windows.cutoff,
+        windows.matureAsOf,
       );
     }
     cohorts[name] = cohortCounts(
