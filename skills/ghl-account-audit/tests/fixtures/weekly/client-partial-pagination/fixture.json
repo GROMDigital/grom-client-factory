@@ -1,0 +1,44 @@
+{
+  "schemaVersion": "1.0.0",
+  "locationId": "fixture-location",
+  "profile": "client",
+  "timezone": "Australia/Sydney",
+  "cutoff": "2026-07-20T00:00:00.000Z",
+  "providerAppliedFrom": "2026-06-01T00:00:00.000Z",
+  "salesCycleDays": 60,
+  "pages": [
+    {
+      "pageKey": "page-1",
+      "events": [
+        {
+          "nativeEventId": "fixture-event-1",
+          "occurredAt": "2026-07-10T00:00:00.000Z",
+          "kind": "lead_created"
+        }
+      ]
+    },
+    {
+      "pageKey": "page-2",
+      "events": [
+        {
+          "nativeEventId": "fixture-event-1",
+          "occurredAt": "2026-07-10T00:00:00.000Z",
+          "kind": "lead_created"
+        },
+        {
+          "nativeEventId": "fixture-event-2",
+          "occurredAt": "2026-07-12T00:00:00.000Z",
+          "kind": "reply_received"
+        }
+      ]
+    }
+  ],
+  "privateCanaries": [
+    "credential_supersecret",
+    "sensitive-key-reference",
+    "person@example.com",
+    "+15551234567",
+    "private transcript",
+    "hidden prompt"
+  ]
+}

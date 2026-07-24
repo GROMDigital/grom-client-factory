@@ -33,6 +33,15 @@ const JUDGMENT_KEYS = [
   'counterevidence', 'uncertainty', 'safetyFlags',
 ];
 const REQUESTS = new Map();
+const VALIDATOR_STATE_KEYS = [
+  'schemaVersion',
+  'requestHash',
+  'nonce',
+  'consumedResponse',
+  'grants',
+  'interactionEvidence',
+  'modelPolicy',
+];
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -93,6 +102,108 @@ function requestState(request) {
     throw codedError('REVIEW_REQUEST_UNTRUSTED');
   }
   return state;
+}
+
+function serializeConversationState(request, state) {
+  return deepFreeze({
+    schemaVersion: '1.0.0',
+    requestHash: request.requestHash,
+    nonce: request.nonce,
+    consumedResponse: state.consumedResponse,
+    grants: [...state.grants.values()]
+      .map((grant) => structuredClone(grant))
+      .sort((left, right) => left.grantRef.localeCompare(right.grantRef)),
+    interactionEvidence: [...state.interactionEvidence.entries()]
+      .map(([interactionRef, refs]) => ({
+        interactionRef,
+        evidenceRefs: [...refs].sort(),
+      }))
+      .sort((left, right) => left.interactionRef.localeCompare(right.interactionRef)),
+    modelPolicy: structuredClone(state.modelPolicy),
+  });
+}
+
+function stateFromSnapshot(request, snapshot) {
+  validateSerializedRequest(request);
+  if (
+    !exactKeys(snapshot, VALIDATOR_STATE_KEYS)
+    || snapshot.schemaVersion !== '1.0.0'
+    || snapshot.requestHash !== request.requestHash
+    || snapshot.nonce !== request.nonce
+    || snapshot.consumedResponse !== false
+    || !Array.isArray(snapshot.grants)
+    || !Array.isArray(snapshot.interactionEvidence)
+    || !plain(snapshot.modelPolicy)
+  ) throw codedError('REVIEW_REQUEST_UNTRUSTED');
+  const interactionEvidence = new Map();
+  for (const binding of snapshot.interactionEvidence) {
+    if (
+      !exactKeys(binding, ['interactionRef', 'evidenceRefs'])
+      || !INTERACTION_REF.test(binding.interactionRef)
+      || interactionEvidence.has(binding.interactionRef)
+      || !Array.isArray(binding.evidenceRefs)
+      || binding.evidenceRefs.length === 0
+      || binding.evidenceRefs.some((ref) => !EVIDENCE_REF.test(ref))
+      || new Set(binding.evidenceRefs).size !== binding.evidenceRefs.length
+    ) throw codedError('REVIEW_REQUEST_UNTRUSTED');
+    interactionEvidence.set(binding.interactionRef, new Set(binding.evidenceRefs));
+  }
+  const grants = new Map();
+  for (const grant of snapshot.grants) {
+    if (
+      !exactKeys(grant, [
+        'grantRef', 'evidenceRef', 'expiresAt', 'readOnce', 'interactionRef',
+        'status', 'transcriptAvailability',
+      ])
+      || !GRANT_REF.test(grant.grantRef)
+      || !EVIDENCE_REF.test(grant.evidenceRef)
+      || !INTERACTION_REF.test(grant.interactionRef)
+      || grants.has(grant.grantRef)
+      || !['UNREAD', 'CONSUMED'].includes(grant.status)
+      || ![null, 'AVAILABLE', 'MISSING', 'EXPIRED'].includes(grant.transcriptAvailability)
+      || !interactionEvidence.get(grant.interactionRef)?.has(grant.evidenceRef)
+    ) throw codedError('REVIEW_REQUEST_UNTRUSTED');
+    grants.set(grant.grantRef, structuredClone(grant));
+  }
+  if (
+    grants.size !== request.grants.length
+    || request.grants.some((grant) => {
+      const durable = grants.get(grant.grantRef);
+      return !durable
+        || durable.evidenceRef !== grant.evidenceRef
+        || durable.interactionRef !== grant.interactionRef
+        || durable.expiresAt !== grant.expiresAt
+        || durable.readOnce !== grant.readOnce;
+    })
+  ) throw codedError('REVIEW_REQUEST_UNTRUSTED');
+  return {
+    requestHash: request.requestHash,
+    nonce: request.nonce,
+    consumedResponse: false,
+    grants,
+    interactionEvidence,
+    interactionRefs: new Set(interactionEvidence.keys()),
+    modelPolicy: structuredClone(snapshot.modelPolicy),
+  };
+}
+
+export function exportConversationReviewValidationState({ request }) {
+  return serializeConversationState(request, requestState(request));
+}
+
+export function restoreConversationReviewValidationState({ request, validatorState }) {
+  const restored = stateFromSnapshot(request, validatorState);
+  const existing = REQUESTS.get(request.requestId);
+  if (existing?.consumedResponse) throw codedError('REVIEW_RESPONSE_REPLAYED');
+  if (
+    existing
+    && (
+      existing.requestHash !== restored.requestHash
+      || existing.nonce !== restored.nonce
+    )
+  ) throw codedError('REVIEW_REQUEST_UNTRUSTED');
+  REQUESTS.set(request.requestId, restored);
+  return serializeConversationState(request, restored);
 }
 
 export function createConversationReviewRequest({
@@ -300,8 +411,7 @@ function validateJudgment(judgment, state) {
   ) throw codedError('REVIEW_RESPONSE_INVALID');
 }
 
-export function ingestConversationReview({ request, response }) {
-  const state = requestState(request);
+function validateConversationReviewResponse({ request, response, state }) {
   if (state.consumedResponse) throw codedError('REVIEW_RESPONSE_REPLAYED');
   if (!exactKeys(response, RESPONSE_KEYS)) throw codedError('REVIEW_RESPONSE_INVALID');
   const bindings = [
@@ -358,4 +468,21 @@ export function ingestConversationReview({ request, response }) {
   });
   state.consumedResponse = true;
   return output;
+}
+
+export function validateConversationReview({
+  request,
+  response,
+  validatorState,
+}) {
+  const state = stateFromSnapshot(request, validatorState);
+  return validateConversationReviewResponse({ request, response, state });
+}
+
+export function ingestConversationReview({ request, response }) {
+  return validateConversationReviewResponse({
+    request,
+    response,
+    state: requestState(request),
+  });
 }

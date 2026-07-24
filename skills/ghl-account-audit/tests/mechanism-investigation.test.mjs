@@ -6,7 +6,10 @@ import {
   buildMechanismPacket,
   reconcileExpertReviews,
   createMechanismReviewRequest,
+  exportMechanismReviewValidationState,
   ingestMechanismReview,
+  restoreMechanismReviewValidationState,
+  validateMechanismReview,
 } from '../lib/mechanisms.mjs';
 import { reviewMechanisms } from '../workflows/review-mechanisms.mjs';
 
@@ -657,6 +660,42 @@ test('sealed request exposes paths and hashes only and performs no model call', 
   });
   assert.equal(calls, 0);
   assert.equal(result.state, 'awaiting_model_review');
+});
+
+test('mechanism validator state is strict serializable and survives a process boundary', () => {
+  const packet = buildMechanismPacket(candidates()[0]);
+  const request = createMechanismReviewRequest(reviewInputs([packet]));
+  const snapshot = exportMechanismReviewValidationState({ request });
+  const durableRequest = JSON.parse(JSON.stringify(request));
+  const durableSnapshot = JSON.parse(JSON.stringify(snapshot));
+  const result = validateMechanismReview({
+    request: durableRequest,
+    response: responseFor(request),
+    validatorState: durableSnapshot,
+  });
+  assert.equal(result.kind, 'VALIDATED_MECHANISM_REVIEW');
+  assert.deepEqual(
+    restoreMechanismReviewValidationState({
+      request: durableRequest,
+      validatorState: durableSnapshot,
+    }),
+    snapshot,
+  );
+  ingestMechanismReview({
+    request: durableRequest,
+    response: responseFor(request),
+  });
+  assert.throws(() => restoreMechanismReviewValidationState({
+    request: durableRequest,
+    validatorState: durableSnapshot,
+  }), /MECHANISM_REVIEW_REPLAYED/u);
+  const tampered = structuredClone(durableSnapshot);
+  tampered.requestHash = H('f');
+  assert.throws(() => validateMechanismReview({
+    request: durableRequest,
+    response: responseFor(request),
+    validatorState: tampered,
+  }), /MECHANISM_REVIEW_MISMATCH/u);
 });
 
 test('strict review rejection is atomic and valid response is single use', () => {

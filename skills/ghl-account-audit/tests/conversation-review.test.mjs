@@ -3,8 +3,11 @@ import { test } from 'node:test';
 import { sha256 } from '../lib/canonical.mjs';
 import {
   createConversationReviewRequest,
+  exportConversationReviewValidationState,
   ingestConversationReview,
   readSelectedEvidence,
+  restoreConversationReviewValidationState,
+  validateConversationReview,
 } from '../lib/review-bridge.mjs';
 import { reviewConversations } from '../workflows/review-conversations.mjs';
 
@@ -353,4 +356,42 @@ test('async reader failure does not abort the batch and becomes NOT_REVIEWABLE',
     uncertainty: 'high',
     safetyFlags: ['private_evidence_unavailable'],
   });
+});
+
+test('conversation validator state is strict serializable and survives a process boundary', async () => {
+  const reviewRequest = request();
+  await consume(reviewRequest);
+  const snapshot = exportConversationReviewValidationState({
+    request: reviewRequest,
+  });
+  const durableRequest = JSON.parse(JSON.stringify(reviewRequest));
+  const durableSnapshot = JSON.parse(JSON.stringify(snapshot));
+  const result = validateConversationReview({
+    request: durableRequest,
+    response: responseFor(reviewRequest),
+    validatorState: durableSnapshot,
+  });
+  assert.equal(result.kind, 'SUBJECTIVE_CONVERSATION_REVIEW');
+  assert.deepEqual(
+    restoreConversationReviewValidationState({
+      request: durableRequest,
+      validatorState: durableSnapshot,
+    }),
+    snapshot,
+  );
+  ingestConversationReview({
+    request: durableRequest,
+    response: responseFor(reviewRequest),
+  });
+  assert.throws(() => restoreConversationReviewValidationState({
+    request: durableRequest,
+    validatorState: durableSnapshot,
+  }), /REVIEW_RESPONSE_REPLAYED/u);
+  const tampered = structuredClone(durableSnapshot);
+  tampered.requestHash = 'f'.repeat(64);
+  assert.throws(() => validateConversationReview({
+    request: durableRequest,
+    response: responseFor(reviewRequest),
+    validatorState: tampered,
+  }), /REVIEW_REQUEST_UNTRUSTED/u);
 });

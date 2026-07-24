@@ -54,6 +54,15 @@ const REVIEW_KEYS = Object.freeze([
 const REQUEST_STATES = new Map();
 const NONCE_STATES = new Map();
 const VALIDATED_REVIEWS = new Map();
+const VALIDATOR_STATE_KEYS = Object.freeze([
+  'schemaVersion',
+  'requestHash',
+  'nonceRef',
+  'consumed',
+  'modelPolicy',
+  'packetEvidence',
+  'supplemental',
+]);
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -1289,6 +1298,104 @@ function requestState(request) {
   return state;
 }
 
+function serializeMechanismState(request, state) {
+  return deepFreeze({
+    schemaVersion: '1.0.0',
+    requestHash: request.requestHash,
+    nonceRef: request.nonceRef,
+    consumed: state.consumed,
+    modelPolicy: structuredClone(state.modelPolicy),
+    packetEvidence: [...state.packetEvidence.entries()]
+      .map(([packetId, refs]) => ({ packetId, evidenceRefs: [...refs].sort() }))
+      .sort((left, right) => left.packetId.localeCompare(right.packetId)),
+    supplemental: [...state.supplemental.entries()]
+      .map(([packetId, refs]) => ({ packetId, descriptorIds: [...refs].sort() }))
+      .sort((left, right) => left.packetId.localeCompare(right.packetId)),
+  });
+}
+
+function mechanismStateFromSnapshot(request, snapshot) {
+  validateSerializedRequest(request);
+  if (
+    !exactKeys(snapshot, VALIDATOR_STATE_KEYS)
+    || snapshot.schemaVersion !== '1.0.0'
+    || snapshot.requestHash !== request.requestHash
+    || snapshot.nonceRef !== request.nonceRef
+    || snapshot.consumed !== false
+    || !plain(snapshot.modelPolicy)
+    || !Array.isArray(snapshot.packetEvidence)
+    || !Array.isArray(snapshot.supplemental)
+  ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+  const packetEvidence = new Map();
+  for (const binding of snapshot.packetEvidence) {
+    if (
+      !exactKeys(binding, ['packetId', 'evidenceRefs'])
+      || packetEvidence.has(binding.packetId)
+      || !request.packets.some(({ packetId }) => packetId === binding.packetId)
+      || !Array.isArray(binding.evidenceRefs)
+      || binding.evidenceRefs.some((ref) => !EVIDENCE.test(ref))
+      || new Set(binding.evidenceRefs).size !== binding.evidenceRefs.length
+    ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+    const expected = request.packets.find(({ packetId }) => packetId === binding.packetId)
+      .eligibleEvidenceRefs;
+    if (canonicalJson([...binding.evidenceRefs].sort()) !== canonicalJson(expected)) {
+      throw codedError('MECHANISM_REVIEW_MISMATCH');
+    }
+    packetEvidence.set(binding.packetId, new Set(binding.evidenceRefs));
+  }
+  const supplemental = new Map();
+  for (const binding of snapshot.supplemental) {
+    if (
+      !exactKeys(binding, ['packetId', 'descriptorIds'])
+      || supplemental.has(binding.packetId)
+      || !request.packets.some(({ packetId }) => packetId === binding.packetId)
+      || !Array.isArray(binding.descriptorIds)
+      || new Set(binding.descriptorIds).size !== binding.descriptorIds.length
+    ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+    const expected = request.packets.find(({ packetId }) => packetId === binding.packetId)
+      .supplementalReadDescriptorIds;
+    if (canonicalJson([...binding.descriptorIds].sort()) !== canonicalJson(expected)) {
+      throw codedError('MECHANISM_REVIEW_MISMATCH');
+    }
+    supplemental.set(binding.packetId, new Set(binding.descriptorIds));
+  }
+  if (
+    packetEvidence.size !== request.packets.length
+    || supplemental.size !== request.packets.length
+  ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+  return {
+    requestHash: request.requestHash,
+    nonceRef: request.nonceRef,
+    consumed: false,
+    modelPolicy: structuredClone(snapshot.modelPolicy),
+    packetEvidence,
+    supplemental,
+  };
+}
+
+export function exportMechanismReviewValidationState({ request }) {
+  return serializeMechanismState(request, requestState(request));
+}
+
+export function restoreMechanismReviewValidationState({ request, validatorState }) {
+  const state = mechanismStateFromSnapshot(request, validatorState);
+  const existing = REQUEST_STATES.get(request.requestId);
+  const nonceOwner = NONCE_STATES.get(request.nonceRef);
+  if (existing?.consumed || nonceOwner && nonceOwner !== request.requestId) {
+    throw codedError('MECHANISM_REVIEW_REPLAYED');
+  }
+  if (
+    existing
+    && (
+      existing.requestHash !== state.requestHash
+      || existing.nonceRef !== state.nonceRef
+    )
+  ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+  REQUEST_STATES.set(request.requestId, state);
+  NONCE_STATES.set(request.nonceRef, request.requestId);
+  return serializeMechanismState(request, state);
+}
+
 function mismatch(response, request) {
   const fields = [
     'requestId', 'requestHash', 'nonceRef', 'runId', 'codeHash', 'packetSetHash',
@@ -1339,7 +1446,12 @@ function validateReview(review, request, state) {
   }
 }
 
-function validateMechanismReviewResponse({ request, response, state }) {
+function validateMechanismReviewResponse({
+  request,
+  response,
+  state,
+  registerValidated = true,
+}) {
   if (state.consumed) throw codedError('MECHANISM_REVIEW_REPLAYED');
   if (!exactKeys(response, RESPONSE_KEYS)) {
     throw codedError('MECHANISM_REVIEW_UNSAFE_OUTPUT');
@@ -1391,10 +1503,12 @@ function validateMechanismReviewResponse({ request, response, state }) {
     validationHash: sha256(response),
   });
   state.consumed = true;
-  VALIDATED_REVIEWS.set(result.validationHash, {
-    packetHashes: sha256(result.packetHashes),
-    reviews: sha256(result.reviews),
-  });
+  if (registerValidated) {
+    VALIDATED_REVIEWS.set(result.validationHash, {
+      packetHashes: sha256(result.packetHashes),
+      reviews: sha256(result.reviews),
+    });
+  }
   return result;
 }
 
@@ -1403,6 +1517,19 @@ export function ingestMechanismReview({ request, response }) {
     request,
     response,
     state: requestState(request),
+  });
+}
+
+export function validateMechanismReview({
+  request,
+  response,
+  validatorState,
+}) {
+  return validateMechanismReviewResponse({
+    request,
+    response,
+    state: mechanismStateFromSnapshot(request, validatorState),
+    registerValidated: false,
   });
 }
 
