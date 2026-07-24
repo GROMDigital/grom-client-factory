@@ -744,6 +744,27 @@ function verifyExistingPublication(publicationPath, manifest, attestation, paylo
   }
 }
 
+function assertVerifiedStaging(staging, manifest, payloadHashes) {
+  const expectedFiles = [...Object.keys(payloadHashes), 'run-manifest.json'].sort();
+  if (canonicalJson(listFiles(staging)) !== canonicalJson(expectedFiles)) {
+    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED');
+  }
+  let diskManifest;
+  try {
+    diskManifest = JSON.parse(readFileSync(join(staging, 'run-manifest.json'), 'utf8'));
+  } catch {
+    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED');
+  }
+  if (canonicalJson(diskManifest) !== canonicalJson(manifest)) {
+    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED');
+  }
+  for (const [name, expectedHash] of Object.entries(payloadHashes)) {
+    if (byteHash(readFileSync(join(staging, name))) !== expectedHash) {
+      throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED');
+    }
+  }
+}
+
 function nextIndexValue(index, pointer, status) {
   const prior = index.publications.find(({ publicationId, week }) => (
     publicationId === pointer.publicationId && week === pointer.week
@@ -765,6 +786,7 @@ export function publishAtomically({
   runManifest,
   payloadArtifacts,
   verifierAttestation,
+  verifyPublication: verifyPublicationCallback,
   projections = {},
 } = {}) {
   if (
@@ -774,6 +796,9 @@ export function publishAtomically({
     || !projections || typeof projections !== 'object' || Array.isArray(projections)
   ) throw codedError('PUBLICATION_INPUT_INVALID', TypeError);
   assertPublicationBoundary(runManifest, payloadArtifacts, verifierAttestation, projections);
+  if (typeof verifyPublicationCallback !== 'function') {
+    throw codedError('VERIFIER_ATTESTATION_FAILED_CALLBACK_REQUIRED', TypeError);
+  }
   const paths = validateAuditPaths(suppliedPaths);
   if (!['complete_full', 'complete_partial'].includes(runManifest.status)) {
     throw codedError('PUBLICATION_STATUS_INVALID', TypeError);
@@ -817,22 +842,30 @@ export function publishAtomically({
     payloadArtifacts: Object.entries(payloadHashes).map(([path, hash]) => ({ path, sha256: hash })),
     publicationRoot,
   };
-  const attestation = {
-    ...verifierAttestation,
-    manifestHash: sha256(manifest),
-    publicationRoot,
-  };
-  if (containsPrivateValue(manifest) || containsPrivateValue(attestation)) {
+  if (containsPrivateValue(manifest)) {
     throw codedError('PUBLICATION_NOT_SANITIZED');
   }
 
   const weekGuard = openWeekGuard(paths, week);
   const publicationPath = join(weekGuard.directory, publicationId);
   let recovered = false;
+  let attestation;
   try {
     weekGuard.assertSame();
     if (existsSync(publicationPath)) {
       weekGuard.assertSame();
+      try {
+        attestation = JSON.parse(
+          readFileSync(join(publicationPath, 'verifier-attestation.json'), 'utf8'),
+        );
+      } catch {
+        throw codedError('PUBLICATION_CONFLICT');
+      }
+      if (
+        attestation?.result !== 'pass'
+        || attestation.manifestHash !== sha256(manifest)
+        || attestation.publicationRoot !== publicationRoot
+      ) throw codedError('PUBLICATION_CONFLICT');
       verifyExistingPublication(publicationPath, manifest, attestation, payloadHashes);
       weekGuard.assertSame();
       recovered = true;
@@ -858,6 +891,27 @@ export function publishAtomically({
           weekGuard.assertSame();
         }
         writeArtifact(staging, 'run-manifest.json', Buffer.from(`${canonicalJson(manifest)}\n`, 'utf8'));
+        makeImmutable(staging);
+        let verified;
+        try {
+          verified = verifyPublicationCallback({ publicationDir: staging });
+        } catch (error) {
+          if (typeof error?.code === 'string' && error.code.startsWith('VERIFIER_')) throw error;
+          throw codedError('VERIFIER_ATTESTATION_FAILED_CALLBACK');
+        }
+        if (
+          !verified
+          || typeof verified !== 'object'
+          || Array.isArray(verified)
+          || verified.result !== 'pass'
+          || verified.manifestHash !== sha256(manifest)
+          || verified.publicationRoot !== publicationRoot
+          || containsPrivateValue(verified)
+          || containsRawReference(verified)
+        ) throw codedError('VERIFIER_ATTESTATION_FAILED_BINDING');
+        attestation = verified;
+        assertVerifiedStaging(staging, manifest, payloadHashes);
+        chmodSync(staging, 0o700);
         writeArtifact(
           staging,
           'verifier-attestation.json',

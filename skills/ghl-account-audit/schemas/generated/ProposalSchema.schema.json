@@ -18,11 +18,20 @@
       "type": "string",
       "minLength": 1
     },
+    "findingId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "findingFingerprint": {
+      "type": "string",
+      "minLength": 1
+    },
     "packHash": {
       "type": "string",
       "pattern": "^[a-f0-9]{64}$"
     },
     "objectRefs": {
+      "minItems": 1,
       "type": "array",
       "items": {
         "type": "object",
@@ -38,17 +47,11 @@
           "capturedVersion": {
             "anyOf": [
               {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "number"
-                  }
-                ]
+                "type": "string",
+                "minLength": 1
               },
               {
-                "type": "null"
+                "type": "number"
               }
             ]
           },
@@ -91,19 +94,62 @@
             },
             "workflowId": {
               "type": "string",
-              "minLength": 1
+              "pattern": "^obj_[a-f0-9]{16,64}$"
+            },
+            "capturedVersion": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "capturedHash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "currentGraph": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "proposedGraph": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
             },
             "triggers": {
+              "minItems": 1,
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
               }
+            },
+            "reentry": {
+              "type": "string",
+              "minLength": 1
             },
             "branches": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
               }
+            },
+            "defaultBranch": {
+              "type": "string",
+              "minLength": 1
             },
             "exits": {
               "minItems": 1,
@@ -112,7 +158,69 @@
                 "type": "string"
               }
             },
-            "existingEnrollmentPlan": {
+            "waits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            },
+            "errorBehavior": {
+              "type": "string",
+              "minLength": 1
+            },
+            "references": {
+              "type": "object",
+              "properties": {
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "calendars": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^obj_[a-f0-9]{16,64}$"
+                  }
+                },
+                "assignments": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "agents": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^obj_[a-f0-9]{16,64}$"
+                  }
+                }
+              },
+              "required": [
+                "fields",
+                "tags",
+                "calendars",
+                "assignments",
+                "agents"
+              ],
+              "additionalProperties": false
+            },
+            "existingEnrollmentHandling": {
               "type": "string",
               "minLength": 1
             }
@@ -122,10 +230,19 @@
             "proposed",
             "solutionType",
             "workflowId",
+            "capturedVersion",
+            "capturedHash",
+            "currentGraph",
+            "proposedGraph",
             "triggers",
+            "reentry",
             "branches",
+            "defaultBranch",
             "exits",
-            "existingEnrollmentPlan"
+            "waits",
+            "errorBehavior",
+            "references",
+            "existingEnrollmentHandling"
           ],
           "additionalProperties": false
         },
@@ -181,12 +298,27 @@
                 "type": "string"
               }
             },
+            "timing": {
+              "type": "string",
+              "minLength": 1
+            },
             "stopConditions": {
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string"
               }
+            },
+            "consentCompliance": {
+              "type": "string",
+              "minLength": 1
+            },
+            "ownership": {
+              "type": "string",
+              "enum": [
+                "fixed_copy",
+                "ai_generated"
+              ]
             }
           },
           "required": [
@@ -199,7 +331,10 @@
             "finalText",
             "mergeFields",
             "fallbacks",
-            "stopConditions"
+            "timing",
+            "stopConditions",
+            "consentCompliance",
+            "ownership"
           ],
           "additionalProperties": false
         },
@@ -224,7 +359,7 @@
               "type": "string",
               "const": "wait_timing"
             },
-            "anchorEvent": {
+            "anchor": {
               "type": "string",
               "minLength": 1
             },
@@ -240,23 +375,59 @@
               "type": "string",
               "minLength": 1
             },
-            "exitConditions": {
-              "minItems": 1,
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
+            "businessCalendar": {
+              "type": "string",
+              "pattern": "^obj_[a-f0-9]{16,64}$"
+            },
+            "exits": {
+              "type": "object",
+              "properties": {
+                "response": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "booking": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "optOut": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "stage": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "response",
+                "booking",
+                "optOut",
+                "stage"
+              ],
+              "additionalProperties": false
+            },
+            "collisionRisk": {
+              "type": "string",
+              "minLength": 1
+            },
+            "burstSendRisk": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
             "current",
             "proposed",
             "solutionType",
-            "anchorEvent",
+            "anchor",
             "duration",
             "unit",
             "timezone",
-            "exitConditions"
+            "businessCalendar",
+            "exits",
+            "collisionRisk",
+            "burstSendRisk"
           ],
           "additionalProperties": false
         },
@@ -286,37 +457,123 @@
             },
             "agentId": {
               "type": "string",
-              "minLength": 1
+              "pattern": "^obj_[a-f0-9]{16,64}$"
             },
-            "prompt": {
+            "capturedVersion": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            },
+            "capturedHash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "promptChanges": {
               "type": "string",
               "minLength": 1
+            },
+            "configurationChanges": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "actionChanges": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "knowledgeChanges": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "routingChanges": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "handoffChanges": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             },
             "allowedTools": {
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
               }
             },
-            "guardrails": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "escalationRules": {
+            "agentGuardrails": {
               "minItems": 1,
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "prohibitedBehavior": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "escalation": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
               }
             },
             "evaluationCases": {
               "minItems": 1,
               "type": "array",
               "items": {
-                "type": "string"
+                "type": "object",
+                "properties": {
+                  "caseId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "version": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "expected": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "caseId",
+                  "version",
+                  "expected"
+                ],
+                "additionalProperties": false
               }
+            },
+            "canaryScope": {
+              "type": "string",
+              "minLength": 1
             }
           },
           "required": [
@@ -324,11 +581,20 @@
             "proposed",
             "solutionType",
             "agentId",
-            "prompt",
+            "capturedVersion",
+            "capturedHash",
+            "promptChanges",
+            "configurationChanges",
+            "actionChanges",
+            "knowledgeChanges",
+            "routingChanges",
+            "handoffChanges",
             "allowedTools",
-            "guardrails",
-            "escalationRules",
-            "evaluationCases"
+            "agentGuardrails",
+            "prohibitedBehavior",
+            "escalation",
+            "evaluationCases",
+            "canaryScope"
           ],
           "additionalProperties": false
         },
@@ -353,7 +619,7 @@
               "type": "string",
               "const": "operating_process"
             },
-            "owner": {
+            "processOwner": {
               "type": "string",
               "pattern": "^actor_[a-f0-9]{16,64}$"
             },
@@ -365,6 +631,10 @@
               "additionalProperties": {
                 "type": "string"
               }
+            },
+            "action": {
+              "type": "string",
+              "minLength": 1
             },
             "sla": {
               "type": "string",
@@ -381,11 +651,49 @@
                 "type": "string"
               }
             },
+            "staffFields": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "staffStages": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
             "escalation": {
               "minItems": 1,
               "type": "array",
               "items": {
                 "type": "string"
+              }
+            },
+            "training": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "auditTrail": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "complianceMeasurement": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
               }
             }
           },
@@ -393,27 +701,35 @@
             "current",
             "proposed",
             "solutionType",
-            "owner",
+            "processOwner",
             "raci",
+            "action",
             "sla",
             "trigger",
             "completionEvidence",
-            "escalation"
+            "staffFields",
+            "staffStages",
+            "escalation",
+            "training",
+            "auditTrail",
+            "complianceMeasurement"
           ],
           "additionalProperties": false
         }
       ]
     },
-    "preconditions": {
+    "prerequisites": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
     "dependencies": {
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "pattern": "^obj_[a-f0-9]{16,64}$"
       }
     },
     "blastRadius": {
@@ -423,6 +739,14 @@
     "owner": {
       "type": "string",
       "pattern": "^actor_[a-f0-9]{16,64}$"
+    },
+    "acceptanceTests": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
     },
     "monitoring": {
       "minItems": 1,
@@ -446,23 +770,70 @@
       "additionalProperties": {}
     },
     "guardrails": {
+      "minItems": 1,
       "type": "array",
       "items": {
-        "type": "string"
+        "type": "string",
+        "minLength": 1
       }
     },
-    "tests": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "expectedResult": {
+      "type": "object",
+      "properties": {
+        "lower": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upper": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "MEASURED",
+            "BOUNDED",
+            "INFERRED",
+            "UNMEASURED"
+          ]
+        }
+      },
+      "required": [
+        "lower",
+        "upper",
+        "unit",
+        "basis"
+      ],
+      "additionalProperties": false
     },
     "evidenceRefs": {
+      "minItems": 1,
       "type": "array",
       "items": {
         "type": "string",
         "pattern": "^ev_[a-f0-9]{16,64}$"
       }
+    },
+    "evidenceCutoff": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
     }
   },
   "required": [
@@ -470,19 +841,23 @@
     "executable",
     "approvalRequired",
     "solutionId",
+    "findingId",
+    "findingFingerprint",
     "packHash",
     "objectRefs",
     "changeSet",
-    "preconditions",
+    "prerequisites",
     "dependencies",
     "blastRadius",
     "owner",
+    "acceptanceTests",
     "monitoring",
     "rollout",
     "rollback",
     "guardrails",
-    "tests",
-    "evidenceRefs"
+    "expectedResult",
+    "evidenceRefs",
+    "evidenceCutoff"
   ],
   "additionalProperties": false
 }

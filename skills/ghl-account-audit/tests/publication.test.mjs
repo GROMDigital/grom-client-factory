@@ -136,6 +136,16 @@ function sanitizeBundle(raw, sources = DEFAULT_SOURCES, paths) {
   });
 }
 
+function testVerifier({ publicationDir }) {
+  const manifest = JSON.parse(readFileSync(join(publicationDir, 'run-manifest.json'), 'utf8'));
+  return Object.freeze({
+    verifierVersion: 'test-only',
+    result: 'pass',
+    manifestHash: sha256(manifest),
+    publicationRoot: manifest.publicationRoot,
+  });
+}
+
 function publishFixture(paths, overrides = {}) {
   const publication = sanitizeBundle({
     runManifest: {
@@ -157,7 +167,7 @@ function publishFixture(paths, overrides = {}) {
     },
     projections: {},
   }, DEFAULT_SOURCES, paths);
-  return publishAtomically({ paths, ...publication });
+  return publishAtomically({ paths, ...publication, verifyPublication: testVerifier });
 }
 
 test('manifest root excludes the manifest and verifier to avoid circular hashing', () => withProject(({ paths }) => {
@@ -250,7 +260,7 @@ test('publication rejects unsafe paths and idempotently verifies an immutable pu
       verifierAttestation: { result: 'pass' },
       projections: {},
       });
-      publishAtomically({ paths, ...unsafe });
+      publishAtomically({ paths, ...unsafe, verifyPublication: testVerifier });
     },
     /INVALID_ARTIFACT_PATH/u,
   );
@@ -277,7 +287,7 @@ test('backlog projections are atomically copied outside the immutable publicatio
       'current-system-flow.mmd': 'flowchart LR\n  A --> B\n',
     },
   });
-  const publication = publishAtomically({ paths, ...input });
+  const publication = publishAtomically({ paths, ...input, verifyPublication: testVerifier });
   assert.ok(publication.path.endsWith(join('2026-W30', 'projection-publication')));
   for (const name of ['BACKLOG.md', 'backlog.json', 'current-system-flow.mmd']) {
     assert.equal(existsSync(join(paths.root, 'memory', name)), true, name);
@@ -667,7 +677,7 @@ test('publisher accepts only one non-forgeable sanitized bundle and allowlisted 
     payloadArtifacts: { ...raw.payloadArtifacts, 'custom.json': {} },
   });
   assert.throws(
-    () => publishAtomically({ paths, ...customArtifact }),
+    () => publishAtomically({ paths, ...customArtifact, verifyPublication: testVerifier }),
     /ARTIFACT_SCHEMA_NOT_ALLOWED/u,
   );
 }));
@@ -752,7 +762,10 @@ test('projection failure after rename is recoverable and retry is idempotent', (
     verifierAttestation: { verifierVersion: '1.0.0', result: 'pass' },
     projections: {},
   });
-  assert.throws(() => publishAtomically({ paths, ...conflict }), /PUBLICATION_CONFLICT/u);
+  assert.throws(
+    () => publishAtomically({ paths, ...conflict, verifyPublication: testVerifier }),
+    /PUBLICATION_CONFLICT/u,
+  );
 }));
 
 test('REPORT.md is mandatory before CURRENT.md can be created', () => withProject(({ paths }) => {
@@ -769,8 +782,47 @@ test('REPORT.md is mandatory before CURRENT.md can be created', () => withProjec
     verifierAttestation: { result: 'pass' },
     projections: {},
   });
-  assert.throws(() => publishAtomically({ paths, ...input }), /REPORT_ARTIFACT_REQUIRED/u);
+  assert.throws(
+    () => publishAtomically({ paths, ...input, verifyPublication: testVerifier }),
+    /REPORT_ARTIFACT_REQUIRED/u,
+  );
   assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
+}));
+
+test('publication rename and projections occur only after verifier pass', () => withProject(({ paths }) => {
+  const input = sanitizeBundle({
+    runManifest: {
+      schemaVersion: '1.0.0',
+      runId: 'verified-run',
+      publicationId: 'verified-publication',
+      week: '2026-W30',
+      status: 'complete_full',
+    },
+    payloadArtifacts: {
+      'REPORT.md': '# Verified report\n',
+      'metrics-and-findings.json': { findings: [] },
+    },
+    verifierAttestation: {},
+    projections: {
+      'BACKLOG.md': '# Backlog\n',
+    },
+  }, DEFAULT_SOURCES, paths);
+  assert.throws(
+    () => publishAtomically({
+      paths,
+      ...input,
+      verifyPublication() {
+        throw Object.assign(new Error('VERIFIER_ATTESTATION_FAILED_TEST'), {
+          code: 'VERIFIER_ATTESTATION_FAILED_TEST',
+        });
+      },
+    }),
+    /VERIFIER_ATTESTATION_FAILED_TEST/u,
+  );
+  assert.equal(existsSync(join(paths.weekly, '2026-W30', 'verified-publication')), false);
+  assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
+  assert.equal(existsSync(join(paths.root, 'index.json')), false);
+  assert.equal(existsSync(join(paths.root, 'memory', 'BACKLOG.md')), false);
 }));
 
 test('week container is read-only between publications while weekly root remains usable', () => withProject(({ paths }) => {
