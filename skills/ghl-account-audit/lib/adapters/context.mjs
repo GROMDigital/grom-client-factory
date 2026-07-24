@@ -8,12 +8,14 @@ import {
   realpathSync,
 } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
-import { canonicalJson } from '../canonical.mjs';
+import { canonicalJson, sha256 } from '../canonical.mjs';
 import {
   capturedAt,
   cloneJson,
   codedError,
   completeCollection,
+  isIsoTimestamp,
+  validateCollectionWindow,
 } from './collection.mjs';
 
 const SAFE_ID = /^[a-z0-9][a-z0-9_.:-]{0,127}$/u;
@@ -25,6 +27,18 @@ function isPlainObject(value) {
     && !Array.isArray(value)
     && Object.getPrototypeOf(value) === Object.prototype
   );
+}
+
+function assertNestedLocation(value, expectedLocationId) {
+  if (!value || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
+    if (
+      ['boundlocationid', 'ghllocationid', 'locationid'].includes(normalized)
+      && nested !== expectedLocationId
+    ) throw codedError('LOCATION_MISMATCH');
+    assertNestedLocation(nested, expectedLocationId);
+  }
 }
 
 function checkedFile(root, path) {
@@ -44,10 +58,12 @@ function checkedFile(root, path) {
     descriptor = openSync(actual, constants.O_RDONLY | constants.O_NOFOLLOW);
     const identity = fstatSync(descriptor);
     if (!identity.isFile()) throw codedError('CONTEXT_PATH_INVALID');
+    const bytes = readFileSync(descriptor);
     return {
       path: actual,
       device: identity.dev,
       inode: identity.ino,
+      bytesHash: sha256([...bytes]),
     };
   } catch (error) {
     if (error?.code === 'CONTEXT_PATH_INVALID') throw error;
@@ -98,6 +114,7 @@ function validateProfile(projectRoot, profile) {
 
 function readSource(source, expectedLocationId) {
   let value;
+  let bytes;
   let descriptor;
   try {
     descriptor = openSync(source.path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -107,7 +124,9 @@ function readSource(source, expectedLocationId) {
       || identity.dev !== source.device
       || identity.ino !== source.inode
     ) throw codedError('CONTEXT_SOURCE_CHANGED');
-    value = JSON.parse(readFileSync(descriptor, 'utf8'));
+    bytes = readFileSync(descriptor);
+    if (sha256([...bytes]) !== source.bytesHash) throw codedError('CONTEXT_SOURCE_CHANGED');
+    value = JSON.parse(bytes.toString('utf8'));
   } catch (error) {
     if (error?.code === 'CONTEXT_SOURCE_CHANGED') throw error;
     throw codedError('CONTEXT_SOURCE_INVALID');
@@ -117,12 +136,13 @@ function readSource(source, expectedLocationId) {
   if (
     !isPlainObject(value)
     || value.locationId !== expectedLocationId
-    || typeof value.capturedAt !== 'string'
+    || !isIsoTimestamp(value.capturedAt)
     || !isPlainObject(value.values)
   ) {
     if (value?.locationId !== expectedLocationId) throw codedError('LOCATION_MISMATCH');
     throw codedError('CONTEXT_SOURCE_INVALID');
   }
+  assertNestedLocation(value.values, expectedLocationId);
   return cloneJson(value, 'CONTEXT_SOURCE_INVALID');
 }
 
@@ -136,16 +156,18 @@ export function createContextAdapter({ projectRoot, profile, runtime = {} } = {}
   }
 
   return Object.freeze({
-    async collect({ capability, window, cursor = null } = {}) {
+    async collect({ capability, window, cursor = null, signal } = {}) {
       if (
         !isPlainObject(capability)
         || typeof capability.operationId !== 'string'
         || capability.operationId.length === 0
         || cursor !== null
       ) throw codedError('CONTEXT_CAPABILITY_INVALID', TypeError);
-      const requestedWindow = cloneJson(window, 'COLLECTION_WINDOW_INVALID');
+      if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
+      const requestedWindow = validateCollectionWindow(window);
       const assertions = new Map();
       for (const source of pinned.sources) {
+        if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
         const document = readSource(source, pinned.expectedLocationId);
         for (const [key, value] of Object.entries(document.values)) {
           const record = {
@@ -161,6 +183,7 @@ export function createContextAdapter({ projectRoot, profile, runtime = {} } = {}
           assertions.set(key, records);
         }
       }
+      if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
       const items = [];
       for (const key of [...assertions.keys()].sort()) {
         const records = assertions.get(key).sort((left, right) => (

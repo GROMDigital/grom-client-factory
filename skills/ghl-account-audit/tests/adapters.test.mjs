@@ -10,28 +10,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { canonicalJson, sha256 } from '../lib/canonical.mjs';
+import { auditPaths } from '../lib/paths.mjs';
+import { openState } from '../lib/state.mjs';
+import { openVault } from '../lib/vault.mjs';
+import { buildPrivateSourceEnvelope } from '../lib/adapters/collection.mjs';
 import { connectMcp } from '../lib/adapters/mcp-transport.mjs';
 import { createContextAdapter } from '../lib/adapters/context.mjs';
 import { createPortalExportAdapter } from '../lib/adapters/portal-export.mjs';
 import { createPublicGhlAdapter } from '../lib/adapters/public-ghl.mjs';
+import { loadPublicReadAllowlist } from '../schemas/v1.mjs';
 
-const SNAPSHOT_HASH = '7'.repeat(64);
 const MANIFEST_HASH = '8'.repeat(64);
-const allowlist = Object.freeze({
-  schemaVersion: '1.0.0',
-  sourceCatalogRevision: 'fixture-1',
-  sourceSnapshotHash: SNAPSHOT_HASH,
-  sourceServerIdentity: 'fixture-public',
-  actions: Object.freeze([
-    Object.freeze({
-      actionId: 'contacts.search',
-      method: 'POST',
-      normalizedPath: '/contacts/search',
-      category: 'contacts',
-      risk: 'read',
-    }),
-  ]),
-});
+const allowlist = loadPublicReadAllowlist();
+const SNAPSHOT_HASH = allowlist.sourceSnapshotHash;
 const ALLOWLIST_HASH = sha256(allowlist);
 const window = Object.freeze({
   from: '2026-07-13T00:00:00.000Z',
@@ -58,6 +49,18 @@ const generousBudget = Object.freeze({
   maximumTotalRetryDelayMs: 100,
   wallClockMs: 10_000,
 });
+
+function providerConfig(credentialRef = null, overrides = {}) {
+  return {
+    providerId: 'fixture-provider',
+    expectedLocationId: 'L1',
+    capabilityManifestHash: MANIFEST_HASH,
+    publicCatalogSnapshotHash: SNAPSHOT_HASH,
+    publicReadAllowlistHash: ALLOWLIST_HASH,
+    credentialRef,
+    ...overrides,
+  };
+}
 
 function page({
   locationId = 'L1',
@@ -89,7 +92,10 @@ function fakeClient(responses, calls = []) {
   let index = 0;
   return {
     providerId: 'fixture-provider',
+    expectedLocationId: 'L1',
     capabilityManifestHash: MANIFEST_HASH,
+    publicCatalogSnapshotHash: SNAPSHOT_HASH,
+    publicReadAllowlistHash: ALLOWLIST_HASH,
     async callTool(request, options) {
       calls.push({ request, options });
       const response = responses[Math.min(index, responses.length - 1)];
@@ -149,7 +155,10 @@ test('public adapter rejects an unlisted action before MCP dispatch', async () =
   const adapter = createPublicGhlAdapter({
     client: {
       providerId: 'fixture-provider',
+      expectedLocationId: 'L1',
       capabilityManifestHash: MANIFEST_HASH,
+      publicCatalogSnapshotHash: SNAPSHOT_HASH,
+      publicReadAllowlistHash: ALLOWLIST_HASH,
       callTool: async () => { calls += 1; },
     },
     allowlist,
@@ -191,6 +200,29 @@ test('public adapter enforces every tuple and pinned hash before dispatch', asyn
   }
 });
 
+test('public adapter rejects a forged in-memory allowlist before dispatch', async () => {
+  const forged = structuredClone(allowlist);
+  forged.actions = [{
+    actionId: 'contacts-v3__create-contact',
+    method: 'POST',
+    normalizedPath: '/contacts',
+    category: 'contacts',
+    risk: 'read',
+  }];
+  const calls = [];
+  assert.throws(() => createPublicGhlAdapter({
+    client: fakeClient([page()], calls),
+    allowlist: forged,
+    expectedLocationId: 'L1',
+    budgets: {
+      version: '1.0.0',
+      exhaustionPolicy: 'checkpoint_scope_incomplete',
+      capabilities: { contacts: generousBudget },
+    },
+  }), /TRUSTED_ALLOWLIST_MISMATCH/);
+  assert.equal(calls.length, 0);
+});
+
 test('explicitly allowlisted POST read dispatches execute_action without mutation fields', async () => {
   const calls = [];
   const result = await publicAdapter({ calls }).collect({
@@ -215,6 +247,28 @@ test('wrong-location and unresolved-location responses quarantine before success
       adapter.collect({ capability: approvedCapability, window }),
       /LOCATION_MISMATCH/,
     );
+  }
+});
+
+test('contradictory and nested item locations quarantine before inventory', async () => {
+  for (const response of [
+    {
+      ...page(),
+      boundLocationId: 'L1',
+      locationId: 'L2',
+    },
+    page({ items: [{ id: 'C1', locationId: 'L2' }] }),
+    page({ items: [{ id: 'C1', envelope: { boundLocationId: 'L2' } }] }),
+  ]) {
+    const calls = [];
+    await assert.rejects(
+      publicAdapter({ calls, responses: [response] }).collect({
+        capability: approvedCapability,
+        window,
+      }),
+      /LOCATION_MISMATCH/,
+    );
+    assert.equal(calls.length, 1);
   }
 });
 
@@ -292,6 +346,23 @@ test('cursor loops, changing totals, rate limits, truncation, and missing termin
   }
 });
 
+test('public applied window must be strict ISO and remain inside requested scope', async () => {
+  for (const appliedWindow of [
+    { from: 'not-a-time', to: window.to },
+    { from: '2026-07-12T23:59:59.999Z', to: window.to },
+    { from: window.from, to: '2026-07-20T00:00:00.001Z' },
+    { from: window.to, to: window.from },
+  ]) {
+    await assert.rejects(
+      publicAdapter({ responses: [page({ appliedWindow })] }).collect({
+        capability: approvedCapability,
+        window,
+      }),
+      /APPLIED_WINDOW_INVALID|WINDOW_SCOPE_MISMATCH/,
+    );
+  }
+});
+
 test('each collection budget independently checkpoints with a stable reason', async () => {
   const retryError = Object.assign(new Error('fixture retry'), {
     code: 'RETRYABLE',
@@ -343,10 +414,51 @@ test('each collection budget independently checkpoints with a stable reason', as
   }
 });
 
+test('pre-response incompleteness keeps count unknown and checkpoints reconstructable page artifacts', async () => {
+  const beforeResponse = await publicAdapter({
+    budget: { ...generousBudget, retryCount: 0 },
+    responses: [Object.assign(new Error('retry'), { code: 'RETRYABLE' })],
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(beforeResponse.page.reportedCount, null);
+
+  const saved = [];
+  const partial = await publicAdapter({
+    budget: { ...generousBudget, maximumPages: 1 },
+    checkpointStore: { save: async (checkpoint) => saved.push(checkpoint) },
+    responses: [page({
+      items: [{ id: 'C1', privateMarker: 'page-one' }],
+      nextCursor: 'next',
+      reportedCount: 2,
+      complete: false,
+    })],
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(partial.incompleteReason, 'BUDGET_MAXIMUM_PAGES');
+  assert.equal(saved.length, 1);
+  assert.deepEqual(saved[0].pageArtifacts[0].payload.items, [{
+    id: 'C1',
+    privateMarker: 'page-one',
+  }]);
+  assert.equal(
+    saved[0].pageArtifacts[0].artifactHash,
+    sha256(saved[0].pageArtifacts[0].payload),
+  );
+  assert.equal(saved[0].pageArtifactsHash, sha256(saved[0].pageArtifacts));
+});
+
 test('request timeout checkpoints without waiting on a live clock', async () => {
+  let observedSignal;
+  let observedAbort = false;
   const result = await publicAdapter({
     budget: { ...generousBudget, requestTimeoutMs: 5 },
-    responses: [() => new Promise(() => {})],
+    responses: [(_request, options) => {
+      observedSignal = options.signal;
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          observedAbort = true;
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+        }, { once: true });
+      });
+    }],
     runtime: {
       setTimer(callback) {
         queueMicrotask(callback);
@@ -357,6 +469,8 @@ test('request timeout checkpoints without waiting on a live clock', async () => 
   }).collect({ capability: approvedCapability, window });
   assert.equal(result.incompleteReason, 'BUDGET_REQUEST_TIMEOUT');
   assert.equal(result.page.complete, false);
+  assert.equal(observedSignal.aborted, true);
+  assert.equal(observedAbort, true);
 });
 
 test('wall clock exhaustion checkpoints with a deterministic clock', async () => {
@@ -385,6 +499,29 @@ test('incomplete collection never mints inventory even when items were collected
   }).collect({ capability: approvedCapability, window });
   assert.equal(result.items.length, 1);
   assert.equal('privateSourceInventory' in result, false);
+  assert.throws(() => buildPrivateSourceEnvelope(result), /PRIVATE_SOURCE_INVENTORY_NOT_TERMINAL/);
+});
+
+test('complete and incomplete collections are deeply immutable after hashing', async () => {
+  const complete = await publicAdapter().collect({ capability: approvedCapability, window });
+  const originalHash = complete.privateSourceInventory[0].sourceHash;
+  assert.equal(Object.isFrozen(complete.items), true);
+  assert.equal(Object.isFrozen(complete.items[0]), true);
+  assert.equal(Object.isFrozen(complete.privateSourceEnvelope.payload), true);
+  assert.throws(() => {
+    complete.items[0].id = 'MUTATED';
+  }, TypeError);
+  assert.equal(complete.privateSourceInventory[0].sourceHash, originalHash);
+
+  const incomplete = await publicAdapter({
+    budget: { ...generousBudget, maximumPages: 1 },
+    responses: [page({ nextCursor: 'next', complete: false, reportedCount: 2 })],
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(Object.isFrozen(incomplete.page), true);
+  assert.equal(Object.isFrozen(incomplete.items[0]), true);
+  assert.throws(() => {
+    incomplete.items.push({ id: 'MUTATED' });
+  }, TypeError);
 });
 
 test('public adapter rejects malformed windows and cursors before dispatch', async () => {
@@ -505,6 +642,73 @@ test('context adapter rejects a source inode replaced after configuration', asyn
   );
 }));
 
+test('context adapter pins bytes and validates timestamps, windows, and aborts', async () => withProject(async (root) => {
+  const sourcePath = join(root, 'context.json');
+  const document = {
+    locationId: 'L1',
+    capturedAt: '2026-07-20T00:00:00.000Z',
+    values: { timezone: 'UTC' },
+  };
+  writeFileSync(sourcePath, `${canonicalJson(document)}\n`);
+  const adapter = createContextAdapter({
+    projectRoot: root,
+    profile: {
+      expectedLocationId: 'L1',
+      sources: [{ sourceId: 'context', authority: 'fixture', path: 'context.json' }],
+    },
+  });
+  writeFileSync(sourcePath, `${canonicalJson({
+    ...document,
+    values: { timezone: 'Europe/London' },
+  })}\n`);
+  await assert.rejects(
+    adapter.collect({ capability: { operationId: 'context' }, window }),
+    /CONTEXT_SOURCE_CHANGED/,
+  );
+
+  writeFileSync(sourcePath, `${canonicalJson(document)}\n`);
+  const fresh = createContextAdapter({
+    projectRoot: root,
+    profile: {
+      expectedLocationId: 'L1',
+      sources: [{ sourceId: 'context', authority: 'fixture', path: 'context.json' }],
+    },
+  });
+  for (const badWindow of [
+    { from: 'not-iso', to: window.to },
+    { from: window.to, to: window.from },
+    { from: window.from, to: window.to, extra: true },
+  ]) {
+    await assert.rejects(
+      fresh.collect({ capability: { operationId: 'context' }, window: badWindow }),
+      /COLLECTION_WINDOW_INVALID/,
+    );
+  }
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    fresh.collect({
+      capability: { operationId: 'context' },
+      window,
+      signal: controller.signal,
+    }),
+    /COLLECTION_ABORTED/,
+  );
+
+  writeFileSync(sourcePath, `${canonicalJson({ ...document, capturedAt: 'not-iso' })}\n`);
+  const invalidTimestamp = createContextAdapter({
+    projectRoot: root,
+    profile: {
+      expectedLocationId: 'L1',
+      sources: [{ sourceId: 'context', authority: 'fixture', path: 'context.json' }],
+    },
+  });
+  await assert.rejects(
+    invalidTimestamp.collect({ capability: { operationId: 'context' }, window }),
+    /CONTEXT_SOURCE_INVALID/,
+  );
+}));
+
 function portalFixture(overrides = {}) {
   return {
     schemaVersion: '1.0.0',
@@ -554,6 +758,21 @@ test('portal adapter rejects DB, course, wrong-location, and incomplete export s
       portalFixture({ items: [{ courseProgress: 'complete' }] }),
       /PORTAL_EXPORT_SURFACE_NOT_APPLICABLE/,
     ],
+    [
+      'course-value',
+      portalFixture({ items: [{ surface: 'courses' }] }),
+      /PORTAL_EXPORT_SURFACE_NOT_APPLICABLE/,
+    ],
+    [
+      'database-uri',
+      portalFixture({ items: [{ note: 'postgres://private.example/live' }] }),
+      /PORTAL_EXPORT_PRIVATE_VALUE/,
+    ],
+    [
+      'credential-value',
+      portalFixture({ items: [{ note: 'Bearer private-portal-token' }] }),
+      /PORTAL_EXPORT_PRIVATE_VALUE/,
+    ],
     ['location', portalFixture({ locationId: 'L2' }), /LOCATION_MISMATCH/],
     [
       'incomplete',
@@ -585,6 +804,46 @@ test('portal adapter rejects an export inode replaced after configuration', asyn
   );
 }));
 
+test('portal adapter strictly validates timestamps, windows, and aborts', async () => withProject(async (root) => {
+  for (const [name, value, code] of [
+    ['timestamp', portalFixture({ capturedAt: 'not-iso' }), /PORTAL_EXPORT_INVALID/],
+    [
+      'requested-window',
+      portalFixture({ requestedWindow: { from: window.to, to: window.from } }),
+      /PORTAL_EXPORT_INVALID/,
+    ],
+    [
+      'applied-scope',
+      portalFixture({
+        appliedWindow: { from: '2026-07-12T00:00:00.000Z', to: window.to },
+      }),
+      /PORTAL_EXPORT_SCOPE_MISMATCH/,
+    ],
+  ]) {
+    const exportPath = join(root, `${name}.json`);
+    writeFileSync(exportPath, `${canonicalJson(value)}\n`);
+    const adapter = createPortalExportAdapter({ exportPath, expectedLocationId: 'L1' });
+    await assert.rejects(
+      adapter.collect({ capability: { operationId: 'portal-onboarding' }, window }),
+      code,
+    );
+  }
+
+  const exportPath = join(root, 'abort.json');
+  writeFileSync(exportPath, `${canonicalJson(portalFixture())}\n`);
+  const adapter = createPortalExportAdapter({ exportPath, expectedLocationId: 'L1' });
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    adapter.collect({
+      capability: { operationId: 'portal-onboarding' },
+      window,
+      signal: controller.signal,
+    }),
+    /COLLECTION_ABORTED/,
+  );
+}));
+
 test('terminal inventories are canonical, exact, sorted, and bind the complete envelope', async () => withProject(async (root) => {
   const exportPath = join(root, 'portal-export.json');
   writeFileSync(exportPath, `${canonicalJson(portalFixture())}\n`);
@@ -592,16 +851,16 @@ test('terminal inventories are canonical, exact, sorted, and bind the complete e
     exportPath,
     expectedLocationId: 'L1',
   }).collect({ capability: { operationId: 'portal-onboarding' }, window });
-  const sourceEnvelope = Object.fromEntries(
-    Object.entries(result).filter(([key]) => key !== 'privateSourceInventory'),
-  );
   assert.deepEqual(result.privateSourceInventory, [...result.privateSourceInventory].sort(
     (left, right) => left.sourceId.localeCompare(right.sourceId),
   ));
   assert.equal(
     result.privateSourceInventory[0].sourceHash,
-    sha256({ schemaVersion: '1.0.0', source: sourceEnvelope }),
+    sha256({ schemaVersion: '1.0.0', source: result.privateSourceEnvelope }),
   );
+  assert.equal(result.privateSourceEnvelope.sourceId, result.privateSourceInventory[0].sourceId);
+  assert.equal(result.privateSourceEnvelope.kind, result.privateSourceInventory[0].kind);
+  assert.equal(result.privateSourceEnvelope.payload.source, 'onboarding_portal');
   assert.deepEqual(Object.keys(result.privateSourceInventory[0]).sort(), [
     'kind',
     'sourceHash',
@@ -609,15 +868,79 @@ test('terminal inventories are canonical, exact, sorted, and bind the complete e
   ]);
 }));
 
+test('terminal adapter source envelope is accepted unchanged by Task 3 inventory authority', async () => withProject(async (root) => {
+  const result = await publicAdapter().collect({
+    capability: approvedCapability,
+    window,
+  });
+  assert.deepEqual(
+    Object.keys(result.privateSourceEnvelope).sort(),
+    ['kind', 'payload', 'sourceId'],
+  );
+  assert.equal(
+    result.privateSourceInventory[0].sourceHash,
+    sha256({ schemaVersion: '1.0.0', source: result.privateSourceEnvelope }),
+  );
+  const privateSourceInventory = result.privateSourceInventory;
+  const frozenInputs = {
+    locationId: 'L1',
+    cutoff: 1000,
+    timezone: 'Australia/Sydney',
+    contextHash: 'context-1',
+    coverageProfileHash: 'coverage-1',
+    metricProfileHash: 'metric-1',
+    rulesetHash: 'rules-1',
+    codeHash: 'code-1',
+    auditProfileHash: 'profile-1',
+    providerToolProfileHash: 'provider-1',
+    windowDefinitionsHash: 'windows-1',
+    collectionBudgetHash: 'budget-1',
+    capabilityProofIndexHash: 'proof-index-1',
+    capabilityReceiptHashes: ['receipt-1'],
+    capabilityAttestationHashes: ['attestation-1'],
+    capabilityProofExpiries: [2000],
+    capabilityManifestHashes: [MANIFEST_HASH],
+    privateSourceInventory,
+    privateSourceInventoryHash: sha256(privateSourceInventory),
+    target: {
+      targetKind: 'location',
+      operatingProfile: 'client',
+      locationId: 'L1',
+    },
+  };
+  const state = openState({ projectRoot: root, locationId: 'L1' });
+  const vault = openVault({
+    paths: auditPaths(root, 'L1'),
+    encryptionKey: Buffer.alloc(32, 71),
+    pseudonymKey: Buffer.alloc(32, 72),
+  });
+  try {
+    state.createRun({ runId: 'adapter-compatibility', frozenInputs, now: 1000 });
+    const collector = vault.beginPrivateSourceCollection({
+      state,
+      runManifest: { runId: 'adapter-compatibility' },
+    });
+    assert.deepEqual(collector.add(result.privateSourceEnvelope), {
+      sourceId: result.privateSourceEnvelope.sourceId,
+      kind: result.privateSourceEnvelope.kind,
+    });
+    const token = collector.finalize();
+    assert.ok(token);
+    assert.ok(state.getCheckpoint({
+      runId: 'adapter-compatibility',
+      phase: 'private-source-inventory',
+    }));
+  } finally {
+    vault.close();
+    state.close();
+  }
+}));
+
 test('connectMcp resolves reference-only HTTP config and returns a restricted client', async () => {
   const resolved = [];
   const connected = [];
   const client = await connectMcp({
-    providerConfig: {
-      providerId: 'fixture-provider',
-      capabilityManifestHash: MANIFEST_HASH,
-      credentialRef: { kind: 'environment', name: 'FIXTURE_TOKEN' },
-    },
+    providerConfig: providerConfig({ kind: 'environment', name: 'FIXTURE_TOKEN' }),
     credentialResolver: async (reference) => {
       resolved.push(structuredClone(reference));
       return 'private-token';
@@ -656,11 +979,7 @@ test('connectMcp resolves reference-only HTTP config and returns a restricted cl
 test('connectMcp supports explicit stdio command and argument arrays without credentials', async () => {
   const connected = [];
   const client = await connectMcp({
-    providerConfig: {
-      providerId: 'fixture-stdio',
-      capabilityManifestHash: MANIFEST_HASH,
-      credentialRef: null,
-    },
+    providerConfig: providerConfig(null, { providerId: 'fixture-stdio' }),
     transport: {
       kind: 'stdio',
       command: '/usr/bin/false',
@@ -679,15 +998,133 @@ test('connectMcp supports explicit stdio command and argument arrays without cre
   await client.close();
 });
 
+test('connected transport rejects direct write execute_action with zero delegate dispatch', async () => {
+  let dispatches = 0;
+  const client = await connectMcp({
+    providerConfig: providerConfig(),
+    transport: {
+      kind: 'stdio',
+      command: '/usr/bin/false',
+      args: [],
+      async connect() {
+        return {
+          async callTool() {
+            dispatches += 1;
+            return {};
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    client.callTool({
+      name: 'execute_action',
+      arguments: {
+        action: 'contacts-v3__create-contact',
+        params: { locationId: 'L1' },
+      },
+    }),
+    /ACTION_NOT_ALLOWED/,
+  );
+  assert.equal(dispatches, 0);
+  await client.close();
+});
+
+test('connection rejects trusted public policy hash drift before transport connect', async () => {
+  for (const field of ['publicCatalogSnapshotHash', 'publicReadAllowlistHash']) {
+    let connects = 0;
+    await assert.rejects(
+      connectMcp({
+        providerConfig: providerConfig(null, { [field]: '0'.repeat(64) }),
+        transport: {
+          kind: 'stdio',
+          command: '/usr/bin/false',
+          args: [],
+          async connect() {
+            connects += 1;
+            return { async callTool() {}, async close() {} };
+          },
+        },
+      }),
+      /PROVIDER_CONFIG_INVALID/,
+    );
+    assert.equal(connects, 0);
+  }
+});
+
+test('connected transport rejects an approved read for a different location with zero dispatch', async () => {
+  let dispatches = 0;
+  const client = await connectMcp({
+    providerConfig: providerConfig(),
+    transport: {
+      kind: 'stdio',
+      command: '/usr/bin/false',
+      args: [],
+      async connect() {
+        return {
+          async callTool() {
+            dispatches += 1;
+            return {};
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    client.callTool({
+      name: 'execute_action',
+      arguments: {
+        action: approvedCapability.actionId,
+        policy: approvedCapability,
+        params: { locationId: 'L2' },
+      },
+    }),
+    /LOCATION_MISMATCH/,
+  );
+  assert.equal(dispatches, 0);
+  await client.close();
+});
+
+test('public adapter dispatches one approved read through the transport policy gate', async () => {
+  let dispatches = 0;
+  const client = await connectMcp({
+    providerConfig: providerConfig(),
+    transport: {
+      kind: 'stdio',
+      command: '/usr/bin/false',
+      args: [],
+      async connect() {
+        return {
+          async callTool() {
+            dispatches += 1;
+            return page();
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+  try {
+    const result = await publicAdapter({ client }).collect({
+      capability: approvedCapability,
+      window,
+    });
+    assert.equal(result.page.complete, true);
+    assert.equal(dispatches, 1);
+  } finally {
+    await client.close();
+  }
+});
+
 test('connectMcp rejects embedded secrets and redacts resolver/transport failures', async () => {
   await assert.rejects(
     connectMcp({
-      providerConfig: {
+      providerConfig: providerConfig({ kind: 'environment', name: 'FIXTURE' }, {
         providerId: 'fixture',
-        capabilityManifestHash: MANIFEST_HASH,
-        credentialRef: { kind: 'environment', name: 'FIXTURE' },
         authorization: 'Bearer should-never-appear',
-      },
+      }),
       credentialResolver: async () => 'unused',
       transport: { kind: 'streamable-http', url: 'https://example.test' },
     }),
@@ -697,11 +1134,12 @@ test('connectMcp rejects embedded secrets and redacts resolver/transport failure
     const secret = `secret-${mode}`;
     await assert.rejects(
       connectMcp({
-        providerConfig: {
-          providerId: 'fixture',
-          capabilityManifestHash: MANIFEST_HASH,
-          credentialRef: { kind: 'secret-store', reference: 'vault/fixture' },
-        },
+        providerConfig: providerConfig({
+          kind: 'secret-store',
+          provider: 'fixture-vault',
+          provenance: 'approved-secret-store',
+          reference: 'fixture/path',
+        }, { providerId: 'fixture' }),
         credentialResolver: async () => {
           if (mode === 'resolver') throw new Error(`failed vault/fixture ${secret}`);
           return secret;
@@ -726,19 +1164,54 @@ test('connectMcp rejects credentials embedded in HTTP URLs or stdio arguments', 
   for (const transport of [
     { kind: 'streamable-http', url: 'https://user:password@example.test/mcp' },
     { kind: 'streamable-http', url: 'https://example.test/mcp?token=private' },
+    { kind: 'streamable-http', url: 'ftp://localhost/mcp' },
     { kind: 'stdio', command: '/usr/bin/false', args: ['--token=private'] },
     { kind: 'stdio', command: '/usr/bin/false', args: ['Bearer private'] },
   ]) {
     await assert.rejects(
       connectMcp({
-        providerConfig: {
-          providerId: 'fixture',
-          capabilityManifestHash: MANIFEST_HASH,
-          credentialRef: null,
-        },
+        providerConfig: providerConfig(null, { providerId: 'fixture' }),
         transport,
       }),
       /MCP_TRANSPORT_INVALID/,
+    );
+  }
+});
+
+test('secret-store references require approved provenance and reject raw token material', async () => {
+  for (const credentialRef of [
+    { kind: 'secret-store', reference: 'vault/fixture' },
+    {
+      kind: 'secret-store',
+      provider: 'fixture-vault',
+      provenance: 'self-asserted',
+      reference: 'fixture/path',
+    },
+    {
+      kind: 'secret-store',
+      provider: 'fixture-vault',
+      provenance: 'approved-secret-store',
+      reference: 'Bearer private-token',
+    },
+    {
+      kind: 'secret-store',
+      provider: 'fixture-vault',
+      provenance: 'approved-secret-store',
+      reference: 'eyJhbGciOiJIUzI1NiJ9.private.signature',
+    },
+  ]) {
+    await assert.rejects(
+      connectMcp({
+        providerConfig: providerConfig(credentialRef),
+        credentialResolver: async () => {
+          throw new Error('must not resolve');
+        },
+        transport: {
+          kind: 'streamable-http',
+          url: 'https://example.test/mcp',
+        },
+      }),
+      /PROVIDER_CONFIG_INVALID/,
     );
   }
 });
@@ -752,12 +1225,10 @@ test('provider configuration is immutable and cannot smuggle secret-like nested 
   ]) {
     await assert.rejects(
       connectMcp({
-        providerConfig: {
+        providerConfig: providerConfig(null, {
           providerId: 'fixture',
-          capabilityManifestHash: MANIFEST_HASH,
-          credentialRef: null,
           ...forbidden,
-        },
+        }),
         transport: {
           kind: 'stdio',
           command: '/usr/bin/false',

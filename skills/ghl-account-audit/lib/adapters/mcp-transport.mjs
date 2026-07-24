@@ -2,6 +2,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { codedError } from './collection.mjs';
+import {
+  assertTrustedAction,
+  loadTrustedPublicReadPolicy,
+} from './trusted-public-policy.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const SAFE_ID = /^[a-z0-9][a-z0-9_.:-]{0,127}$/u;
@@ -32,13 +36,25 @@ function validateCredentialRef(reference) {
   ) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (
     reference.kind === 'secret-store'
-    && keys.length === 2
+    && keys.length === 4
     && keys[0] === 'kind'
-    && keys[1] === 'reference'
+    && keys[1] === 'provenance'
+    && keys[2] === 'provider'
+    && keys[3] === 'reference'
+    && typeof reference.provider === 'string'
+    && SAFE_ID.test(reference.provider)
+    && reference.provenance === 'approved-secret-store'
     && typeof reference.reference === 'string'
-    && reference.reference.length > 0
-    && reference.reference.length <= 512
-  ) return Object.freeze({ kind: reference.kind, reference: reference.reference });
+    && /^[a-z0-9][a-z0-9/._:-]{0,255}$/u.test(reference.reference)
+    && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
+      reference.reference,
+    )
+  ) return Object.freeze({
+    kind: reference.kind,
+    provider: reference.provider,
+    provenance: reference.provenance,
+    reference: reference.reference,
+  });
   throw codedError('PROVIDER_CONFIG_INVALID', TypeError);
 }
 
@@ -46,19 +62,31 @@ function validateProviderConfig(config) {
   if (!isPlainObject(config)) throw codedError('PROVIDER_CONFIG_INVALID', TypeError);
   const keys = Object.keys(config).sort();
   if (
-    keys.length !== 3
+    keys.length !== 6
     || keys[0] !== 'capabilityManifestHash'
     || keys[1] !== 'credentialRef'
-    || keys[2] !== 'providerId'
+    || keys[2] !== 'expectedLocationId'
+    || keys[3] !== 'providerId'
+    || keys[4] !== 'publicCatalogSnapshotHash'
+    || keys[5] !== 'publicReadAllowlistHash'
     || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== 'credentialRef')
     || typeof config.providerId !== 'string'
     || !SAFE_ID.test(config.providerId)
+    || typeof config.expectedLocationId !== 'string'
+    || !/^[A-Za-z0-9_-]{1,128}$/u.test(config.expectedLocationId)
     || typeof config.capabilityManifestHash !== 'string'
     || !SHA256.test(config.capabilityManifestHash)
+    || typeof config.publicCatalogSnapshotHash !== 'string'
+    || !SHA256.test(config.publicCatalogSnapshotHash)
+    || typeof config.publicReadAllowlistHash !== 'string'
+    || !SHA256.test(config.publicReadAllowlistHash)
   ) throw codedError('PROVIDER_CONFIG_INVALID', TypeError);
   return Object.freeze({
     providerId: config.providerId,
+    expectedLocationId: config.expectedLocationId,
     capabilityManifestHash: config.capabilityManifestHash,
+    publicCatalogSnapshotHash: config.publicCatalogSnapshotHash,
+    publicReadAllowlistHash: config.publicReadAllowlistHash,
     credentialRef: validateCredentialRef(config.credentialRef),
   });
 }
@@ -92,7 +120,13 @@ function validateTransport(transport) {
       throw codedError('MCP_TRANSPORT_INVALID', TypeError);
     }
     if (
-      (url.protocol !== 'https:' && url.hostname !== 'localhost' && url.hostname !== '127.0.0.1')
+      (
+        url.protocol !== 'https:'
+        && !(
+          url.protocol === 'http:'
+          && (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+        )
+      )
       || url.username !== ''
       || url.password !== ''
       || url.search !== ''
@@ -169,6 +203,11 @@ export async function connectMcp({ transport, providerConfig, credentialResolver
     if (error?.code === 'PROVIDER_CONFIG_INVALID') throw error;
     throw safeFailure('MCP_TRANSPORT_INVALID');
   }
+  const trustedPolicy = loadTrustedPublicReadPolicy();
+  if (
+    config.publicCatalogSnapshotHash !== trustedPolicy.snapshotHash
+    || config.publicReadAllowlistHash !== trustedPolicy.allowlistHash
+  ) throw codedError('PROVIDER_CONFIG_INVALID', TypeError);
 
   let credential = null;
   if (config.credentialRef !== null) {
@@ -221,7 +260,10 @@ export async function connectMcp({ transport, providerConfig, credentialResolver
 
   return Object.freeze({
     providerId: config.providerId,
+    expectedLocationId: config.expectedLocationId,
     capabilityManifestHash: config.capabilityManifestHash,
+    publicCatalogSnapshotHash: trustedPolicy.snapshotHash,
+    publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
       if (!isPlainObject(request) || !ALLOWED_TOOLS.has(request.name)) {
         throw codedError('TOOL_NOT_AVAILABLE');
@@ -229,6 +271,23 @@ export async function connectMcp({ transport, providerConfig, credentialResolver
       if (!isPlainObject(request.arguments) || containsForbiddenArgument(request.arguments)) {
         throw codedError('MUTATION_ARGUMENT_NOT_ALLOWED');
       }
+      const policy = request.arguments.policy;
+      try {
+        assertTrustedAction(trustedPolicy, policy);
+      } catch {
+        throw codedError('ACTION_NOT_ALLOWED');
+      }
+      if (
+        request.arguments.action !== policy.actionId
+        || policy.providerId !== config.providerId
+        || policy.capabilityManifestHash !== config.capabilityManifestHash
+        || policy.sourceSnapshotHash !== config.publicCatalogSnapshotHash
+        || policy.allowlistHash !== config.publicReadAllowlistHash
+      ) throw codedError('ACTION_NOT_ALLOWED');
+      if (
+        !isPlainObject(request.arguments.params)
+        || request.arguments.params.locationId !== config.expectedLocationId
+      ) throw codedError('LOCATION_MISMATCH');
       try {
         return await delegate.callTool(request, options);
       } catch (error) {

@@ -11,7 +11,13 @@ import {
   codedError,
   completeCollection,
   incompleteCollection,
+  assertWindowWithin,
+  validateCollectionWindow,
 } from './collection.mjs';
+import {
+  assertTrustedAction,
+  loadTrustedPublicReadPolicy,
+} from './trusted-public-policy.mjs';
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const RETRYABLE = new Set(['RETRYABLE', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN']);
@@ -62,18 +68,61 @@ function parseToolResult(response) {
   return cloneJson(value, 'PUBLIC_RESPONSE_INVALID');
 }
 
-function withRequestTimeout(promise, timeoutMs, runtime) {
+function withRequestTimeout(invoke, timeoutMs, runtime, externalSignal) {
   const setTimer = runtime.setTimer ?? setTimeout;
   const clearTimer = runtime.clearTimer ?? clearTimeout;
+  const timeoutController = new AbortController();
+  const combinedSignal = externalSignal
+    ? AbortSignal.any([externalSignal, timeoutController.signal])
+    : timeoutController.signal;
   let timer;
+  let timedOut = false;
+  const call = Promise.resolve().then(() => invoke(combinedSignal));
+  const timeout = new Promise((resolve) => {
+    timer = setTimer(() => {
+      timedOut = true;
+      timeoutController.abort(codedError('BUDGET_REQUEST_TIMEOUT'));
+      resolve({ timeout: true });
+    }, timeoutMs);
+  });
   return Promise.race([
-    promise,
-    new Promise((resolve) => {
-      timer = setTimer(() => resolve({ timeout: true }), timeoutMs);
+    call.then((value) => ({ value })).catch((error) => {
+      if (timedOut) return { timeout: true };
+      if (externalSignal?.aborted) throw codedError('COLLECTION_ABORTED');
+      throw error;
     }),
+    timeout,
   ]).finally(() => {
     if (timer !== undefined) clearTimer(timer);
   });
+}
+
+function collectLocationIndicators(value, indicators = []) {
+  if (!value || typeof value !== 'object') return indicators;
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
+    if (['boundlocationid', 'ghllocationid', 'locationid'].includes(normalized)) {
+      indicators.push(nested);
+    } else if (
+      normalized === 'location'
+      && nested
+      && typeof nested === 'object'
+      && !Array.isArray(nested)
+      && Object.hasOwn(nested, 'id')
+    ) {
+      indicators.push(nested.id);
+    }
+    collectLocationIndicators(nested, indicators);
+  }
+  return indicators;
+}
+
+function assertResponseLocation(response, expectedLocationId) {
+  const indicators = collectLocationIndicators(response);
+  if (
+    indicators.length === 0
+    || indicators.some((locationId) => locationId !== expectedLocationId)
+  ) throw codedError('LOCATION_MISMATCH');
 }
 
 function elapsed(start, runtime) {
@@ -101,6 +150,10 @@ function normalizeCapability(capability, allowlist, allowlistHash, client) {
     || typeof client.capabilityManifestHash !== 'string'
     || !SHA256.test(client.capabilityManifestHash)
   ) throw codedError('MCP_CLIENT_PIN_INVALID', TypeError);
+  if (
+    client.publicCatalogSnapshotHash !== allowlist.sourceSnapshotHash
+    || client.publicReadAllowlistHash !== allowlistHash
+  ) throw codedError('MCP_CLIENT_PIN_INVALID', TypeError);
   try {
     assertAllowedPublicAction(allowlist, {
       actionId: capability.actionId,
@@ -127,18 +180,7 @@ function normalizeBudget(budgets, category) {
 }
 
 function normalizeWindow(window) {
-  if (
-    !isPlainObject(window)
-    || Object.keys(window).sort().join(',') !== 'from,to'
-    || typeof window.from !== 'string'
-    || typeof window.to !== 'string'
-  ) throw codedError('COLLECTION_WINDOW_INVALID', TypeError);
-  const from = Date.parse(window.from);
-  const to = Date.parse(window.to);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
-    throw codedError('COLLECTION_WINDOW_INVALID', TypeError);
-  }
-  return cloneJson(window, 'COLLECTION_WINDOW_INVALID');
+  return validateCollectionWindow(window, 'COLLECTION_WINDOW_INVALID');
 }
 
 function makeRequest(action, expectedLocationId, requestedWindow, cursor) {
@@ -151,6 +193,17 @@ function makeRequest(action, expectedLocationId, requestedWindow, cursor) {
         fromDate: requestedWindow.from,
         toDate: requestedWindow.to,
         cursor,
+      },
+      policy: {
+        actionId: action.actionId,
+        method: action.method,
+        normalizedPath: action.normalizedPath,
+        category: action.category,
+        risk: action.risk,
+        sourceSnapshotHash: action.sourceSnapshotHash,
+        allowlistHash: action.allowlistHash,
+        providerId: action.providerId,
+        capabilityManifestHash: action.capabilityManifestHash,
       },
     },
   };
@@ -178,11 +231,23 @@ export function createPublicGhlAdapter({
     || typeof expectedLocationId !== 'string'
     || expectedLocationId.length === 0
   ) throw codedError('PUBLIC_ADAPTER_CONFIG_INVALID', TypeError);
-  const pinnedAllowlist = cloneJson(
-    PublicReadAllowlistSchema.parse(allowlist),
-    'PUBLIC_ADAPTER_CONFIG_INVALID',
-  );
-  const allowlistHash = sha256(pinnedAllowlist);
+  const trustedPolicy = loadTrustedPublicReadPolicy();
+  let suppliedAllowlist;
+  try {
+    suppliedAllowlist = cloneJson(PublicReadAllowlistSchema.parse(allowlist));
+  } catch {
+    throw codedError('TRUSTED_ALLOWLIST_MISMATCH', TypeError);
+  }
+  if (canonicalJson(suppliedAllowlist) !== canonicalJson(trustedPolicy.allowlist)) {
+    throw codedError('TRUSTED_ALLOWLIST_MISMATCH', TypeError);
+  }
+  const pinnedAllowlist = trustedPolicy.allowlist;
+  const allowlistHash = trustedPolicy.allowlistHash;
+  if (
+    client.publicCatalogSnapshotHash !== trustedPolicy.snapshotHash
+    || client.publicReadAllowlistHash !== trustedPolicy.allowlistHash
+    || client.expectedLocationId !== expectedLocationId
+  ) throw codedError('MCP_CLIENT_PIN_INVALID', TypeError);
   const saveCheckpoint = async (checkpoint) => {
     if (checkpointStore !== undefined && typeof checkpointStore?.save !== 'function') {
       throw codedError('CHECKPOINT_STORE_INVALID', TypeError);
@@ -193,6 +258,18 @@ export function createPublicGhlAdapter({
   return Object.freeze({
     async collect({ capability, window, cursor = null, signal } = {}) {
       const action = normalizeCapability(capability, pinnedAllowlist, allowlistHash, client);
+      const scopedAction = Object.freeze({
+        ...action,
+        sourceSnapshotHash: capability.sourceSnapshotHash,
+        allowlistHash: capability.allowlistHash,
+        providerId: capability.providerId,
+        capabilityManifestHash: capability.capabilityManifestHash,
+      });
+      try {
+        assertTrustedAction(trustedPolicy, scopedAction);
+      } catch {
+        throw codedError('ACTION_NOT_ALLOWED');
+      }
       const budget = normalizeBudget(budgets, action.category);
       const requestedWindow = normalizeWindow(window);
       if (!(cursor === null || typeof cursor === 'string')) {
@@ -208,6 +285,7 @@ export function createPublicGhlAdapter({
       let retryCount = 0;
       let retryDelay = 0;
       const items = [];
+      const pageArtifacts = [];
       const seenCursors = new Set(cursor === null ? [] : [cursor]);
 
       const finishIncomplete = async (reason, {
@@ -224,7 +302,7 @@ export function createPublicGhlAdapter({
           items,
           cursor: initialCursor,
           nextCursor,
-          reportedCount: reportedCount ?? items.length,
+          reportedCount,
           reason,
           truncated,
         });
@@ -236,6 +314,8 @@ export function createPublicGhlAdapter({
           resumeCursor: result.page.nextCursor,
           reason,
           collectedCount: result.page.collectedCount,
+          pageArtifacts,
+          pageArtifactsHash: sha256(pageArtifacts),
           inputHash: sha256({
             action,
             requestedWindow,
@@ -259,17 +339,23 @@ export function createPublicGhlAdapter({
 
         let raw;
         try {
-          const request = makeRequest(action, expectedLocationId, requestedWindow, currentCursor);
+            const request = makeRequest(
+              scopedAction,
+              expectedLocationId,
+              requestedWindow,
+              currentCursor,
+            );
           const outcome = await withRequestTimeout(
-            Promise.resolve().then(() => client.callTool(request, {
-              signal,
+            (requestSignal) => client.callTool(request, {
+              signal: requestSignal,
               timeout: budget.requestTimeoutMs,
-            })),
+            }),
             budget.requestTimeoutMs,
             runtime,
+            signal,
           );
           if (outcome?.timeout === true) return finishIncomplete('BUDGET_REQUEST_TIMEOUT');
-          raw = outcome;
+          raw = outcome.value;
         } catch (error) {
           if (error?.code === 429 || error?.code === '429' || error?.code === 'RATE_LIMITED') {
             return finishIncomplete('RATE_LIMITED');
@@ -293,14 +379,18 @@ export function createPublicGhlAdapter({
         pageCount += 1;
         responseBytes += responseByteLength(raw);
         const response = parseToolResult(raw);
-        const responseLocationId = response.boundLocationId ?? response.locationId;
-        if (responseLocationId !== expectedLocationId) throw codedError('LOCATION_MISMATCH');
+        assertResponseLocation(response, expectedLocationId);
         if (response.page.cursor !== currentCursor) throw codedError('CURSOR_MISMATCH');
+        const checkedAppliedWindow = validateCollectionWindow(
+          response.appliedWindow,
+          'APPLIED_WINDOW_INVALID',
+        );
+        assertWindowWithin(checkedAppliedWindow, requestedWindow);
         if (pageCount === 1) {
-          appliedWindow = cloneJson(response.appliedWindow, 'APPLIED_WINDOW_INVALID');
+          appliedWindow = checkedAppliedWindow;
           reportedCount = response.page.reportedCount;
         } else {
-          if (canonicalJson(appliedWindow) !== canonicalJson(response.appliedWindow)) {
+          if (canonicalJson(appliedWindow) !== canonicalJson(checkedAppliedWindow)) {
             return finishIncomplete('APPLIED_WINDOW_CHANGED', {
               nextCursor: response.page.nextCursor,
             });
@@ -311,6 +401,11 @@ export function createPublicGhlAdapter({
             });
           }
         }
+        pageArtifacts.push({
+          cursor: response.page.cursor,
+          artifactHash: sha256(response),
+          payload: response,
+        });
         items.push(...response.items);
         currentCursor = response.page.nextCursor;
 

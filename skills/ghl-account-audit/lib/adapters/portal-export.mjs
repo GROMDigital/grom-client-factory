@@ -13,6 +13,9 @@ import {
   cloneJson,
   codedError,
   completeCollection,
+  assertWindowWithin,
+  isIsoTimestamp,
+  validateCollectionWindow,
 } from './collection.mjs';
 
 function isPlainObject(value) {
@@ -53,18 +56,72 @@ function validatePath(exportPath) {
   }
 }
 
-function containsNotApplicableSurface(value, stack = new WeakSet()) {
-  if (!value || typeof value !== 'object') return false;
-  if (stack.has(value)) return true;
+const NOT_APPLICABLE_KEY = /course|lesson|membership|community|assessment|certificate/u;
+const NOT_APPLICABLE_VALUE = new Set([
+  'assessment',
+  'assessments',
+  'certificate',
+  'certificates',
+  'community',
+  'communities',
+  'course',
+  'courseoffer',
+  'courseoffers',
+  'courseprogress',
+  'courses',
+  'lesson',
+  'lessons',
+  'membership',
+  'memberships',
+]);
+const PRIVATE_KEY = /authorization|cookie|credential|database|dbconnection|header|password|secret|token/u;
+const PRIVATE_STRING = /(?:authorization|bearer)\s+|(?:postgres|postgresql|mysql|mongodb|redis|jdbc):\/\/|eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|[?&](?:access_?token|api_?key|password|secret|token)=|(?:^|\s)(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu;
+
+function validatePortalValue(value, expectedLocationId, stack = new WeakSet()) {
+  if (
+    value === null
+    || typeof value === 'boolean'
+    || (typeof value === 'number' && Number.isFinite(value))
+  ) return;
+  if (typeof value === 'string') {
+    const normalized = value.toLowerCase().replace(/[^a-z0-9]/gu, '');
+    if (NOT_APPLICABLE_VALUE.has(normalized)) {
+      throw codedError('PORTAL_EXPORT_SURFACE_NOT_APPLICABLE');
+    }
+    if (PRIVATE_STRING.test(value)) throw codedError('PORTAL_EXPORT_PRIVATE_VALUE');
+    return;
+  }
+  if (!value || typeof value !== 'object' || stack.has(value)) {
+    throw codedError('PORTAL_EXPORT_INVALID');
+  }
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) {
+    throw codedError('PORTAL_EXPORT_INVALID');
+  }
   stack.add(value);
   try {
-    return Object.entries(value).some(([key, nested]) => {
+    for (const [key, nested] of Object.entries(value)) {
       const normalized = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
-      return /course|lesson|membership|community|assessment|certificate/u.test(normalized)
-        || containsNotApplicableSurface(nested, stack);
-    });
+      if (NOT_APPLICABLE_KEY.test(normalized)) {
+        throw codedError('PORTAL_EXPORT_SURFACE_NOT_APPLICABLE');
+      }
+      if (PRIVATE_KEY.test(normalized)) throw codedError('PORTAL_EXPORT_PRIVATE_VALUE');
+      if (
+        ['boundlocationid', 'ghllocationid', 'locationid'].includes(normalized)
+        && nested !== expectedLocationId
+      ) throw codedError('LOCATION_MISMATCH');
+      validatePortalValue(nested, expectedLocationId, stack);
+    }
   } finally {
     stack.delete(value);
+  }
+}
+
+function validatePortalItems(items, expectedLocationId) {
+  for (const item of items) {
+    if (!isPlainObject(item) || Object.keys(item).length === 0) {
+      throw codedError('PORTAL_EXPORT_INVALID');
+    }
+    validatePortalValue(item, expectedLocationId);
   }
 }
 
@@ -95,7 +152,7 @@ function validateExport(value, expectedLocationId) {
     || value.source !== 'onboarding_portal'
     || typeof value.operationId !== 'string'
     || value.operationId.length === 0
-    || typeof value.capturedAt !== 'string'
+    || !isIsoTimestamp(value.capturedAt)
     || !isPlainObject(value.requestedWindow)
     || !isPlainObject(value.appliedWindow)
     || !Array.isArray(value.items)
@@ -105,8 +162,18 @@ function validateExport(value, expectedLocationId) {
     if (value?.source !== 'onboarding_portal') throw codedError('PORTAL_EXPORT_SOURCE_INVALID');
     throw codedError('PORTAL_EXPORT_INVALID');
   }
-  if (containsNotApplicableSurface(value.items)) {
-    throw codedError('PORTAL_EXPORT_SURFACE_NOT_APPLICABLE');
+  let requestedWindow;
+  let appliedWindow;
+  try {
+    requestedWindow = validateCollectionWindow(value.requestedWindow, 'PORTAL_EXPORT_INVALID');
+    appliedWindow = validateCollectionWindow(value.appliedWindow, 'PORTAL_EXPORT_INVALID');
+  } catch (error) {
+    if (error?.code === 'PORTAL_EXPORT_INVALID') throw error;
+    throw codedError('PORTAL_EXPORT_INVALID');
+  }
+  validatePortalItems(value.items, expectedLocationId);
+  if (Date.parse(value.capturedAt) < Date.parse(appliedWindow.to)) {
+    throw codedError('PORTAL_EXPORT_INVALID');
   }
   if (value.locationId !== expectedLocationId) throw codedError('LOCATION_MISMATCH');
   if (
@@ -117,7 +184,11 @@ function validateExport(value, expectedLocationId) {
     || value.page.reportedCount !== value.items.length
     || value.page.collectedCount !== value.items.length
   ) throw codedError('PORTAL_EXPORT_INCOMPLETE');
-  return cloneJson(value, 'PORTAL_EXPORT_INVALID');
+  return cloneJson({
+    ...value,
+    requestedWindow,
+    appliedWindow,
+  }, 'PORTAL_EXPORT_INVALID');
 }
 
 export function createPortalExportAdapter({ exportPath, expectedLocationId } = {}) {
@@ -127,13 +198,15 @@ export function createPortalExportAdapter({ exportPath, expectedLocationId } = {
   const pinned = validatePath(exportPath);
 
   return Object.freeze({
-    async collect({ capability, window, cursor = null } = {}) {
+    async collect({ capability, window, cursor = null, signal } = {}) {
       if (
         !isPlainObject(capability)
         || typeof capability.operationId !== 'string'
         || capability.operationId.length === 0
         || cursor !== null
       ) throw codedError('PORTAL_EXPORT_CAPABILITY_INVALID', TypeError);
+      if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
+      const requestedWindow = validateCollectionWindow(window);
       let bytes;
       let descriptor;
       try {
@@ -152,6 +225,7 @@ export function createPortalExportAdapter({ exportPath, expectedLocationId } = {
         if (descriptor !== undefined) closeSync(descriptor);
       }
       if (sha256([...bytes]) !== pinned.bytesHash) throw codedError('PORTAL_EXPORT_CHANGED');
+      if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
       let value;
       try {
         value = JSON.parse(bytes.toString('utf8'));
@@ -161,8 +235,14 @@ export function createPortalExportAdapter({ exportPath, expectedLocationId } = {
       const exported = validateExport(value, expectedLocationId);
       if (
         exported.operationId !== capability.operationId
-        || canonicalJson(exported.requestedWindow) !== canonicalJson(window)
+        || canonicalJson(exported.requestedWindow) !== canonicalJson(requestedWindow)
       ) throw codedError('PORTAL_EXPORT_SCOPE_MISMATCH');
+      assertWindowWithin(
+        exported.appliedWindow,
+        exported.requestedWindow,
+        'PORTAL_EXPORT_SCOPE_MISMATCH',
+      );
+      if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
       return completeCollection({
         source: exported.source,
         operationId: exported.operationId,

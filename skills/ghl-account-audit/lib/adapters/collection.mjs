@@ -12,6 +12,42 @@ export function cloneJson(value, code = 'COLLECTION_VALUE_INVALID') {
   }
 }
 
+export function deepFreezeJson(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreezeJson(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+export function isIsoTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+
+export function validateCollectionWindow(value, code = 'COLLECTION_WINDOW_INVALID') {
+  if (
+    !value
+    || typeof value !== 'object'
+    || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype
+    || Object.keys(value).sort().join(',') !== 'from,to'
+    || !isIsoTimestamp(value.from)
+    || !isIsoTimestamp(value.to)
+    || Date.parse(value.from) >= Date.parse(value.to)
+  ) throw codedError(code, TypeError);
+  return deepFreezeJson(cloneJson(value, code));
+}
+
+export function assertWindowWithin(applied, requested, code = 'WINDOW_SCOPE_MISMATCH') {
+  if (
+    Date.parse(applied.from) < Date.parse(requested.from)
+    || Date.parse(applied.to) > Date.parse(requested.to)
+  ) throw codedError(code);
+  return true;
+}
+
 export function capturedAt(runtime = {}) {
   const value = typeof runtime.now === 'function' ? runtime.now() : Date.now();
   const date = value instanceof Date ? value : new Date(value);
@@ -23,24 +59,57 @@ function inventorySourceId(source, operationId) {
   return `${source}.${sha256({ operationId, source }).slice(0, 32)}`;
 }
 
-export function authorizeTerminalCollection(collection) {
+function privatePayload(value) {
+  if (typeof value === 'number') return String(value);
+  if (Array.isArray(value)) return value.map(privatePayload);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+      key,
+      privatePayload(nested),
+    ]));
+  }
+  return value;
+}
+
+function assertTerminalCollection(collection) {
   if (
-    collection.page.complete !== true
+    !collection
+    || typeof collection !== 'object'
+    || !collection.page
+    || collection.page.complete !== true
     || collection.page.truncated !== false
     || collection.page.nextCursor !== null
+    || !Array.isArray(collection.items)
     || collection.page.collectedCount !== collection.items.length
     || collection.page.reportedCount !== collection.page.collectedCount
     || Object.hasOwn(collection, 'incompleteReason')
   ) throw codedError('PRIVATE_SOURCE_INVENTORY_NOT_TERMINAL');
-  const source = cloneJson(collection);
-  const privateSourceInventory = [{
+}
+
+export function buildPrivateSourceEnvelope(collection) {
+  assertTerminalCollection(collection);
+  const source = cloneJson(collection, 'PRIVATE_SOURCE_COLLECTION_INVALID');
+  const envelope = {
     sourceId: inventorySourceId(source.source, source.operationId),
     kind: 'private-content',
-    sourceHash: sha256({ schemaVersion: '1.0.0', source }),
+    payload: privatePayload(source),
+  };
+  return deepFreezeJson(envelope);
+}
+
+export function authorizeTerminalCollection(collection) {
+  assertTerminalCollection(collection);
+  const source = deepFreezeJson(cloneJson(collection));
+  const privateSourceEnvelope = buildPrivateSourceEnvelope(source);
+  const privateSourceInventory = [{
+    sourceId: privateSourceEnvelope.sourceId,
+    kind: privateSourceEnvelope.kind,
+    sourceHash: sha256({ schemaVersion: '1.0.0', source: privateSourceEnvelope }),
   }].sort((left, right) => left.sourceId.localeCompare(right.sourceId));
-  return Object.freeze({
+  return deepFreezeJson({
     ...collection,
-    privateSourceInventory: Object.freeze(privateSourceInventory.map(Object.freeze)),
+    privateSourceEnvelope,
+    privateSourceInventory,
   });
 }
 
@@ -89,7 +158,7 @@ export function incompleteCollection({
   reason,
   truncated = false,
 }) {
-  return Object.freeze({
+  return deepFreezeJson({
     source,
     operationId,
     boundLocationId,
@@ -97,14 +166,14 @@ export function incompleteCollection({
     appliedWindow: cloneJson(appliedWindow),
     capturedAt: captured,
     items: cloneJson(items),
-    page: Object.freeze({
+    page: {
       cursor,
       nextCursor,
       reportedCount,
       collectedCount: items.length,
       complete: false,
       truncated,
-    }),
+    },
     incompleteReason: reason,
   });
 }
