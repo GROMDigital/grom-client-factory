@@ -68,7 +68,9 @@ Command:
 npm --prefix skills/ghl-account-audit test
 ```
 
-Result: 214 tests passed, 0 failed.
+Initial Task 9 result: 214 tests passed, 0 failed.
+
+Final hardening result after independent review: 225 tests passed, 0 failed.
 
 ### Build, bundle, and static gates
 
@@ -83,6 +85,44 @@ Result: 214 tests passed, 0 failed.
 - Kernel/weekly/CLI model, network, raw-request, mutation, and confirmation
   static scan: clean
 - `git diff --check`: passed
+
+## Independent review hardening
+
+The first independent Task 9 review found three critical and two important
+gaps. A separate RED-first hardening module was added before the fixes.
+
+Initial command:
+
+```text
+node --test skills/ghl-account-audit/tests/task9-hardening.test.mjs
+```
+
+Initial result: 0 passed, 5 failed.
+
+The failures proved that:
+
+- nested Task 8 shaped account-wide and impact overclaims were accepted;
+- provider invocation identity and configuration were not durable;
+- a fresh process reran completed adapters;
+- completed checkpoints had no restorable output artifact; and
+- the bundled CLI required injected host bindings.
+
+Final focused command:
+
+```text
+node --test skills/ghl-account-audit/tests/task9-hardening.test.mjs
+```
+
+Final result: 11 passed, 0 failed.
+
+Final package commands:
+
+```text
+npm --prefix skills/ghl-account-audit run build
+npm --prefix skills/ghl-account-audit test
+```
+
+Final result: build passed; 225 tests passed, 0 failed.
 
 ## Implemented behavior
 
@@ -118,6 +158,21 @@ Result: 214 tests passed, 0 failed.
 - The CLI strictly parses the five required commands, rejects unknown or
   duplicate flags, reads response/config files without following symlinks,
   and emits safe status fields or stable error codes only.
+- Run invocation identity, provider descriptor, configuration hash, and frozen
+  inputs persist in SQLite. Resume reloads the exact project-relative provider
+  configuration and creates a distinct run on a hash or frozen-input mismatch.
+- Completed phase outputs are canonical, AES-256-GCM encrypted, hash-bound to
+  run, phase, and input, and restored from private checkpoint artifacts after a
+  process restart. Tampering quarantines before adapter replay.
+- Downstream review-sensitive phases use immutable input-addressed checkpoint
+  revisions. Validated additional evidence produces a distinct publication
+  while preserving every earlier checkpoint and publication intent.
+- The bundled CLI contains a hermetic `local_fixture` runtime for offline
+  execution and direct process testing. It accepts only the explicit
+  `test-only:key` reference and never provides a live-provider binding.
+- Recursive Task 8 shaped publication checks require both exact internal
+  workflow limitations and reject nested account-wide scope, PASS verdicts,
+  measured commercial impact, revenue promises, and broad report language.
 
 ## Crash and recovery seams exercised
 
@@ -130,10 +185,24 @@ Result: 214 tests passed, 0 failed.
 - Invalid review validation leaves the request, nonce, grants, checkpoint, and
   result set unchanged.
 - Existing replay publications recover only when every expected byte matches.
+- Seeded crashes after all 13 non-review phase checkpoints resume in a fresh
+  kernel without repeating any counted computation or publication effect.
+- A crash after the review-request checkpoint restores one durable request and
+  does not create another.
+- A crash after the first item in a multi-review plan restores the encrypted
+  plan and persists the complete request set without regenerating nonces.
+- Publication retries after final rename or projection writes may re-enter the
+  idempotent publisher, but each filesystem side effect occurs exactly once.
+- Direct bundled child processes exercise `run`, `review-request`,
+  conversation and mechanism `ingest-review`, `resume`, and `replay`; response
+  replay is rejected.
+- GET-shaped read traces pass; POST-shaped write traces quarantine before
+  publication.
 
 ## Changed files
 
 - `skills/ghl-account-audit/lib/kernel.mjs`
+- `skills/ghl-account-audit/lib/local-runtime.mjs`
 - `skills/ghl-account-audit/lib/modes/weekly.mjs`
 - `skills/ghl-account-audit/cli/audit.mjs`
 - `skills/ghl-account-audit/dist/audit-cli.mjs`
@@ -142,6 +211,7 @@ Result: 214 tests passed, 0 failed.
 - `skills/ghl-account-audit/lib/mechanisms.mjs`
 - `skills/ghl-account-audit/scripts/build.mjs`
 - `skills/ghl-account-audit/tests/replay-resume.test.mjs`
+- `skills/ghl-account-audit/tests/task9-hardening.test.mjs`
 - `skills/ghl-account-audit/tests/conversation-review.test.mjs`
 - `skills/ghl-account-audit/tests/mechanism-investigation.test.mjs`
 - `skills/ghl-account-audit/tests/fixtures/weekly/client-partial-pagination/fixture.json`
@@ -157,5 +227,6 @@ Result: 214 tests passed, 0 failed.
 ## Remaining concern
 
 `node:sqlite` remains experimental in Node 24 and emits its standard warning
-when state is actually opened. Replay lazy-loads state and therefore keeps
-successful bundled replay stderr empty.
+when state is opened by library tests. The executable bundled CLI suppresses
+only that exact known SQLite warning so successful machine-readable commands
+retain empty stderr; other warnings still use Node's normal emitter.

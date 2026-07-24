@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS runs (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS run_invocations (
+  run_id TEXT PRIMARY KEY,
+  invocation_json TEXT NOT NULL,
+  invocation_hash TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
 CREATE TABLE IF NOT EXISTS leases (
   location_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -198,6 +204,75 @@ function validateTarget(target) {
   if (target.companyId !== undefined) assertFrozenString(target.companyId);
 }
 
+function assertSafeInvocationValue(value, seen = new WeakSet(), keyName = '') {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return;
+  if (typeof value === 'string') {
+    if (
+      !(keyName === 'configHash' && /^[a-f0-9]{64}$/u.test(value))
+      &&
+      /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+?\d[\d ()-]{8,}\d|eyJ[A-Za-z0-9_-]{8,}\.)/iu
+        .test(value)
+    ) throw codedError('RUN_INVOCATION_PRIVATE_VALUE');
+    return;
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) {
+    throw codedError('RUN_INVOCATION_INVALID');
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const child of value) assertSafeInvocationValue(child, seen, keyName);
+  } else {
+    if (!isPlainObject(value)) throw codedError('RUN_INVOCATION_INVALID');
+    for (const [key, child] of Object.entries(value)) {
+      const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, '');
+      if (
+        /(?:authorization|cookie|password|secret|token|credential|keyreference|vault)/u
+          .test(normalized)
+      ) throw codedError('RUN_INVOCATION_PRIVATE_VALUE');
+      assertSafeInvocationValue(child, seen, key);
+    }
+  }
+  seen.delete(value);
+}
+
+function validateRunInvocation(invocation, frozenInputs) {
+  if (!isPlainObject(invocation)) throw codedError('RUN_INVOCATION_INVALID');
+  assertExactFields(invocation, [
+    'mode', 'target', 'cutoff', 'providerId', 'profile', 'providerDescriptor',
+  ]);
+  if (
+    invocation.mode !== 'weekly'
+    || canonicalJson(invocation.target) !== canonicalJson(frozenInputs.target)
+    || invocation.cutoff !== frozenInputs.cutoff
+    || typeof invocation.providerId !== 'string'
+    || invocation.providerId.length === 0
+    || invocation.profile !== frozenInputs.target.operatingProfile
+    || !isPlainObject(invocation.providerDescriptor)
+  ) throw codedError('RUN_INVOCATION_INVALID');
+  const descriptor = invocation.providerDescriptor;
+  if (descriptor.kind === 'inline_safe') {
+    assertExactFields(descriptor, ['kind', 'configHash', 'config']);
+    if (sha256(descriptor.config) !== descriptor.configHash) {
+      throw codedError('RUN_INVOCATION_INVALID');
+    }
+  } else if (descriptor.kind === 'project_file') {
+    assertExactFields(descriptor, ['kind', 'configHash', 'relativePath']);
+    if (
+      typeof descriptor.relativePath !== 'string'
+      || descriptor.relativePath.length === 0
+      || descriptor.relativePath.startsWith('/')
+      || descriptor.relativePath.includes('..')
+      || descriptor.relativePath.includes('\\')
+    ) throw codedError('RUN_INVOCATION_INVALID');
+  } else {
+    throw codedError('RUN_INVOCATION_INVALID');
+  }
+  if (typeof descriptor.configHash !== 'string' || !/^[a-f0-9]{64}$/u.test(descriptor.configHash)) {
+    throw codedError('RUN_INVOCATION_INVALID');
+  }
+  assertSafeInvocationValue(invocation);
+}
+
 function validateFrozenInputs(frozenInputs) {
   try {
     canonicalJson(frozenInputs);
@@ -270,7 +345,7 @@ export class AuditState {
     }
   }
 
-  createRun({ runId, frozenInputs, now = Date.now() }) {
+  createRun({ runId, frozenInputs, invocation, now = Date.now() }) {
     assertNonEmptyString(runId, 'INVALID_RUN_ID');
     assertTimestamp(now, 'INVALID_TIMESTAMP');
     validateFrozenInputs(frozenInputs);
@@ -280,6 +355,9 @@ export class AuditState {
 
     const frozenInputsJson = canonicalJson(frozenInputs);
     const frozenInputsHash = sha256(frozenInputs);
+    if (invocation !== undefined) validateRunInvocation(invocation, frozenInputs);
+    const invocationJson = invocation === undefined ? undefined : canonicalJson(invocation);
+    const invocationHash = invocation === undefined ? undefined : sha256(invocation);
     return this.#transaction(() => {
       const existing = this.db.prepare(
         'SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?',
@@ -288,12 +366,25 @@ export class AuditState {
         if (existing.location_id !== this.locationId || existing.frozen_inputs_hash !== frozenInputsHash) {
           throw codedError('RUN_ID_COLLISION');
         }
+        const existingInvocation = this.db.prepare(
+          'SELECT invocation_hash FROM run_invocations WHERE run_id = ?',
+        ).get(runId);
+        if (
+          invocationHash !== undefined
+          && existingInvocation?.invocation_hash !== invocationHash
+        ) throw codedError('RUN_INVOCATION_CONFLICT');
         return this.#runRecord(existing);
       }
       this.db.prepare(`
         INSERT INTO runs (run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at)
         VALUES (?, ?, 'running', ?, ?, ?, ?)
       `).run(runId, this.locationId, frozenInputsJson, frozenInputsHash, now, now);
+      if (invocationJson !== undefined) {
+        this.db.prepare(`
+          INSERT INTO run_invocations (run_id, invocation_json, invocation_hash)
+          VALUES (?, ?, ?)
+        `).run(runId, invocationJson, invocationHash);
+      }
       return {
         runId,
         locationId: this.locationId,
@@ -304,6 +395,19 @@ export class AuditState {
         updatedAt: now,
       };
     });
+  }
+
+  getRunInvocation(runId) {
+    this.getRun(runId);
+    const row = this.db.prepare(
+      'SELECT invocation_json, invocation_hash FROM run_invocations WHERE run_id = ?',
+    ).get(runId);
+    if (!row) throw codedError('RUN_INVOCATION_NOT_FOUND');
+    const invocation = JSON.parse(row.invocation_json);
+    if (sha256(invocation) !== row.invocation_hash) {
+      throw codedError('RUN_INVOCATION_INVALID_HASH');
+    }
+    return JSON.parse(canonicalJson(invocation));
   }
 
   getRun(runId) {

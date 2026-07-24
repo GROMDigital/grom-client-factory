@@ -15,6 +15,7 @@ const INTERNAL_LIMITATIONS = Object.freeze([
   'INTERNAL_WORKFLOW_RUNTIME_MISSING',
 ]);
 const FORBIDDEN_MOVEMENT = new Set(['IMPROVING', 'REGRESSED', 'RESOLVED']);
+const BROAD_REPORT_LANGUAGE = /(?:account[- ]wide|whole[- ]account|all systems passed|total (?:account )?impact|top leak across)/iu;
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -116,14 +117,75 @@ function sanitizeFinding(finding) {
   return next;
 }
 
+function isUnmeasuredValue(value) {
+  if (value === null || value === 'UNMEASURED' || value === 'UNKNOWN') return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (!value || typeof value !== 'object') return false;
+  const state = value.kind ?? value.state;
+  return ['UNKNOWN', 'UNMEASURED', 'NOT_AVAILABLE'].includes(state)
+    && Object.entries(value).every(([key, child]) => (
+      ['kind', 'state', 'reasonCode', 'limitationCode'].includes(key)
+      || child === null
+      || child === 'UNKNOWN'
+      || child === 'UNMEASURED'
+    ));
+}
+
+function assertNoPublicOnlyOverclaim(value, path = [], seen = new WeakSet()) {
+  if (value === null || typeof value !== 'object') return;
+  if (seen.has(value)) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((child, index) => assertNoPublicOnlyOverclaim(
+      child,
+      [...path, String(index)],
+      seen,
+    ));
+  } else {
+    for (const [key, child] of Object.entries(value)) {
+      const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, '');
+      if (
+        ['scope', 'coveragescope'].includes(normalized)
+        && typeof child === 'string'
+        && /account.?wide|whole.?account/iu.test(child)
+      ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
+      if (
+        (normalized === 'verdict' || path.includes('verdicts'))
+        && child === 'PASS'
+      ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
+      if (
+        /(?:impact|commercialvalue|revenuepromise)/u.test(normalized)
+        && !isUnmeasuredValue(child)
+      ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
+      assertNoPublicOnlyOverclaim(child, [...path, key], seen);
+    }
+  }
+  seen.delete(value);
+}
+
 export function enforcePublicOnlyPublication(input = {}, { firstBaseline = false } = {}) {
   if (input?.payloadArtifacts && input?.projections && input?.manifestInput) {
     const coverage = input.payloadArtifacts['coverage.json'];
     const machine = input.payloadArtifacts['metrics-and-findings.json'];
+    const limitations = Array.isArray(coverage?.limitations)
+      ? new Set(coverage.limitations)
+      : new Set();
     if (
       input.manifestInput.status !== 'complete_partial'
       || coverage?.state !== 'complete_partial'
       || machine?.sealedInputs?.run?.status !== 'complete_partial'
+      || !limitations.has('INTERNAL_WORKFLOW_DEFINITION_MISSING')
+      || !limitations.has('INTERNAL_WORKFLOW_RUNTIME_MISSING')
+    ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
+    for (const artifact of Object.values(input.payloadArtifacts)) {
+      if (artifact && typeof artifact === 'object') {
+        assertNoPublicOnlyOverclaim(artifact);
+      }
+    }
+    assertNoPublicOnlyOverclaim(input.projections);
+    if (
+      typeof input.payloadArtifacts['REPORT.md'] !== 'string'
+      || BROAD_REPORT_LANGUAGE.test(input.payloadArtifacts['REPORT.md'])
     ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
     const serialized = canonicalJson(input.payloadArtifacts);
     if (

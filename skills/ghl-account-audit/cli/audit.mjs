@@ -107,6 +107,7 @@ export async function runAuditCli({
   vaultReferenceResolver,
 } = {}) {
   const { command, flags } = parseAuditCliArgs(argv);
+  let runtimeKernel = kernel;
   let result;
   if (command === 'replay') {
     result = replayWeeklyFixture({
@@ -178,13 +179,25 @@ export async function runAuditCli({
       state.close();
     }
   } else {
-    if (!kernel) throw codedError('AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS');
     if (command === 'run') {
       const providerConfig = readRegularJson(
         resolve(flags['provider-config']),
         'AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG',
       );
-      result = await kernel.start({
+      let providerDescriptor;
+      if (!runtimeKernel && providerConfig.adapterKind === 'local_fixture') {
+        const local = await import('../lib/local-runtime.mjs');
+        runtimeKernel = local.createLocalAuditKernel({
+          initialRunId: providerConfig.runId,
+        });
+        providerDescriptor = local.localProviderDescriptor({
+          projectRoot: resolve(flags.project),
+          providerConfigPath: resolve(flags['provider-config']),
+          config: providerConfig,
+        });
+      }
+      if (!runtimeKernel) throw codedError('AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS');
+      result = await runtimeKernel.start({
         mode: flags.mode,
         target: {
           targetKind: 'location',
@@ -196,6 +209,7 @@ export async function runAuditCli({
         providerId: providerConfig.providerId,
         profile: flags.profile,
         providerConfig,
+        ...(providerDescriptor ? { providerDescriptor } : {}),
         vaultKeyReference: flags['vault-key-ref'],
       });
     } else {
@@ -208,7 +222,11 @@ export async function runAuditCli({
       if (typeof vaultKeyReference !== 'string' || vaultKeyReference.length === 0) {
         throw codedError('AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE');
       }
-      result = await kernel.resume({
+      if (!runtimeKernel) {
+        const { createLocalAuditKernel } = await import('../lib/local-runtime.mjs');
+        runtimeKernel = createLocalAuditKernel();
+      }
+      result = await runtimeKernel.resume({
         projectRoot: resolve(flags.project),
         locationId: flags.location,
         runId: flags['run-id'],
@@ -222,6 +240,11 @@ export async function runAuditCli({
 }
 
 async function main() {
+  const emitWarning = process.emitWarning;
+  process.emitWarning = (warning, ...args) => {
+    if (/SQLite is an experimental feature/u.test(String(warning?.message ?? warning))) return;
+    emitWarning.call(process, warning, ...args);
+  };
   try {
     await runAuditCli();
   } catch (error) {
