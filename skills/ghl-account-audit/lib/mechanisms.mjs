@@ -296,7 +296,49 @@ function relevantGraphDoubt(graph, edges, scope) {
   return graph.conflicts.some(relevant) || graph.unresolvedJoins.some(relevant);
 }
 
-function chainProof(edges, supportingRefs) {
+function failurePatterns(code) {
+  if (typeof code !== 'string') return [];
+  const patterns = [];
+  const normalized = code.toUpperCase();
+  for (const [pattern, expression] of [
+    ['ABANDONED', /ABANDON/u],
+    ['CANCELLED', /CANCEL/u],
+    ['DELIVERY_FAILURE', /BOUNC|UNDELIVER|DELIVERY_FAILURE/u],
+    ['EXPIRED', /EXPIR/u],
+    ['FAILURE', /FAIL|ERROR/u],
+    ['LOST', /LOST|LOSS/u],
+    ['MISSED', /MISS/u],
+    ['NO_SHOW', /NO_?SHOW/u],
+    ['OPT_OUT', /OPT_?OUT/u],
+    ['REJECTED', /REJECT/u],
+    ['STALLED', /STALL/u],
+  ]) {
+    if (expression.test(normalized)) patterns.push(pattern);
+  }
+  return patterns;
+}
+
+function predictedFailureOutcome(graph, execution, supportingRefs, scope) {
+  const node = graph.nodes.find(({ nodeId }) => nodeId === execution.toNodeId);
+  if (
+    node?.classification !== 'OBSERVED'
+    || node.provenance?.completeness !== 'COMPLETE'
+    || node.journeyInstanceId !== scope.journeyInstanceId
+    || !Array.isArray(node.evidenceRefs)
+    || !execution.evidenceRefs.some((ref) => (
+      supportingRefs.has(ref) && node.evidenceRefs.includes(ref)
+    ))
+  ) return null;
+  const observedPattern = failurePatterns(node.stage ?? node.milestone)[0];
+  const predictedPatterns = new Set(failurePatterns(scope.predictionCode));
+  if (!observedPattern || !predictedPatterns.has(observedPattern)) return null;
+  return {
+    node,
+    patternCode: observedPattern,
+  };
+}
+
+function chainProof(graph, edges, supportingRefs, scope) {
   const configured = edges.filter(({ type }) => type === 'configured_to_trigger');
   const enrolled = edges.filter(({ type }) => type === 'enrolled_in');
   const executed = edges.filter(({ type }) => type === 'execution_emitted');
@@ -304,6 +346,7 @@ function chainProof(edges, supportingRefs) {
     for (const enrollment of enrolled) {
       if (configuration.toNodeId !== enrollment.fromNodeId) continue;
       for (const execution of executed) {
+        const outcome = predictedFailureOutcome(graph, execution, supportingRefs, scope);
         if (
           enrollment.toNodeId !== execution.fromNodeId
           || ![configuration, enrollment, execution].every(exactOperationalEdge)
@@ -315,28 +358,24 @@ function chainProof(edges, supportingRefs) {
           || ![configuration, enrollment, execution].every((edge) => (
             edge.evidenceRefs.some((ref) => supportingRefs.has(ref))
           ))
+          || outcome === null
         ) continue;
-        return [configuration, enrollment, execution];
+        return { edges: [configuration, enrollment, execution], outcome };
       }
     }
   }
-  return [];
+  return { edges: [], outcome: null };
 }
 
-function repeatedSegmentProof(graph, edges, supportingRefs) {
+function repeatedSegmentProof(graph, edges, supportingRefs, scope) {
   const segments = new Map();
   for (const edge of edges.filter(({ type }) => type === 'execution_emitted')) {
     if (!exactOperationalEdge(edge) || !edge.evidenceRefs.some((ref) => supportingRefs.has(ref))) {
       continue;
     }
-    const node = graph.nodes.find(({ nodeId }) => nodeId === edge.toNodeId);
-    if (
-      node?.classification !== 'OBSERVED'
-      || node.provenance?.completeness !== 'COMPLETE'
-      || !edge.evidenceRefs.some((ref) => (
-        supportingRefs.has(ref) && node.evidenceRefs?.includes(ref)
-      ))
-    ) continue;
+    const outcome = predictedFailureOutcome(graph, edge, supportingRefs, scope);
+    if (outcome === null) continue;
+    const { node, patternCode } = outcome;
     const rawSegmentId = node.cohortInstanceRef
       ?? node.opportunityNativeId
       ?? node.projectNativeId
@@ -346,11 +385,25 @@ function repeatedSegmentProof(graph, edges, supportingRefs) {
       journeyInstanceId: node.journeyInstanceId,
       rawSegmentId,
     });
-    const current = segments.get(segmentId) ?? [];
-    current.push(edge);
-    segments.set(segmentId, current);
+    const current = segments.get(segmentId);
+    if (current && current.patternCode !== patternCode) continue;
+    segments.set(segmentId, {
+      segmentId,
+      patternCode,
+      edges: [...(current?.edges ?? []), edge],
+      outcomeNodes: [...(current?.outcomeNodes ?? []), node],
+    });
   }
-  return [...segments].sort(([left], [right]) => left.localeCompare(right));
+  const repeatedByPattern = new Map();
+  for (const segment of segments.values()) {
+    const current = repeatedByPattern.get(segment.patternCode) ?? [];
+    current.push(segment);
+    repeatedByPattern.set(segment.patternCode, current);
+  }
+  return [...repeatedByPattern.entries()]
+    .filter(([, repeated]) => repeated.length >= 2)
+    .sort(([left], [right]) => left.localeCompare(right))[0]?.[1]
+    ?.sort((left, right) => left.segmentId.localeCompare(right.segmentId)) ?? [];
 }
 
 function confidenceProof({
@@ -368,26 +421,32 @@ function confidenceProof({
   const localized = new Set(scope.localizedEdgeIds);
   const edges = graph.edges.filter(({ edgeId }) => localized.has(edgeId));
   const supportingRefs = new Set(supportingEvidenceRefs);
-  const directChain = chainProof(edges, supportingRefs);
-  const repeatedSegments = repeatedSegmentProof(graph, edges, supportingRefs);
+  const directChain = chainProof(graph, edges, supportingRefs, scope);
+  const repeatedSegments = repeatedSegmentProof(graph, edges, supportingRefs, scope);
   const graphConflictFree = !relevantGraphDoubt(graph, edges, scope);
-  const predictedFailureObserved = associationObserved
-    && Number.isFinite(metric.numerator)
-    && metric.numerator < metric.denominator
-    && edges.filter(({ type }) => type === 'execution_emitted').some((edge) => (
-      edge.evidenceRefs.some((ref) => supportingRefs.has(ref))
-    ));
-  const supportingEvidenceBound = directChain.length === 3
+  const failureOutcomes = [
+    ...(directChain.outcome ? [directChain.outcome] : []),
+    ...repeatedSegments.flatMap(({ outcomeNodes, patternCode }) => (
+      outcomeNodes.map((node) => ({ node, patternCode }))
+    )),
+  ];
+  const predictedFailureObserved = associationObserved && failureOutcomes.length > 0;
+  const supportingEvidenceBound = directChain.edges.length === 3
     || repeatedSegments.length >= 2;
   const basis = {
     version: 'mechanism-confidence-v1',
     associationObserved,
-    directChainEdgeIds: directChain.map(({ edgeId }) => edgeId).sort(),
-    repeatedSegmentIds: repeatedSegments.map(([segmentId]) => segmentId).sort(),
+    directChainEdgeIds: directChain.edges.map(({ edgeId }) => edgeId).sort(),
+    repeatedSegmentIds: repeatedSegments.map(({ segmentId }) => segmentId).sort(),
+    failureOutcomeNodeIds: [...new Set(
+      failureOutcomes.map(({ node }) => node.nodeId),
+    )].sort(),
+    failurePatternCode: failureOutcomes[0]?.patternCode ?? null,
     proofEvidenceRefs: [...new Set([
-      ...directChain,
-      ...repeatedSegments.flatMap(([, segmentEdges]) => segmentEdges),
-    ].flatMap(({ evidenceRefs: refs }) => refs)
+      ...directChain.edges,
+      ...repeatedSegments.flatMap(({ edges: segmentEdges }) => segmentEdges),
+      ...failureOutcomes.map(({ node }) => node),
+    ].flatMap(({ evidenceRefs: refs }) => refs ?? [])
       .filter((ref) => supportingRefs.has(ref)))].sort(),
     predictedFailureObserved,
     supportingEvidenceBound,
@@ -789,8 +848,9 @@ function packetBody(candidate) {
   }
   const basisKeys = [
     'version', 'associationObserved', 'directChainEdgeIds', 'repeatedSegmentIds',
-    'proofEvidenceRefs', 'predictedFailureObserved', 'supportingEvidenceBound',
-    'graphConflictFree', 'coverageConsistent',
+    'failureOutcomeNodeIds', 'failurePatternCode', 'proofEvidenceRefs',
+    'predictedFailureObserved', 'supportingEvidenceBound', 'graphConflictFree',
+    'coverageConsistent',
   ];
   if (
     !exactKeys(candidate.confidenceBasis, basisKeys)
@@ -799,6 +859,8 @@ function packetBody(candidate) {
       'associationObserved', 'predictedFailureObserved', 'supportingEvidenceBound',
       'graphConflictFree', 'coverageConsistent',
     ].every((key) => typeof candidate.confidenceBasis[key] === 'boolean')
+    || candidate.confidenceBasis.failurePatternCode !== null
+      && !safeCode(candidate.confidenceBasis.failurePatternCode)
     || !exactKeys(candidate.eligibility, [
       'rankEligible', 'threshold', 'eligibleAffectedVolume',
     ])
@@ -817,7 +879,8 @@ function packetBody(candidate) {
     || typeof candidate.promotionEligible !== 'boolean'
   ) throw codedError('MECHANISM_PACKET_INVALID', TypeError);
   for (const key of [
-    'directChainEdgeIds', 'repeatedSegmentIds', 'proofEvidenceRefs',
+    'directChainEdgeIds', 'repeatedSegmentIds', 'failureOutcomeNodeIds',
+    'proofEvidenceRefs',
   ]) {
     const canonical = strings(
       candidate.confidenceBasis[key],
@@ -902,9 +965,12 @@ function packetBody(candidate) {
         && candidate.supportingEvidenceRefs.length > 0
     )
     || candidate.confidenceBasis.predictedFailureObserved && !(
-      Number.isFinite(candidate.denominator.numerator)
-        && Number.isFinite(candidate.denominator.value)
-        && candidate.denominator.numerator < candidate.denominator.value
+      candidate.confidenceBasis.failureOutcomeNodeIds.length > 0
+        && candidate.confidenceBasis.failurePatternCode !== null
+    )
+    || !candidate.confidenceBasis.predictedFailureObserved && (
+      candidate.confidenceBasis.failureOutcomeNodeIds.length > 0
+        || candidate.confidenceBasis.failurePatternCode !== null
     )
     || candidate.confidenceBasis.supportingEvidenceBound !== (
       candidate.confidenceBasis.directChainEdgeIds.length === 3

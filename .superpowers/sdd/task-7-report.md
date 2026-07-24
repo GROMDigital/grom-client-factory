@@ -152,11 +152,11 @@ Hardening GREEN:
 
 The hardened confidence contract now requires a connected exact
 configuration-to-enrollment-to-execution chain for C3. Supporting evidence
-must bind every chain edge, the metric and runtime evidence must observe the
-predicted loss, effective definition hashes must match, and relevant conflicts
-or unresolved joins cap confidence. C2 now requires repeated exact runtime
-patterns across at least two graph-observed complete segments. Caller-provided
-segment IDs cannot create proof.
+must bind every chain edge, effective definition hashes must match, and
+relevant conflicts or unresolved joins cap confidence. C2 requires repeated
+exact runtime evidence across at least two graph-observed complete segments.
+Caller-provided segment IDs cannot create proof. The final hardening below
+adds the required outcome and prediction binding to both levels.
 
 Commercial promotion now requires a validated SUPPORTS review. Missing,
 challenging, or inconclusive reviews route the packet to backlog. Packet
@@ -169,3 +169,42 @@ the graph, with caller hints used only for deterministic tie-breaking.
 Contradictory `complete_full` coverage with a missing or partial capability is
 capped to partial scope, cannot claim account-wide value, cannot retain C3,
 and cannot be promoted.
+
+## Final independent-review hardening
+
+The final review found one remaining confidence-inflation path: a generic exact
+execution edge plus unrelated aggregate loss could stand in for the predicted
+failed outcome. Four adversarial tests were added before the fix.
+
+Final hardening RED:
+
+- Focused tests: `17` passed, `4` failed
+- The four failures proved that a complete chain without a bound outcome still
+  received C3, generic executions in two segments still received C2, a
+  prediction mismatch still received C3, and two different failure patterns
+  still received C2.
+
+Final hardening GREEN:
+
+- Focused tests: `21` passed, `0` failed
+- Full tests: `169` passed, `0` failed
+- Build: pass
+- Mechanism library syntax: pass
+- Review workflow syntax: pass
+- Rubric content and vocabulary gates: pass
+- `git diff --check`: pass
+
+`predictedFailureObserved` is no longer derived from an aggregate numerator
+being below its denominator. A proof-bearing execution must now terminate at a
+complete `OBSERVED` graph node whose failure state shares bound supporting
+evidence with that exact execution and whose canonical failure pattern matches
+the declared prediction. C3 requires that outcome on the connected
+configuration-to-enrollment-to-execution chain. C2 requires the same matched
+failure pattern on exact executions in at least two independently identified
+segments. Generic executions, unbound outcomes, prediction mismatches, and
+different failure patterns remain C1.
+
+The sealed confidence basis now records the exact failed-outcome node IDs and
+canonical failure-pattern code. Packet reconstruction validates these fields
+alongside the existing chain, segment, evidence, coverage, eligibility, and
+priority invariants.

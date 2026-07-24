@@ -34,6 +34,7 @@ function graphFor({
   journeyInstanceId = 'journey_client_sales',
   completeChain = true,
   inferred = false,
+  failedOutcome = true,
 } = {}) {
   const definitionHash = H('a');
   const edge = (index, type) => ({
@@ -73,6 +74,19 @@ function graphFor({
         capturedAt: '2026-04-02T00:00:00Z',
         provenance: { completeness: 'COMPLETE' },
         evidenceRefs: ['ev_9999999999999999'],
+      },
+      {
+        nodeId: 'node_0000000000000004',
+        type: 'workflow_execution',
+        journeyId: 'journey_client_sales',
+        journeyInstanceId,
+        cohortInstanceRef: 'cohort_direct_failure',
+        classification: 'OBSERVED',
+        ...(failedOutcome ? { stage: 'execution_failure' } : {}),
+        eventTime: '2026-04-01T00:00:00Z',
+        capturedAt: '2026-04-02T00:00:00Z',
+        provenance: { completeness: 'COMPLETE' },
+        evidenceRefs: ['ev_0000000000000003'],
       },
       ...Array.from({ length: 109 }, (_, index) => ({
         nodeId: `node_evidence_${String(index).padStart(8, '0')}`,
@@ -134,6 +148,15 @@ function graphForRepeatedSegments() {
       evidenceRefs: ['ev_0000000000000004'],
     },
   );
+  return freeze(graph);
+}
+
+function graphForRepeatedFailureSegments({
+  stages = ['execution_failure', 'execution_failure'],
+} = {}) {
+  const graph = structuredClone(graphForRepeatedSegments());
+  graph.nodes.find(({ nodeId }) => nodeId === 'node_0000000000000002').stage = stages[0];
+  graph.nodes.find(({ nodeId }) => nodeId === 'node_0000000000000005').stage = stages[1];
   return freeze(graph);
 }
 
@@ -352,7 +375,7 @@ function validatedReviewSets(packetList) {
 test('confidence ladder requires exact historical configuration and runtime proof', () => {
   assert.equal(candidates()[0].mechanismConfidence, 'C3');
   assert.equal(candidates({
-    graph: graphForRepeatedSegments(),
+    graph: graphForRepeatedFailureSegments(),
     scopes: [edgeScope('edge', {
       localizedEdgeIds: [
         'edge_0000000000000001',
@@ -380,6 +403,75 @@ test('confidence ladder requires exact historical configuration and runtime proo
   missingHash.edges[0].workflowDefinitionHash = null;
   freeze(missingHash);
   assert.notEqual(candidates({ graph: missingHash })[0].mechanismConfidence, 'C3');
+});
+
+test('exact configuration and execution without a bound failed outcome stays C1', () => {
+  const candidate = candidates({
+    graph: graphFor({ failedOutcome: false }),
+  })[0];
+  assert.equal(candidate.mechanismConfidence, 'C1');
+  assert.equal(candidate.confidenceBasis.predictedFailureObserved, false);
+});
+
+test('generic executions in independent segments do not prove a repeated failure', () => {
+  const candidate = candidates({
+    graph: graphForRepeatedSegments(),
+    scopes: [edgeScope('generic_repeat', {
+      localizedEdgeIds: [
+        'edge_0000000000000001',
+        'edge_0000000000000004',
+      ],
+      supportingEvidenceRefs: [
+        'ev_0000000000000001',
+        'ev_0000000000000004',
+      ],
+      repeatSegmentIds: ['segment_aaaaaaaa', 'segment_bbbbbbbb'],
+    })],
+  })[0];
+  assert.equal(candidate.mechanismConfidence, 'C1');
+  assert.deepEqual(candidate.confidenceBasis.repeatedSegmentIds, []);
+});
+
+test('C3 requires an observed failed outcome bound to the chain and prediction', () => {
+  assert.equal(candidates()[0].mechanismConfidence, 'C3');
+  const predictionMismatch = candidates({
+    scopes: [edgeScope('prediction_mismatch', {
+      predictionCode: 'DELIVERY_BOUNCE_REPEATS',
+    })],
+  })[0];
+  assert.equal(predictionMismatch.mechanismConfidence, 'C1');
+  assert.equal(predictionMismatch.confidenceBasis.predictedFailureObserved, false);
+  const outcomeMismatch = structuredClone(graphFor());
+  outcomeMismatch.nodes.find(({ nodeId }) => (
+    nodeId === 'node_0000000000000004'
+  )).stage = 'delivery_failure';
+  freeze(outcomeMismatch);
+  assert.equal(candidates({ graph: outcomeMismatch })[0].mechanismConfidence, 'C1');
+});
+
+test('C2 requires the same bound predicted failure pattern in two segments', () => {
+  const scope = (metricId) => edgeScope(metricId, {
+    predictionCode: 'EXECUTION_FAILURE_CANCELLED_REPEATS',
+    localizedEdgeIds: [
+      'edge_0000000000000001',
+      'edge_0000000000000004',
+    ],
+    supportingEvidenceRefs: [
+      'ev_0000000000000001',
+      'ev_0000000000000004',
+    ],
+    repeatSegmentIds: ['segment_aaaaaaaa', 'segment_bbbbbbbb'],
+  });
+  assert.equal(candidates({
+    graph: graphForRepeatedFailureSegments({
+      stages: ['execution_failure', 'cancelled'],
+    }),
+    scopes: [scope('different_failure_patterns')],
+  })[0].mechanismConfidence, 'C1');
+  assert.equal(candidates({
+    graph: graphForRepeatedFailureSegments(),
+    scopes: [scope('same_failure_pattern')],
+  })[0].mechanismConfidence, 'C2');
 });
 
 test('all deterministic falsification families run before promotion', () => {
