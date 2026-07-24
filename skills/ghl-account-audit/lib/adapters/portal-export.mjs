@@ -57,25 +57,19 @@ function validatePath(exportPath) {
 }
 
 const NOT_APPLICABLE_KEY = /course|lesson|membership|community|assessment|certificate/u;
-const NOT_APPLICABLE_VALUE = new Set([
-  'assessment',
-  'assessments',
-  'certificate',
-  'certificates',
-  'community',
-  'communities',
-  'course',
-  'courseoffer',
-  'courseoffers',
-  'courseprogress',
-  'courses',
-  'lesson',
-  'lessons',
-  'membership',
-  'memberships',
-]);
+const NOT_APPLICABLE_VALUE = /assessment|certificate|community|course|lesson|membership/u;
 const PRIVATE_KEY = /authorization|cookie|credential|database|dbconnection|header|password|secret|token/u;
 const PRIVATE_STRING = /(?:authorization|bearer)\s+|(?:postgres|postgresql|mysql|mongodb|redis|jdbc):\/\/|eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+|[?&](?:access_?token|api_?key|password|secret|token)=|(?:^|\s)(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu;
+const PORTAL_ITEM_VALIDATORS = Object.freeze({
+  '1.0.0': (item) => {
+    if (
+      canonicalJson(Object.keys(item).sort()) !== canonicalJson(['milestone', 'surface'])
+      || item.surface !== 'onboarding_milestone'
+      || typeof item.milestone !== 'string'
+      || !/^[a-z][a-z0-9_]{0,63}$/u.test(item.milestone)
+    ) throw codedError('PORTAL_EXPORT_ITEM_SCHEMA_INVALID');
+  },
+});
 
 function validatePortalValue(value, expectedLocationId, stack = new WeakSet()) {
   if (
@@ -85,7 +79,7 @@ function validatePortalValue(value, expectedLocationId, stack = new WeakSet()) {
   ) return;
   if (typeof value === 'string') {
     const normalized = value.toLowerCase().replace(/[^a-z0-9]/gu, '');
-    if (NOT_APPLICABLE_VALUE.has(normalized)) {
+    if (NOT_APPLICABLE_VALUE.test(normalized)) {
       throw codedError('PORTAL_EXPORT_SURFACE_NOT_APPLICABLE');
     }
     if (PRIVATE_STRING.test(value)) throw codedError('PORTAL_EXPORT_PRIVATE_VALUE');
@@ -116,12 +110,15 @@ function validatePortalValue(value, expectedLocationId, stack = new WeakSet()) {
   }
 }
 
-function validatePortalItems(items, expectedLocationId) {
+function validatePortalItems(items, expectedLocationId, schemaVersion) {
+  const validateItem = PORTAL_ITEM_VALIDATORS[schemaVersion];
+  if (typeof validateItem !== 'function') throw codedError('PORTAL_EXPORT_INVALID');
   for (const item of items) {
     if (!isPlainObject(item) || Object.keys(item).length === 0) {
       throw codedError('PORTAL_EXPORT_INVALID');
     }
     validatePortalValue(item, expectedLocationId);
+    validateItem(item);
   }
 }
 
@@ -171,7 +168,7 @@ function validateExport(value, expectedLocationId) {
     if (error?.code === 'PORTAL_EXPORT_INVALID') throw error;
     throw codedError('PORTAL_EXPORT_INVALID');
   }
-  validatePortalItems(value.items, expectedLocationId);
+  validatePortalItems(value.items, expectedLocationId, value.schemaVersion);
   if (Date.parse(value.capturedAt) < Date.parse(appliedWindow.to)) {
     throw codedError('PORTAL_EXPORT_INVALID');
   }

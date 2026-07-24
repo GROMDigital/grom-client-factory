@@ -59,14 +59,15 @@ function inventorySourceId(source, operationId) {
   return `${source}.${sha256({ operationId, source }).slice(0, 32)}`;
 }
 
-function privatePayload(value) {
-  if (typeof value === 'number') return String(value);
-  if (Array.isArray(value)) return value.map(privatePayload);
+function privatePayload(value, root = false) {
+  if (typeof value === 'number') return { $number: JSON.stringify(value) };
+  if (Array.isArray(value)) return { $array: value.map((entry) => privatePayload(entry)) };
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+    const encoded = Object.fromEntries(Object.entries(value).map(([key, nested]) => [
       key,
       privatePayload(nested),
     ]));
+    return root ? encoded : { $object: encoded };
   }
   return value;
 }
@@ -92,7 +93,7 @@ export function buildPrivateSourceEnvelope(collection) {
   const envelope = {
     sourceId: inventorySourceId(source.source, source.operationId),
     kind: 'private-content',
-    payload: privatePayload(source),
+    payload: privatePayload(source, true),
   };
   return deepFreezeJson(envelope);
 }

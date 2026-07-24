@@ -107,6 +107,27 @@ function fakeClient(responses, calls = []) {
   };
 }
 
+function fakeRawPageSink(sealedPages = [], records = new Map()) {
+  return {
+    async sealPage(input) {
+      sealedPages.push(structuredClone(input));
+      const sealed = {
+        opaqueRef: `raw_${input.payloadHash.slice(0, 32)}`,
+        payloadHash: input.payloadHash,
+      };
+      records.set(sealed.opaqueRef, structuredClone(input.payload));
+      return sealed;
+    },
+    async restorePage({ opaqueRef, payloadHash }) {
+      const payload = records.get(opaqueRef);
+      if (payload === undefined || sha256(payload) !== payloadHash) {
+        throw new Error('sealed page mismatch');
+      }
+      return structuredClone(payload);
+    },
+  };
+}
+
 function publicAdapter({
   responses = [page()],
   calls = [],
@@ -114,6 +135,7 @@ function publicAdapter({
   checkpointStore,
   runtime,
   client,
+  rawPageSink = fakeRawPageSink(),
 } = {}) {
   return createPublicGhlAdapter({
     client: client ?? fakeClient(responses, calls),
@@ -126,6 +148,7 @@ function publicAdapter({
     },
     checkpointStore,
     runtime,
+    rawPageSink,
   });
 }
 
@@ -236,6 +259,51 @@ test('explicitly allowlisted POST read dispatches execute_action without mutatio
   assert.equal('confirm' in calls[0].request.arguments, false);
   assert.equal('raw_request' in calls[0].request.arguments, false);
   assert.equal(result.page.complete, true);
+});
+
+test('public adapter requires an injected raw-page sink before approved dispatch', async () => {
+  const calls = [];
+  const adapter = createPublicGhlAdapter({
+    client: fakeClient([page()], calls),
+    allowlist,
+    expectedLocationId: 'L1',
+    budgets: {
+      version: '1.0.0',
+      exhaustionPolicy: 'checkpoint_scope_incomplete',
+      capabilities: { contacts: generousBudget },
+    },
+  });
+  await assert.rejects(
+    adapter.collect({ capability: approvedCapability, window }),
+    /RAW_PAGE_SINK_REQUIRED/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('public adapter snapshots MCP pins and dispatcher at construction', async () => {
+  let originalDispatches = 0;
+  let replacementDispatches = 0;
+  const client = fakeClient([page()]);
+  client.callTool = async () => {
+    originalDispatches += 1;
+    return page();
+  };
+  const adapter = publicAdapter({ client });
+
+  client.providerId = 'mutated-provider';
+  client.expectedLocationId = 'L2';
+  client.capabilityManifestHash = '0'.repeat(64);
+  client.publicCatalogSnapshotHash = '1'.repeat(64);
+  client.publicReadAllowlistHash = '2'.repeat(64);
+  client.callTool = async () => {
+    replacementDispatches += 1;
+    return page({ locationId: 'L2' });
+  };
+
+  const result = await adapter.collect({ capability: approvedCapability, window });
+  assert.equal(result.page.complete, true);
+  assert.equal(originalDispatches, 1);
+  assert.equal(replacementDispatches, 0);
 });
 
 test('wrong-location and unresolved-location responses quarantine before success', async () => {
@@ -422,9 +490,11 @@ test('pre-response incompleteness keeps count unknown and checkpoints reconstruc
   assert.equal(beforeResponse.page.reportedCount, null);
 
   const saved = [];
+  const sealedPages = [];
   const partial = await publicAdapter({
     budget: { ...generousBudget, maximumPages: 1 },
     checkpointStore: { save: async (checkpoint) => saved.push(checkpoint) },
+    rawPageSink: fakeRawPageSink(sealedPages),
     responses: [page({
       items: [{ id: 'C1', privateMarker: 'page-one' }],
       nextCursor: 'next',
@@ -434,15 +504,217 @@ test('pre-response incompleteness keeps count unknown and checkpoints reconstruc
   }).collect({ capability: approvedCapability, window });
   assert.equal(partial.incompleteReason, 'BUDGET_MAXIMUM_PAGES');
   assert.equal(saved.length, 1);
-  assert.deepEqual(saved[0].pageArtifacts[0].payload.items, [{
+  assert.deepEqual(sealedPages[0].payload.items, [{
     id: 'C1',
     privateMarker: 'page-one',
   }]);
   assert.equal(
     saved[0].pageArtifacts[0].artifactHash,
-    sha256(saved[0].pageArtifacts[0].payload),
+    sealedPages[0].payloadHash,
   );
+  assert.match(saved[0].pageArtifacts[0].opaqueRef, /^raw_[a-f0-9]{32}$/u);
+  assert.equal('payload' in saved[0].pageArtifacts[0], false);
   assert.equal(saved[0].pageArtifactsHash, sha256(saved[0].pageArtifacts));
+});
+
+test('checkpoint JSON contains only sealed page references, never seeded PII or transcript text', async () => {
+  const emailCanary = 'ava.private@example.invalid';
+  const transcriptCanary = 'RAW TRANSCRIPT PRIVATE CHECKPOINT CANARY';
+  const saved = [];
+  const sealedPages = [];
+  const result = await publicAdapter({
+    budget: { ...generousBudget, maximumPages: 1 },
+    checkpointStore: { save: async (checkpoint) => saved.push(checkpoint) },
+    rawPageSink: fakeRawPageSink(sealedPages),
+    responses: [page({
+      items: [{
+        id: 'C1',
+        email: emailCanary,
+        transcript: transcriptCanary,
+      }],
+      nextCursor: 'next',
+      reportedCount: 2,
+      complete: false,
+    })],
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(result.incompleteReason, 'BUDGET_MAXIMUM_PAGES');
+  assert.equal(sealedPages[0].payload.items[0].email, emailCanary);
+  const checkpointJson = canonicalJson(saved[0]);
+  assert.doesNotMatch(checkpointJson, /ava\.private@example\.invalid/u);
+  assert.doesNotMatch(checkpointJson, /RAW TRANSCRIPT PRIVATE CHECKPOINT CANARY/u);
+  assert.doesNotMatch(checkpointJson, /privateMarker|transcript|email/u);
+});
+
+test('resume restores and verifies prior sealed pages before terminal inventory', async () => {
+  let checkpoint;
+  const sealedPages = [];
+  const rawPageSink = fakeRawPageSink(sealedPages);
+  const checkpointStore = {
+    async save(value) {
+      checkpoint = structuredClone(value);
+    },
+    async load() {
+      return structuredClone(checkpoint);
+    },
+  };
+  const first = await publicAdapter({
+    budget: { ...generousBudget, maximumPages: 1 },
+    checkpointStore,
+    rawPageSink,
+    responses: [page({
+      items: [{ id: 'C1' }],
+      nextCursor: 'C2',
+      reportedCount: 2,
+      complete: false,
+    })],
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(first.incompleteReason, 'BUDGET_MAXIMUM_PAGES');
+  assert.equal(first.page.nextCursor, 'C2');
+
+  const calls = [];
+  const resumed = await publicAdapter({
+    calls,
+    budget: { ...generousBudget, maximumPages: 1 },
+    checkpointStore,
+    rawPageSink,
+    responses: [page({
+      cursor: 'C2',
+      items: [{ id: 'C2' }],
+      reportedCount: 2,
+      complete: true,
+    })],
+  }).collect({
+    capability: approvedCapability,
+    window,
+    cursor: first.page.nextCursor,
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].request.arguments.params.cursor, 'C2');
+  assert.deepEqual(resumed.items, [{ id: 'C1' }, { id: 'C2' }]);
+  assert.equal(resumed.page.complete, true);
+  assert.equal(resumed.page.reportedCount, 2);
+  assert.equal(resumed.privateSourceInventory.length, 1);
+});
+
+test('resume rejects a bare cursor or tampered checkpoint before dispatch', async () => {
+  const bareCalls = [];
+  await assert.rejects(
+    publicAdapter({ calls: bareCalls }).collect({
+      capability: approvedCapability,
+      window,
+      cursor: 'C2',
+    }),
+    /RESUME_CHECKPOINT_REQUIRED/,
+  );
+  assert.equal(bareCalls.length, 0);
+
+  const calls = [];
+  await assert.rejects(
+    publicAdapter({
+      calls,
+      checkpointStore: {
+        async load() {
+          return {
+            schemaVersion: '1.0.0',
+            source: 'public_ghl',
+            operationId: approvedCapability.operationId,
+            boundLocationId: 'L1',
+            resumeCursor: 'C2',
+            reason: 'BUDGET_MAXIMUM_PAGES',
+            collectedCount: 1,
+            reportedCount: 2,
+            initialCursor: null,
+            appliedWindow: window,
+            responseBytes: 100,
+            pageCount: 1,
+            pageArtifacts: [{
+              pageIndex: 1,
+              cursor: null,
+              nextCursor: 'C2',
+              opaqueRef: 'raw_1234567890abcdef1234567890abcdef',
+              artifactHash: '0'.repeat(64),
+              collectedCount: 1,
+              reportedCount: 2,
+            }],
+            pageArtifactsHash: '1'.repeat(64),
+            scopeHash: '2'.repeat(64),
+            inputHash: '2'.repeat(64),
+          };
+        },
+        async save() {},
+      },
+    }).collect({
+      capability: approvedCapability,
+      window,
+      cursor: 'C2',
+    }),
+    /RESUME_CHECKPOINT_INVALID/,
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('count and applied-window drift checkpoints retry the unsealed page on resume', async () => {
+  for (const drift of ['count', 'window']) {
+    let checkpoint;
+    const rawPageSink = fakeRawPageSink();
+    const checkpointStore = {
+      async save(value) {
+        checkpoint = structuredClone(value);
+      },
+      async load() {
+        return structuredClone(checkpoint);
+      },
+    };
+    const driftedWindow = {
+      from: '2026-07-13T00:00:00.001Z',
+      to: window.to,
+    };
+    const first = await publicAdapter({
+      checkpointStore,
+      rawPageSink,
+      responses: [
+        page({
+          items: [{ id: 'C1' }],
+          nextCursor: 'C2',
+          reportedCount: 2,
+          complete: false,
+        }),
+        page({
+          cursor: 'C2',
+          items: [{ id: 'rejected' }],
+          reportedCount: drift === 'count' ? 3 : 2,
+          appliedWindow: drift === 'window' ? driftedWindow : window,
+        }),
+      ],
+    }).collect({ capability: approvedCapability, window });
+    assert.equal(
+      first.incompleteReason,
+      drift === 'count' ? 'REPORTED_COUNT_CHANGED' : 'APPLIED_WINDOW_CHANGED',
+    );
+    assert.equal(first.page.nextCursor, 'C2');
+    assert.equal(checkpoint.resumeCursor, 'C2');
+    assert.equal(checkpoint.pageArtifacts.length, 1);
+    assert.equal(checkpoint.pageArtifacts[0].nextCursor, 'C2');
+
+    const calls = [];
+    const resumed = await publicAdapter({
+      calls,
+      checkpointStore,
+      rawPageSink,
+      responses: [page({
+        cursor: 'C2',
+        items: [{ id: 'C2' }],
+        reportedCount: 2,
+      })],
+    }).collect({
+      capability: approvedCapability,
+      window,
+      cursor: checkpoint.resumeCursor,
+    });
+    assert.equal(calls[0].request.arguments.params.cursor, 'C2');
+    assert.deepEqual(resumed.items, [{ id: 'C1' }, { id: 'C2' }]);
+    assert.equal(resumed.page.complete, true);
+  }
 });
 
 test('request timeout checkpoints without waiting on a live clock', async () => {
@@ -471,6 +743,88 @@ test('request timeout checkpoints without waiting on a live clock', async () => 
   assert.equal(result.page.complete, false);
   assert.equal(observedSignal.aborted, true);
   assert.equal(observedAbort, true);
+});
+
+test('wall clock caps a longer request timeout and remains the authoritative reason', async () => {
+  const timerDelays = [];
+  const result = await publicAdapter({
+    budget: {
+      ...generousBudget,
+      requestTimeoutMs: 50,
+      wallClockMs: 5,
+    },
+    responses: [(_request, options) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      }, { once: true });
+    })],
+    runtime: {
+      now: () => 0,
+      setTimer(callback, milliseconds) {
+        timerDelays.push(milliseconds);
+        queueMicrotask(callback);
+        return 1;
+      },
+      clearTimer() {},
+    },
+  }).collect({ capability: approvedCapability, window });
+  assert.deepEqual(timerDelays, [5]);
+  assert.equal(result.incompleteReason, 'BUDGET_WALL_CLOCK');
+});
+
+test('wall clock caps retry sleep and does not begin another request', async () => {
+  let now = 0;
+  const slept = [];
+  const calls = [];
+  const retry = Object.assign(new Error('retry later'), {
+    code: 'RETRYABLE',
+    retryAfterMs: 50,
+  });
+  const result = await publicAdapter({
+    calls,
+    budget: {
+      ...generousBudget,
+      wallClockMs: 5,
+      maximumTotalRetryDelayMs: 100,
+    },
+    responses: [retry],
+    runtime: {
+      now: () => now,
+      async sleep(milliseconds) {
+        slept.push(milliseconds);
+        now += milliseconds;
+      },
+    },
+  }).collect({ capability: approvedCapability, window });
+  assert.deepEqual(slept, [5]);
+  assert.equal(calls.length, 1);
+  assert.equal(result.incompleteReason, 'BUDGET_WALL_CLOCK');
+});
+
+test('retry sleep is capped by the smaller remaining retry-delay budget', async () => {
+  let now = 0;
+  const slept = [];
+  const retry = Object.assign(new Error('retry later'), {
+    code: 'RETRYABLE',
+    retryAfterMs: 50,
+  });
+  const result = await publicAdapter({
+    budget: {
+      ...generousBudget,
+      wallClockMs: 5,
+      maximumTotalRetryDelayMs: 2,
+    },
+    responses: [retry],
+    runtime: {
+      now: () => now,
+      async sleep(milliseconds) {
+        slept.push(milliseconds);
+        now += milliseconds;
+      },
+    },
+  }).collect({ capability: approvedCapability, window });
+  assert.deepEqual(slept, [2]);
+  assert.equal(result.incompleteReason, 'BUDGET_TOTAL_RETRY_DELAY');
 });
 
 test('wall clock exhaustion checkpoints with a deterministic clock', async () => {
@@ -718,7 +1072,7 @@ function portalFixture(overrides = {}) {
     requestedWindow: window,
     appliedWindow: window,
     capturedAt: '2026-07-20T00:00:00.000Z',
-    items: [{ milestone: 'strategy_approved' }],
+    items: [{ surface: 'onboarding_milestone', milestone: 'strategy_approved' }],
     page: {
       cursor: null,
       nextCursor: null,
@@ -762,6 +1116,27 @@ test('portal adapter rejects DB, course, wrong-location, and incomplete export s
       'course-value',
       portalFixture({ items: [{ surface: 'courses' }] }),
       /PORTAL_EXPORT_SURFACE_NOT_APPLICABLE/,
+    ],
+    [
+      'compound-course-value',
+      portalFixture({ items: [{ surface: 'course-module' }] }),
+      /PORTAL_EXPORT_SURFACE_NOT_APPLICABLE|PORTAL_EXPORT_ITEM_SCHEMA_INVALID/,
+    ],
+    [
+      'unknown-surface',
+      portalFixture({ items: [{ surface: 'client-dashboard' }] }),
+      /PORTAL_EXPORT_ITEM_SCHEMA_INVALID/,
+    ],
+    [
+      'unknown-item-field',
+      portalFixture({
+        items: [{
+          surface: 'onboarding_milestone',
+          milestone: 'strategy_approved',
+          unknownField: 'private-shape-drift',
+        }],
+      }),
+      /PORTAL_EXPORT_ITEM_SCHEMA_INVALID/,
     ],
     [
       'database-uri',
@@ -867,6 +1242,23 @@ test('terminal inventories are canonical, exact, sorted, and bind the complete e
     'sourceId',
   ]);
 }));
+
+test('private source envelopes preserve number and string type identity', async () => {
+  const runtime = { now: () => Date.parse('2026-07-20T01:00:00.000Z') };
+  const numeric = await publicAdapter({
+    responses: [page({ items: [{ id: 'C1', score: 1 }] })],
+    runtime,
+  }).collect({ capability: approvedCapability, window });
+  const textual = await publicAdapter({
+    responses: [page({ items: [{ id: 'C1', score: '1' }] })],
+    runtime,
+  }).collect({ capability: approvedCapability, window });
+  assert.notDeepEqual(numeric.privateSourceEnvelope, textual.privateSourceEnvelope);
+  assert.notEqual(
+    numeric.privateSourceInventory[0].sourceHash,
+    textual.privateSourceInventory[0].sourceHash,
+  );
+});
 
 test('terminal adapter source envelope is accepted unchanged by Task 3 inventory authority', async () => withProject(async (root) => {
   const result = await publicAdapter().collect({
@@ -1087,7 +1479,7 @@ test('connected transport rejects an approved read for a different location with
   await client.close();
 });
 
-test('public adapter dispatches one approved read through the transport policy gate', async () => {
+test('connected transport rejects conflicting nested location indicators with zero dispatch', async () => {
   let dispatches = 0;
   const client = await connectMcp({
     providerConfig: providerConfig(),
@@ -1099,6 +1491,49 @@ test('public adapter dispatches one approved read through the transport policy g
         return {
           async callTool() {
             dispatches += 1;
+            return {};
+          },
+          async close() {},
+        };
+      },
+    },
+  });
+  await assert.rejects(
+    client.callTool({
+      name: 'execute_action',
+      arguments: {
+        action: approvedCapability.actionId,
+        policy: approvedCapability,
+        params: {
+          locationId: 'L1',
+          filter: {
+            scope: {
+              ghl_location_id: 'L2',
+            },
+          },
+        },
+      },
+    }),
+    /LOCATION_MISMATCH/,
+  );
+  assert.equal(dispatches, 0);
+  await client.close();
+});
+
+test('public adapter dispatches one approved read through the transport policy gate', async () => {
+  let dispatches = 0;
+  let delegateRequest;
+  const client = await connectMcp({
+    providerConfig: providerConfig(),
+    transport: {
+      kind: 'stdio',
+      command: '/usr/bin/false',
+      args: [],
+      async connect() {
+        return {
+          async callTool(request) {
+            dispatches += 1;
+            delegateRequest = structuredClone(request);
             return page();
           },
           async close() {},
@@ -1113,6 +1548,19 @@ test('public adapter dispatches one approved read through the transport policy g
     });
     assert.equal(result.page.complete, true);
     assert.equal(dispatches, 1);
+    assert.deepEqual(delegateRequest, {
+      name: 'execute_action',
+      arguments: {
+        action: approvedCapability.actionId,
+        params: {
+          locationId: 'L1',
+          fromDate: window.from,
+          toDate: window.to,
+          cursor: null,
+        },
+      },
+    });
+    assert.equal('policy' in delegateRequest.arguments, false);
   } finally {
     await client.close();
   }
@@ -1136,9 +1584,9 @@ test('connectMcp rejects embedded secrets and redacts resolver/transport failure
       connectMcp({
         providerConfig: providerConfig({
           kind: 'secret-store',
-          provider: 'fixture-vault',
+          provider: 'os-keychain',
           provenance: 'approved-secret-store',
-          reference: 'fixture/path',
+          reference: 'grom-ghl-public-mcp',
         }, { providerId: 'fixture' }),
         credentialResolver: async () => {
           if (mode === 'resolver') throw new Error(`failed vault/fixture ${secret}`);
@@ -1199,11 +1647,25 @@ test('secret-store references require approved provenance and reject raw token m
       provenance: 'approved-secret-store',
       reference: 'eyJhbGciOiJIUzI1NiJ9.private.signature',
     },
+    {
+      kind: 'secret-store',
+      provider: 'anything',
+      provenance: 'approved-secret-store',
+      reference: 'fixture/path',
+    },
+    {
+      kind: 'secret-store',
+      provider: 'os-keychain',
+      provenance: 'approved-secret-store',
+      reference: 'sk-proj-1234567890abcdef',
+    },
   ]) {
+    let resolverCalls = 0;
     await assert.rejects(
       connectMcp({
         providerConfig: providerConfig(credentialRef),
         credentialResolver: async () => {
+          resolverCalls += 1;
           throw new Error('must not resolve');
         },
         transport: {
@@ -1213,6 +1675,7 @@ test('secret-store references require approved provenance and reject raw token m
       }),
       /PROVIDER_CONFIG_INVALID/,
     );
+    assert.equal(resolverCalls, 0);
   }
 });
 

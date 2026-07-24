@@ -12,6 +12,13 @@ const SAFE_ID = /^[a-z0-9][a-z0-9_.:-]{0,127}$/u;
 const FORBIDDEN_CONFIG_KEY = /authorization|cookie|header|password|secret|token|credentialvalue|value/iu;
 const ALLOWED_TOOLS = new Set(['execute_action']);
 const FORBIDDEN_ARGUMENT_KEY = /confirm|raw[_-]?request|mutation|authorization|cookie|header|password|secret|token/iu;
+const RAW_CREDENTIAL_SHAPE = /(?:^|[/:])(?:ghp|sk)[-_][A-Za-z0-9_-]{8,}/iu;
+const SECRET_STORE_REGISTRY = Object.freeze({
+  'os-keychain': Object.freeze({
+    provenance: 'approved-secret-store',
+    locator: /^[A-Za-z][A-Za-z0-9._-]{2,127}$/u,
+  }),
+});
 
 function isPlainObject(value) {
   return Boolean(
@@ -42,10 +49,11 @@ function validateCredentialRef(reference) {
     && keys[2] === 'provider'
     && keys[3] === 'reference'
     && typeof reference.provider === 'string'
-    && SAFE_ID.test(reference.provider)
-    && reference.provenance === 'approved-secret-store'
+    && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider)
+    && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance
     && typeof reference.reference === 'string'
-    && /^[a-z0-9][a-z0-9/._:-]{0,255}$/u.test(reference.reference)
+    && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference)
+    && !RAW_CREDENTIAL_SHAPE.test(reference.reference)
     && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
       reference.reference,
     )
@@ -101,6 +109,31 @@ function containsForbiddenArgument(value, stack = new WeakSet()) {
       || FORBIDDEN_ARGUMENT_KEY.test(key)
       || containsForbiddenArgument(value[key], stack)
     ));
+  } finally {
+    stack.delete(value);
+  }
+}
+
+function collectLocationIndicators(value, indicators = [], stack = new WeakSet()) {
+  if (!value || typeof value !== 'object' || stack.has(value)) return indicators;
+  stack.add(value);
+  try {
+    for (const [key, nested] of Object.entries(value)) {
+      const normalized = key.toLowerCase().replace(/[^a-z0-9]/gu, '');
+      if (['boundlocationid', 'ghllocationid', 'locationid'].includes(normalized)) {
+        indicators.push(nested);
+      } else if (
+        normalized === 'location'
+        && nested
+        && typeof nested === 'object'
+        && !Array.isArray(nested)
+        && Object.hasOwn(nested, 'id')
+      ) {
+        indicators.push(nested.id);
+      }
+      collectLocationIndicators(nested, indicators, stack);
+    }
+    return indicators;
   } finally {
     stack.delete(value);
   }
@@ -287,9 +320,18 @@ export async function connectMcp({ transport, providerConfig, credentialResolver
       if (
         !isPlainObject(request.arguments.params)
         || request.arguments.params.locationId !== config.expectedLocationId
+        || collectLocationIndicators(request.arguments.params).some(
+          (locationId) => locationId !== config.expectedLocationId,
+        )
       ) throw codedError('LOCATION_MISMATCH');
       try {
-        return await delegate.callTool(request, options);
+        return await delegate.callTool({
+          name: 'execute_action',
+          arguments: {
+            action: request.arguments.action,
+            params: structuredClone(request.arguments.params),
+          },
+        }, options);
       } catch (error) {
         const rateLimited = error?.code === 429
           || error?.code === '429'
