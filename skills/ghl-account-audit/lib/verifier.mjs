@@ -15,7 +15,10 @@ import {
 } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { computeJourneyMetrics } from './metrics.mjs';
-import { renderProposalProjections } from './proposals.mjs';
+import { compileProposal, renderProposalProjections } from './proposals.mjs';
+import { selectConversationSample } from './sampling.mjs';
+import { assertNoExecutionMaterial } from './publication-safety.mjs';
+import { reconstructSealedMechanisms } from './mechanisms.mjs';
 
 const PRIVATE_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*|raw_[a-f0-9]{16,64}|https?:\/\/[^\s"'<>]*[?&](?:token|code|signature|key|secret|auth)=)/iu;
 const WRITE_PATTERN = /(?:\b(?:GET|POST|PUT|PATCH|DELETE)\s+[/:]|\braw[_ -]?request\b|\btools?\/call\b|\bconfirm\s*[:=]|\bcurl\b|\bwget\b)/iu;
@@ -112,13 +115,6 @@ function assertSameSnapshot(left, right) {
   }
 }
 
-function priorityOrder(findings) {
-  return [...findings].sort((left, right) => (
-    canonicalJson(left.priorityInputs ?? {}).localeCompare(canonicalJson(right.priorityInputs ?? {}))
-      || left.findingId.localeCompare(right.findingId)
-  )).map(({ findingId }) => findingId);
-}
-
 function recomputeSampleHash(sample) {
   const { sampleHash: _sampleHash, conversationReview: _conversationReview, ...body } = sample;
   return sha256(body);
@@ -145,6 +141,32 @@ function validateSampleStructure(sample) {
     ))
     || sample.actualSampleCount < sample.mandatoryCount
   )) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_SAMPLE_MEMBERSHIP');
+}
+
+function rebuildSample(sample, universe) {
+  if (
+    !universe
+    || !Array.isArray(universe.interactions)
+    || universe.seed !== sample.seed
+    || universe.universeHash !== sha256(universe.interactions)
+    || !Number.isInteger(universe.censusThreshold)
+    || !Number.isInteger(universe.maxSample)
+  ) throw codedError('VERIFIER_INPUT_INVALID_SAMPLING_UNIVERSE');
+  let rebuilt;
+  try {
+    rebuilt = selectConversationSample({
+      interactions: universe.interactions,
+      seed: universe.seed,
+      censusThreshold: universe.censusThreshold,
+      maxSample: universe.maxSample,
+    });
+  } catch {
+    throw codedError('VERIFIER_INPUT_INVALID_SAMPLING_UNIVERSE');
+  }
+  const { conversationReview: _conversationReview, ...publicSample } = sample;
+  if (canonicalJson(rebuilt) !== canonicalJson(publicSample)) {
+    throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_SAMPLE_MEMBERSHIP');
+  }
 }
 
 function validateFindingFormulas(findings) {
@@ -217,6 +239,72 @@ function proposalEligibility(directory, fileNames, evidenceRefs, findingIds) {
   return result.sort((left, right) => left.solutionId.localeCompare(right.solutionId));
 }
 
+function rebuildProposals(directory, fileNames, sealed) {
+  if (
+    !sealed
+    || !Array.isArray(sealed.proposals)
+    || sealed.commitment !== sha256(sealed.proposals)
+  ) throw codedError('VERIFIER_INPUT_INVALID_PROPOSAL_RECONSTRUCTION');
+  const proposalPaths = fileNames.filter((name) => name.endsWith('/proposal.json')).sort();
+  if (proposalPaths.length !== sealed.proposals.length) {
+    throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_PROPOSAL_ELIGIBILITY');
+  }
+  for (const input of sealed.proposals) {
+    const frozenInput = deepFreeze(input);
+    let rebuilt;
+    try {
+      rebuilt = compileProposal({
+        finding: frozenInput.finding,
+        currentObjects: frozenInput.currentObjects,
+        evidenceCutoff: frozenInput.evidenceCutoff,
+      });
+    } catch {
+      throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_PROPOSAL_ELIGIBILITY');
+    }
+    const path = `solution-packs/${input.solutionId}/proposal.json`;
+    if (
+      !proposalPaths.includes(path)
+      || rebuilt.proposalHash !== input.expectedProposalHash
+      || canonicalJson(canonicalJsonFile(readFileSync(join(directory, path))))
+        !== canonicalJson(rebuilt.proposal)
+    ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_PROPOSAL_RECOMPILE');
+  }
+}
+
+function rebuildMechanisms(sealed, findings) {
+  if (!sealed || !Array.isArray(sealed.mechanisms) || !Array.isArray(sealed.expertReviews)) {
+    throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+  }
+  const { commitment, ...body } = sealed;
+  if (commitment !== sha256(body)) {
+    throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+  }
+  deepFreeze(sealed.mechanisms);
+  deepFreeze(sealed.expertReviews);
+  let rebuilt;
+  try {
+    rebuilt = reconstructSealedMechanisms({
+      mechanisms: sealed.mechanisms,
+      expertReviews: sealed.expertReviews,
+      maxPromoted: sealed.maxPromoted,
+    });
+  } catch {
+    throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONSTRUCTION');
+  }
+  if (canonicalJson(rebuilt) !== canonicalJson(sealed.reconstruction)) {
+    throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONSTRUCTION');
+  }
+  const critical = findings.filter(({ publicationLane }) => publicationLane === 'critical')
+    .map(({ findingId }) => findingId).sort();
+  const promoted = findings.filter(({ publicationLane }) => publicationLane === 'commercial')
+    .map(({ findingId }) => findingId).sort();
+  if (
+    canonicalJson([...rebuilt.criticalIssueIds].sort()) !== canonicalJson(critical)
+    || canonicalJson([...rebuilt.promotedIds].sort()) !== canonicalJson(promoted)
+  ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONCILIATION');
+  return rebuilt;
+}
+
 function validateClaims(machine, evidence, report, coverage) {
   const findings = new Map(machine.findings.map((finding) => [finding.findingId, finding]));
   const evidenceRefs = new Set(evidence.map(({ evidenceRef }) => evidenceRef));
@@ -277,7 +365,26 @@ function validateBytes(directory, files) {
     const text = bytes.toString('utf8');
     if (PRIVATE_PATTERN.test(text)) throw codedError('VERIFIER_PRIVACY_FAILURE_CANARY');
     if (WRITE_PATTERN.test(text)) throw codedError('VERIFIER_WRITE_TRACE');
-    if (name !== 'REPORT.md' && name.endsWith('.json')) canonicalJsonFile(bytes);
+    if (name !== 'REPORT.md' && name.endsWith('.json')) {
+      const value = canonicalJsonFile(bytes);
+      try {
+        assertNoExecutionMaterial(value, {
+          code: 'VERIFIER_WRITE_TRACE_EXECUTION_MATERIAL',
+        });
+      } catch (error) {
+        if (error?.code?.startsWith('VERIFIER_')) throw error;
+        throw codedError('VERIFIER_WRITE_TRACE_EXECUTION_MATERIAL');
+      }
+    } else if (name.endsWith('.md')) {
+      try {
+        assertNoExecutionMaterial(text, {
+          code: 'VERIFIER_WRITE_TRACE_EXECUTION_MATERIAL',
+        });
+      } catch (error) {
+        if (error?.code?.startsWith('VERIFIER_')) throw error;
+        throw codedError('VERIFIER_WRITE_TRACE_EXECUTION_MATERIAL');
+      }
+    }
     if (name.endsWith('.jsonl')) canonicalJsonl(bytes);
   }
 }
@@ -294,7 +401,7 @@ export function verifyPublication({ publicationDir } = {}) {
   } catch {
     throw codedError('VERIFIER_INPUT_INVALID_DIRECTORY');
   }
-  const files = listFiles(root);
+  const files = listFiles(root).sort();
   if (!files.includes('run-manifest.json') || files.includes('verifier-attestation.json')) {
     throw codedError('VERIFIER_INPUT_INVALID_FILE_SET');
   }
@@ -339,6 +446,9 @@ export function verifyPublication({ publicationDir } = {}) {
     'metrics-and-findings.json',
     'conversation-sample.json',
     'evidence-manifest.jsonl',
+    'evidence/sanitized/sampling-universe.json',
+    'evidence/sanitized/proposal-verification.json',
+    'evidence/sanitized/mechanism-verification.json',
   ]) {
     if (!declared.includes(required)) throw codedError('VERIFIER_INPUT_INVALID_MISSING_REQUIRED');
   }
@@ -346,6 +456,15 @@ export function verifyPublication({ publicationDir } = {}) {
   const coverage = canonicalJsonFile(readFileSync(join(root, 'coverage.json')));
   const machine = canonicalJsonFile(readFileSync(join(root, 'metrics-and-findings.json')));
   const sample = canonicalJsonFile(readFileSync(join(root, 'conversation-sample.json')));
+  const samplingUniverse = canonicalJsonFile(readFileSync(
+    join(root, 'evidence/sanitized/sampling-universe.json'),
+  ));
+  const proposalVerification = canonicalJsonFile(readFileSync(
+    join(root, 'evidence/sanitized/proposal-verification.json'),
+  ));
+  const mechanismVerification = canonicalJsonFile(readFileSync(
+    join(root, 'evidence/sanitized/mechanism-verification.json'),
+  ));
   const evidence = canonicalJsonl(readFileSync(join(root, 'evidence-manifest.jsonl')));
   const { findings, evidenceRefs } = validateClaims(machine, evidence, report, coverage);
   const {
@@ -373,6 +492,9 @@ export function verifyPublication({ publicationDir } = {}) {
     throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_METRICS');
   }
   validateSampleStructure(sample);
+  rebuildSample(sample, samplingUniverse);
+  rebuildProposals(root, declared, proposalVerification);
+  const rebuiltMechanisms = rebuildMechanisms(mechanismVerification, machine.findings);
   validateFindingFormulas(machine.findings);
   validateReview(sample, evidenceRefs);
   const expectedVerification = {
@@ -380,7 +502,7 @@ export function verifyPublication({ publicationDir } = {}) {
     metricHash: sha256(machine.metrics),
     cohortHash: sha256(machine.metrics.cohorts ?? {}),
     sampleHash: recomputeSampleHash(sample),
-    priorityOrder: priorityOrder(machine.findings),
+    priorityOrder: rebuiltMechanisms.priorityOrder,
     overlapDedupe: [...new Set(machine.findings.map(({ fingerprint, findingId }) => (
       fingerprint ?? findingId
     )))].sort(),

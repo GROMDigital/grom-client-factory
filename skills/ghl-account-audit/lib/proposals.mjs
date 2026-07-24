@@ -1,5 +1,6 @@
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { ProposalSchema } from '../schemas/v1.mjs';
+import { assertNoExecutionMaterial } from './publication-safety.mjs';
 
 const HASH = /^[a-f0-9]{64}$/u;
 const OBJECT_REF = /^obj_[a-f0-9]{16,64}$/u;
@@ -13,8 +14,6 @@ const SOLUTION_TYPES = new Set([
   'operating_process',
 ]);
 const ELIGIBLE_STATES = new Set(['PROMOTED', 'CRITICAL']);
-const FORBIDDEN_KEYS = /^(?:api|auth(?:orization)?|credential|cookie|confirm|headers?|httpMethod|method|mutation|rawRequest|requestBody|shell|command|mcp|toolCall|writeTool|executableEnvelope|envelope|url)$/iu;
-const FORBIDDEN_STRINGS = /(?:https?:\/\/|\b(?:GET|POST|PUT|PATCH|DELETE)\b|raw[_ -]?request|tools?\/call|mcp[_ -]?(?:call|tool)|authorization|credential[_ -]?value|session[_ -]?cookie|\bcurl\b|\bwget\b|\bexecute\b|\bmutate\b)/iu;
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -47,37 +46,6 @@ function assertDeepFrozen(value, seen = new WeakSet()) {
   if (!Object.isFrozen(value)) throw codedError('PROPOSAL_INVALID_INPUT_NOT_FROZEN', TypeError);
   seen.add(value);
   for (const child of Object.values(value)) assertDeepFrozen(child, seen);
-}
-
-function scanExecutionMaterial(value, key = '', seen = new WeakSet()) {
-  if (FORBIDDEN_KEYS.test(key)) {
-    if (!(key === 'executable' && value === false)) {
-      throw codedError('PROPOSAL_EXECUTION_MATERIAL_FORBIDDEN_FIELD');
-    }
-  }
-  if (typeof value === 'string') {
-    if (FORBIDDEN_STRINGS.test(value)) {
-      throw codedError('PROPOSAL_EXECUTION_MATERIAL_FORBIDDEN_VALUE');
-    }
-    return;
-  }
-  if (value === null || ['boolean', 'number'].includes(typeof value)) return;
-  if (!value || typeof value !== 'object' || seen.has(value)) {
-    throw codedError('PROPOSAL_INVALID_VALUE', TypeError);
-  }
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (const child of value) scanExecutionMaterial(child, key, seen);
-      return;
-    }
-    if (!plain(value)) throw codedError('PROPOSAL_INVALID_VALUE', TypeError);
-    for (const [childKey, child] of Object.entries(value)) {
-      scanExecutionMaterial(child, childKey, seen);
-    }
-  } finally {
-    seen.delete(value);
-  }
 }
 
 function objectIndex(currentObjects) {
@@ -272,7 +240,7 @@ export function renderProposalProjections(proposal) {
   if (!parsed.success) throw codedError('PROPOSAL_INVALID_SCHEMA');
   const readme = renderReadme(proposal);
   const acceptanceTests = renderAcceptanceTests(proposal);
-  scanExecutionMaterial({ readme, acceptanceTests });
+  assertNoExecutionMaterial({ readme, acceptanceTests });
   return deepFreeze({ readme, acceptanceTests });
 }
 
@@ -340,7 +308,7 @@ export function compileProposal({ finding, currentObjects, evidenceCutoff } = {}
       evidenceRefs: sortedUnique(finding.evidenceRefs),
       evidenceCutoff,
     };
-    scanExecutionMaterial(body);
+    assertNoExecutionMaterial(body);
     const packHash = sha256(body);
     const proposal = { ...body, packHash };
     const parsed = ProposalSchema.safeParse(proposal);

@@ -28,7 +28,7 @@ const EVENT_TYPES = new Set([
 ]);
 const EVENT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const EVIDENCE_REF = /^ev_[a-f0-9]{16,64}$/u;
-const PRIVATE_PATTERN = /(?:https?:\/\/|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|raw_[a-f0-9]{16,64})/iu;
+const PRIVATE_PATTERN = /(?:https?:\/\/|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|(?:\+\d[\d\s().-]{7,}\d|\b\d{3}[\s().-]\d{3}[\s().-]\d{4}\b)|Bearer\s+\S+|raw_[a-f0-9]{16,64})/iu;
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -57,7 +57,10 @@ function plain(value) {
 
 function validateSanitized(value, key = '', seen = new WeakSet()) {
   if (typeof value === 'string') {
-    if (PRIVATE_PATTERN.test(value) || /(?:credential|authorization|cookie|secret|password)/iu.test(key)) {
+    if (
+      PRIVATE_PATTERN.test(value)
+      || /(?:credential|authorization|cookie|secret|password|(?:raw|private).*(?:hash|key))/iu.test(key)
+    ) {
       throw codedError('MEMORY_EVENT_INVALID_PRIVATE');
     }
     return;
@@ -76,9 +79,19 @@ function validateSanitized(value, key = '', seen = new WeakSet()) {
   }
 }
 
-function validateEvent(event) {
+function legacyRawExpiry(event) {
+  return event?.type === 'raw_evidence_expired'
+    && typeof event.format === 'string'
+    && typeof event.algorithm === 'string'
+    && typeof event.expiredAt === 'string'
+    && typeof event.rawHash === 'string';
+}
+
+function validateEvent(event, { forWrite = false } = {}) {
   assertDeepFrozen(event);
-  const eventTime = event.type === 'raw_evidence_expired'
+  const legacyExpiry = legacyRawExpiry(event);
+  if (forWrite && legacyExpiry) throw codedError('MEMORY_EVENT_INVALID_LEGACY_WRITE');
+  const eventTime = legacyExpiry
     ? event.expiredAt
     : event.occurredAt;
   if (
@@ -88,7 +101,35 @@ function validateEvent(event) {
     || typeof eventTime !== 'string'
     || !Number.isFinite(Date.parse(eventTime))
   ) throw codedError('MEMORY_EVENT_INVALID_SHAPE', TypeError);
-  if (event.type !== 'raw_evidence_expired') validateSanitized(event);
+  if (!legacyExpiry) validateSanitized(event);
+  if (event.type === 'raw_evidence_expired' && !legacyExpiry) {
+    const required = [
+      'schemaVersion', 'eventId', 'type', 'occurredAt', 'evidenceRefs',
+      'expiredEvidenceRefs', 'source', 'retentionClass', 'deletionState',
+      'purgeResult', 'provenance',
+    ];
+    if (
+      Object.keys(event).length !== required.length
+      || !required.every((key) => Object.hasOwn(event, key))
+      || event.schemaVersion !== '1.0.0'
+      || !Array.isArray(event.evidenceRefs)
+      || !event.evidenceRefs.every((ref) => EVIDENCE_REF.test(ref))
+      || !Array.isArray(event.expiredEvidenceRefs)
+      || !event.expiredEvidenceRefs.every((ref) => EVIDENCE_REF.test(ref))
+      || !['context', 'public_ghl', 'internal_ghl', 'onboarding_portal'].includes(event.source)
+      || typeof event.retentionClass !== 'string'
+      || event.retentionClass.length === 0
+      || event.deletionState !== 'deleted'
+      || event.purgeResult !== 'deleted'
+      || !plain(event.provenance)
+      || Object.keys(event.provenance).sort().join('|') !== [
+        'sourceReceiptHash', 'sourceReceiptRef',
+      ].sort().join('|')
+      || typeof event.provenance.sourceReceiptRef !== 'string'
+      || !/^obj_[a-f0-9]{16,64}$/u.test(event.provenance.sourceReceiptRef)
+      || !/^[a-f0-9]{64}$/u.test(event.provenance.sourceReceiptHash ?? '')
+    ) throw codedError('MEMORY_EVENT_INVALID_RAW_EXPIRY_SCHEMA');
+  }
   if (event.type !== 'raw_evidence_expired') {
     if (typeof event.findingId !== 'string' || event.findingId.length === 0) {
       throw codedError('MEMORY_EVENT_INVALID_FINDING');
@@ -138,7 +179,7 @@ function ensureCanonicalDirectory(paths, subdirectory) {
 export function appendMemoryEvent({ paths: suppliedPaths, event } = {}) {
   try {
     const paths = validateAuditPaths(suppliedPaths);
-    validateEvent(event);
+    validateEvent(event, { forWrite: true });
     ensureAuditPaths(paths);
     const directory = ensureCanonicalDirectory(paths, route(event));
     const finalPath = join(directory, `${event.eventId}.json`);
@@ -197,8 +238,8 @@ function orderedEvents(events) {
   assertDeepFrozen(events);
   for (const event of events) validateEvent(event);
   const ordered = [...events].sort((left, right) => (
-    Date.parse(left.type === 'raw_evidence_expired' ? left.expiredAt : left.occurredAt)
-      - Date.parse(right.type === 'raw_evidence_expired' ? right.expiredAt : right.occurredAt)
+    Date.parse(legacyRawExpiry(left) ? left.expiredAt : left.occurredAt)
+      - Date.parse(legacyRawExpiry(right) ? right.expiredAt : right.occurredAt)
       || left.eventId.localeCompare(right.eventId)
   ));
   const ids = new Set();
@@ -213,6 +254,7 @@ function newEntry(event) {
   return {
     findingId: event.findingId,
     findingFingerprint: event.findingFingerprint,
+    findingAliases: [event.findingId],
     status: 'OBSERVED',
     evidenceRefs: [...new Set(event.evidenceRefs ?? [])].sort(),
     proposalHash: event.proposalHash ?? null,
@@ -222,23 +264,32 @@ function newEntry(event) {
     waiver: null,
     lastEventAt: event.occurredAt,
     lastEventId: event.eventId,
+    history: [{
+      eventId: event.eventId,
+      type: event.type,
+      occurredAt: event.occurredAt,
+    }],
   };
 }
 
-function requireEntry(entries, event) {
-  const entry = entries.get(event.findingId);
+function requireEntry(entries, aliases, event) {
+  const fingerprint = aliases.get(event.findingId) ?? event.findingFingerprint;
+  const entry = entries.get(fingerprint);
   if (!entry) throw codedError('BACKLOG_EVENT_SEQUENCE_INVALID_MISSING_FINDING');
   return entry;
 }
 
-function applyEvent(entries, event) {
+function applyEvent(entries, aliases, event) {
   if (event.type === 'raw_evidence_expired') return;
   if (event.type === 'finding_observed') {
-    const prior = entries.get(event.findingId);
+    const prior = entries.get(event.findingFingerprint);
     if (!prior) {
-      entries.set(event.findingId, newEntry(event));
+      entries.set(event.findingFingerprint, newEntry(event));
+      aliases.set(event.findingId, event.findingFingerprint);
       return;
     }
+    aliases.set(event.findingId, event.findingFingerprint);
+    prior.findingAliases = [...new Set([...prior.findingAliases, event.findingId])];
     const newRefs = [...new Set(event.evidenceRefs ?? [])].sort();
     if (
       prior.status === 'REJECTED'
@@ -254,7 +305,7 @@ function applyEvent(entries, event) {
     }
     prior.evidenceRefs = newRefs;
   } else if (event.type === 'finding_transition') {
-    const entry = requireEntry(entries, event);
+    const entry = requireEntry(entries, aliases, event);
     if (event.transition === 'RESOLVED' && (event.evidenceRefs ?? []).length === 0) {
       throw codedError('BACKLOG_EVENT_SEQUENCE_INVALID_RESOLUTION');
     }
@@ -263,23 +314,42 @@ function applyEvent(entries, event) {
       entry.evidenceRefs = [...new Set(event.evidenceRefs)].sort();
     }
   } else if (event.type === 'approval_receipt') {
-    const entry = requireEntry(entries, event);
+    const entry = requireEntry(entries, aliases, event);
     entry.proposalApproved = event.proposalHash === entry.proposalHash;
     entry.solutionId = event.solutionId;
   } else if (event.type === 'implementation_receipt') {
-    const entry = requireEntry(entries, event);
+    const entry = requireEntry(entries, aliases, event);
     if (event.proposalHash === entry.proposalHash) {
       entry.status = 'IMPLEMENTED_UNVERIFIED';
       entry.solutionId = event.solutionId;
       entry.deviations = [...(event.deviations ?? [])].sort();
+      entry.implementationAt = event.occurredAt;
     }
   } else if (event.type === 'verification_result') {
-    const entry = requireEntry(entries, event);
+    const entry = requireEntry(entries, aliases, event);
+    const receipt = event.rereadReceipt;
+    if (
+      !plain(receipt)
+      || Object.keys(receipt).sort().join('|') !== [
+        'capturedAt', 'evidenceCutoff', 'evidenceRefs', 'independent',
+        'payloadHash', 'proposalHash', 'receiptId', 'source',
+      ].sort().join('|')
+      || receipt.independent !== true
+      || !['public_ghl', 'internal_ghl', 'onboarding_portal'].includes(receipt.source)
+      || !Number.isFinite(Date.parse(receipt.capturedAt))
+      || !Number.isFinite(Date.parse(receipt.evidenceCutoff))
+      || Date.parse(receipt.capturedAt) < Date.parse(entry.implementationAt ?? '')
+      || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash ?? '')
+      || receipt.proposalHash !== event.proposalHash
+      || !Array.isArray(receipt.evidenceRefs)
+      || receipt.evidenceRefs.length === 0
+      || receipt.evidenceRefs.some((ref) => !EVIDENCE_REF.test(ref))
+      || canonicalJson(receipt.evidenceRefs) !== canonicalJson(event.evidenceRefs ?? [])
+    ) throw codedError('BACKLOG_EVENT_SEQUENCE_INVALID_REREAD_PROVENANCE');
     if (
       entry.status === 'IMPLEMENTED_UNVERIFIED'
       && event.proposalHash === entry.proposalHash
       && event.solutionId === entry.solutionId
-      && event.liveReread === true
       && event.result === 'PASS'
       && (event.deviations ?? []).length === 0
     ) {
@@ -291,13 +361,18 @@ function applyEvent(entries, event) {
       ])].sort();
     }
   } else if (event.type === 'waiver_recorded') {
-    const entry = requireEntry(entries, event);
+    const entry = requireEntry(entries, aliases, event);
     entry.status = 'WAIVED';
     entry.waiver = event.reasonCode ?? 'WAIVER_RECORDED';
   }
-  const entry = entries.get(event.findingId);
+  const entry = requireEntry(entries, aliases, event);
   entry.lastEventAt = event.occurredAt;
   entry.lastEventId = event.eventId;
+  entry.history.push({
+    eventId: event.eventId,
+    type: event.type,
+    occurredAt: event.occurredAt,
+  });
 }
 
 function renderBacklog(entries) {
@@ -317,13 +392,16 @@ function renderBacklog(entries) {
 
 export function projectBacklog({ events } = {}) {
   const entries = new Map();
+  const aliases = new Map();
   const ordered = orderedEvents(events);
-  for (const event of ordered) applyEvent(entries, event);
+  for (const event of ordered) applyEvent(entries, aliases, event);
   const projected = [...entries.values()]
     .map((entry) => ({
       ...entry,
       evidenceRefs: [...entry.evidenceRefs],
       deviations: [...entry.deviations],
+      findingAliases: [...entry.findingAliases].sort(),
+      history: [...entry.history],
     }))
     .sort((left, right) => left.findingId.localeCompare(right.findingId));
   const json = {

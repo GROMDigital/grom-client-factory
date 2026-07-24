@@ -841,6 +841,31 @@ test('week container is read-only between publications while weekly root remains
   assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
 }));
 
+test('staging replacement after verification cannot reach the publication rename', () => withProject(({ paths }) => {
+  const seamKey = Symbol.for('grom.audit.publication.fs-seam');
+  let displaced;
+  globalThis[seamKey] = ({ phase, staging }) => {
+    if (phase !== 'before-publication-rename') return;
+    displaced = `${staging}-verified-displaced`;
+    chmodSync(staging, 0o700);
+    renameSync(staging, displaced);
+    mkdirSync(staging, { mode: 0o700 });
+    writeFileSync(join(staging, 'REPORT.md'), '# unverified replacement\n');
+  };
+  try {
+    assert.throws(
+      () => publishFixture(paths),
+      /VERIFIER_ATTESTATION_FAILED_STAGING_(?:REPLACED|CHANGED)/u,
+    );
+  } finally {
+    delete globalThis[seamKey];
+  }
+  assert.equal(existsSync(join(paths.weekly, '2026-W30', 'pub-full')), false);
+  assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
+  assert.equal(existsSync(join(paths.root, 'index.json')), false);
+  assert.equal(existsSync(displaced), true);
+}));
+
 for (const replacementPhase of ['during-write', 'during-cleanup']) {
   test(`publication contains a week replacement ${replacementPhase}`, () => withProject(({ paths }) => {
     const weekDirectory = join(paths.weekly, '2026-W30');

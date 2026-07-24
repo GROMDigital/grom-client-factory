@@ -30,6 +30,7 @@ import {
 import { verifyPublication } from '../lib/verifier.mjs';
 import { ProposalSchema } from '../schemas/v1.mjs';
 import { auditPaths } from '../lib/paths.mjs';
+import { selectConversationSample } from '../lib/sampling.mjs';
 
 const H = 'a'.repeat(64);
 const H2 = 'b'.repeat(64);
@@ -334,6 +335,12 @@ function basePublication(overrides = {}) {
           uncertaintyRequiredForPopulationEstimate: false,
         },
       }),
+      verification: {
+        interactions: [],
+        universeHash: sha256([]),
+        censusThreshold: 50,
+        maxSample: 50,
+      },
     }),
     findings: deepFreeze({ criticalIssues: [], promoted: [], backlog: [finding] }),
     conversationReview: deepFreeze({ availability: 'NOT_REVIEWABLE', judgments: [] }),
@@ -430,6 +437,16 @@ test('grom acquisition and onboarding render independent scorecards', () => {
   const report = compilePublicationArtifacts(input).payloadArtifacts['REPORT.md'];
   assert.match(report, /Acquisition scorecard[\s\S]*Denominator: 10/u);
   assert.match(report, /Onboarding scorecard[\s\S]*Denominator: 3/u);
+  for (const label of [
+    'commercial movement',
+    'commercial findings',
+    'verdict matrix',
+    'recommended action order',
+    'finding movement',
+  ]) {
+    assert.match(report, new RegExp(`Acquisition ${label}`, 'u'));
+    assert.match(report, new RegExp(`Onboarding ${label}`, 'u'));
+  }
   assert.doesNotMatch(report, /Combined funnel/u);
 });
 
@@ -625,6 +642,16 @@ test('implementation receipt remains an assertion until a live reread', () => {
     liveReread: true,
     result: 'PASS',
     evidenceRefs: [E2],
+    rereadReceipt: {
+      receiptId: 'reread_1',
+      source: 'internal_ghl',
+      capturedAt: '2026-07-12T00:00:00Z',
+      evidenceCutoff: '2026-07-12T00:00:00Z',
+      payloadHash: H2,
+      proposalHash: H,
+      evidenceRefs: [E2],
+      independent: true,
+    },
   }];
   assert.equal(projectBacklog({ events: deepFreeze(verified) }).json.entries[0].status, 'VERIFIED');
   const partial = deepFreeze([
@@ -824,9 +851,11 @@ test('verifier independently recomputes all deterministic publication values', (
   } finally {
     rmSync(rootTamper, { recursive: true, force: true });
   }
+  const proposalSourceFinding = proposalFinding('workflow_logic');
+  const proposalCurrentObjects = currentObjects();
   const proposalPack = compileProposal({
-    finding: proposalFinding('workflow_logic'),
-    currentObjects: currentObjects(),
+    finding: proposalSourceFinding,
+    currentObjects: proposalCurrentObjects,
     evidenceCutoff: '2026-07-20T00:00:00Z',
   });
   const promotedFinding = deepFreeze({
@@ -858,6 +887,28 @@ test('verifier independently recomputes all deterministic publication values', (
     promotionEligible: true,
     mechanismConfidence: 'C2',
     critical: false,
+    mechanismVerification: {
+      findingId: proposalPack.proposal.findingId,
+      packetId: 'packet_1111111111111111',
+      rootMechanismFingerprint: proposalPack.proposal.findingFingerprint,
+      critical: false,
+      severityBand: 'HIGH',
+      mechanismConfidence: 'C2',
+      rankEligible: true,
+      coverageScope: 'account_wide',
+      affectedVolume: 10,
+      excessObservedLoss: 6,
+      commercialValue: { kind: 'BOUNDED', lower: 0, upper: 5 },
+      evidenceRefs: [E1],
+    },
+    expertReview: {
+      packetId: 'packet_1111111111111111',
+      verdict: 'SUPPORTS',
+      reviewHash: sha256({
+        packetId: 'packet_1111111111111111',
+        verdict: 'SUPPORTS',
+      }),
+    },
   });
   const proposalPublication = compilePublicationArtifacts(basePublication({
     findings: deepFreeze({
@@ -865,7 +916,14 @@ test('verifier independently recomputes all deterministic publication values', (
       promoted: [promotedFinding],
       backlog: [],
     }),
-    solutionPacks: deepFreeze([proposalPack]),
+    solutionPacks: deepFreeze([{
+      ...proposalPack,
+      verificationInputs: {
+        finding: proposalSourceFinding,
+        currentObjects: proposalCurrentObjects,
+        evidenceCutoff: '2026-07-20T00:00:00Z',
+      },
+    }]),
   }));
   const proposalStaging = writeStaging(proposalPublication);
   try {
@@ -887,6 +945,54 @@ test('verifier independently recomputes all deterministic publication values', (
     );
   } finally {
     rmSync(proposalHashTamper, { recursive: true, force: true });
+  }
+  const ineligibleProposal = writeStaging(proposalPublication, ({ root }) => {
+    const path = join(root, 'evidence/sanitized/proposal-verification.json');
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    value.proposals[0].finding.state = 'BACKLOG';
+    value.commitment = sha256(value.proposals);
+    writeFileSync(path, `${canonicalJson(value)}\n`);
+    rehashStaging(root);
+  });
+  try {
+    assert.throws(
+      () => verifyPublication({ publicationDir: ineligibleProposal }),
+      (error) => error.code === 'VERIFIER_DETERMINISTIC_MISMATCH_PROPOSAL_ELIGIBILITY',
+    );
+  } finally {
+    rmSync(ineligibleProposal, { recursive: true, force: true });
+  }
+  const mechanismTamper = writeStaging(proposalPublication, ({ root }) => {
+    const path = join(root, 'evidence/sanitized/mechanism-verification.json');
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    value.reconstruction.priorityOrder = ['finding_tampered'];
+    const { commitment: _old, ...body } = value;
+    value.commitment = sha256(body);
+    writeFileSync(path, `${canonicalJson(value)}\n`);
+    rehashStaging(root);
+  });
+  try {
+    assert.throws(
+      () => verifyPublication({ publicationDir: mechanismTamper }),
+      (error) => error.code === 'VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONSTRUCTION',
+    );
+  } finally {
+    rmSync(mechanismTamper, { recursive: true, force: true });
+  }
+  const executionTamper = writeStaging(compiled, ({ root }) => {
+    const path = join(root, 'metrics-and-findings.json');
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    value.sealedInputs.request_body = { operation: 'change' };
+    writeFileSync(path, `${canonicalJson(value)}\n`);
+    rehashStaging(root);
+  });
+  try {
+    assert.throws(
+      () => verifyPublication({ publicationDir: executionTamper }),
+      (error) => error.code?.startsWith('VERIFIER_WRITE_TRACE_EXECUTION_MATERIAL'),
+    );
+  } finally {
+    rmSync(executionTamper, { recursive: true, force: true });
   }
 });
 
@@ -927,5 +1033,210 @@ test('every report claim and solution field has eligible provenance', () => {
   assert.throws(
     () => compilePublicationArtifacts(input),
     (error) => ['REPORT_CLAIM_UNRESOLVED_EVIDENCE', 'REPORT_CLAIM_UNRESOLVED_CAUSAL'].includes(error.code),
+  );
+});
+
+test('new raw expiry events reject recursive PII secrets and private hashes', () => {
+  const project = mkdtempSync(join(tmpdir(), 'ghl-audit-expiry-leak-'));
+  const paths = auditPaths(project, 'L1');
+  try {
+    const valid = {
+      schemaVersion: '1.0.0',
+      eventId: 'event_expiry_valid',
+      type: 'raw_evidence_expired',
+      occurredAt: '2026-07-20T00:00:00Z',
+      evidenceRefs: [E1],
+      expiredEvidenceRefs: [E1],
+      source: 'internal_ghl',
+      retentionClass: 'weekly_diagnostic',
+      deletionState: 'deleted',
+      purgeResult: 'deleted',
+      provenance: {
+        sourceReceiptRef: O1,
+        sourceReceiptHash: H,
+      },
+    };
+    for (const [index, privateField] of [
+      { email: 'private.person@example.invalid' },
+      { phone: '+61 412 345 678' },
+      { bearer: 'Bearer private-token' },
+      { rawSecret: 'do-not-publish' },
+      { privateHash: H2 },
+      { privateKey: 'private-key-value' },
+    ].entries()) {
+      const leak = deepFreeze({
+        ...valid,
+        eventId: `event_expiry_leak_${index}`,
+        provenance: { ...valid.provenance, nested: privateField },
+      });
+      assert.throws(
+        () => appendMemoryEvent({ paths, event: leak }),
+        (error) => error.code === 'MEMORY_EVENT_INVALID_PRIVATE',
+      );
+    }
+    assert.equal(existsSync(paths.memoryEvents), false);
+    const appended = appendMemoryEvent({ paths, event: deepFreeze(valid) });
+    assert.equal(existsSync(appended.path), true);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+});
+
+test('sampled publications require the complete sealed eligible universe', () => {
+  const input = basePublication();
+  const { verification: _missing, ...manifestOnly } = input.sample;
+  input.sample = deepFreeze(manifestOnly);
+  assert.throws(
+    () => compilePublicationArtifacts(input),
+    (error) => error.code === 'VERIFIER_INPUT_INVALID_SAMPLING_UNIVERSE',
+  );
+});
+
+test('above fifty sampling is replayed from the sealed opaque universe', () => {
+  const interactions = Array.from({ length: 51 }, (_, index) => ({
+    interactionRef: `obj_${String(index + 1).padStart(16, '0')}`,
+    subjectRef: `psn_${String(index + 1).padStart(16, '0')}`,
+    evidenceRefs: [E1],
+    occurredAtBand: index < 17 ? 'early_week' : index < 34 ? 'mid_week' : 'late_week',
+    source: 'src_1111111111111111',
+    stage: 'stage_1111111111111111',
+    outcome: index % 2 === 0 ? 'open' : 'booked',
+    responseTimeBand: 'fast',
+    callDurationBand: 'none',
+    handoffState: 'not_required',
+    ownerRef: ACTOR,
+    flags: [],
+  }));
+  const manifest = selectConversationSample({
+    interactions,
+    seed: 'seed_1111111111111111',
+    censusThreshold: 50,
+    maxSample: 20,
+  });
+  const input = basePublication({
+    sample: deepFreeze({
+      ...manifest,
+      verification: {
+        interactions,
+        universeHash: sha256(interactions),
+        censusThreshold: 50,
+        maxSample: 20,
+      },
+    }),
+  });
+  const compiled = compilePublicationArtifacts(input);
+  const staging = writeStaging(compiled);
+  try {
+    assert.equal(verifyPublication({ publicationDir: staging }).result, 'pass');
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  const tampered = writeStaging(compiled, ({ root }) => {
+    const path = join(root, 'evidence/sanitized/sampling-universe.json');
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    value.interactions[50].outcome = 'lost';
+    value.universeHash = sha256(value.interactions);
+    writeFileSync(path, `${canonicalJson(value)}\n`);
+    rehashStaging(root);
+  });
+  try {
+    assert.throws(
+      () => verifyPublication({ publicationDir: tampered }),
+      (error) => error.code === 'VERIFIER_DETERMINISTIC_MISMATCH_SAMPLE_MEMBERSHIP',
+    );
+  } finally {
+    rmSync(tampered, { recursive: true, force: true });
+  }
+});
+
+test('normalized execution material is rejected by compiler and verifier', () => {
+  for (const [key, value] of [
+    ['request_body', { operation: 'change' }],
+    ['tool_call', 'calendar.update'],
+    ['http_method', 'PATCH'],
+    ['runbook', '```sh\ncurl example.invalid\n```'],
+    ['sdkInvocation', 'client.create(record)'],
+  ]) {
+    const finding = proposalFinding();
+    const unsafe = deepFreeze({
+      ...finding,
+      proposedSolution: {
+        ...finding.proposedSolution,
+        rollout: { ...finding.proposedSolution.rollout, [key]: value },
+      },
+    });
+    assert.throws(
+      () => compileProposal({
+        finding: unsafe,
+        currentObjects: currentObjects(),
+        evidenceCutoff: '2026-07-20T00:00:00Z',
+      }),
+      (error) => error.code?.startsWith('PROPOSAL_EXECUTION_MATERIAL_FORBIDDEN'),
+      key,
+    );
+  }
+});
+
+test('backlog deduplicates aliases by stable fingerprint', () => {
+  const events = deepFreeze([
+    {
+      eventId: 'event_alias_1',
+      type: 'finding_observed',
+      occurredAt: '2026-07-10T00:00:00Z',
+      findingId: 'finding_old',
+      findingFingerprint: 'fingerprint_shared',
+      evidenceRefs: [E1],
+      proposalHash: null,
+    },
+    {
+      eventId: 'event_alias_2',
+      type: 'finding_observed',
+      occurredAt: '2026-07-11T00:00:00Z',
+      findingId: 'finding_renamed',
+      findingFingerprint: 'fingerprint_shared',
+      evidenceRefs: [E2],
+      proposalHash: null,
+    },
+  ]);
+  const projection = projectBacklog({ events });
+  assert.equal(projection.json.entries.length, 1);
+  assert.deepEqual(projection.json.entries[0].findingAliases, ['finding_old', 'finding_renamed']);
+});
+
+test('verification boolean alone cannot advance implementation to VERIFIED', () => {
+  const events = deepFreeze([
+    {
+      eventId: 'event_verify_1',
+      type: 'finding_observed',
+      occurredAt: '2026-07-10T00:00:00Z',
+      findingId: 'finding_1',
+      findingFingerprint: 'fingerprint_1',
+      evidenceRefs: [E1],
+      proposalHash: H,
+    },
+    {
+      eventId: 'event_verify_2',
+      type: 'implementation_receipt',
+      occurredAt: '2026-07-11T00:00:00Z',
+      findingId: 'finding_1',
+      solutionId: 'solution_1',
+      proposalHash: H,
+      deviations: [],
+    },
+    {
+      eventId: 'event_verify_3',
+      type: 'verification_result',
+      occurredAt: '2026-07-12T00:00:00Z',
+      findingId: 'finding_1',
+      solutionId: 'solution_1',
+      proposalHash: H,
+      liveReread: true,
+      result: 'PASS',
+      evidenceRefs: [E2],
+    },
+  ]);
+  assert.throws(
+    () => projectBacklog({ events }),
+    (error) => error.code === 'BACKLOG_EVENT_SEQUENCE_INVALID_REREAD_PROVENANCE',
   );
 });

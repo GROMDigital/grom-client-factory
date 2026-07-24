@@ -1469,3 +1469,100 @@ export function reconcileExpertReviews({
     backlog: backlog.sort(compareCandidates),
   });
 }
+
+export function reconstructSealedMechanisms({
+  mechanisms,
+  expertReviews,
+  maxPromoted = 3,
+}) {
+  if (
+    !Array.isArray(mechanisms)
+    || !Array.isArray(expertReviews)
+    || !Number.isInteger(maxPromoted)
+    || maxPromoted < 0
+    || maxPromoted > 3
+  ) throw codedError('MECHANISM_INPUT_INVALID', TypeError);
+  assertDeepFrozen(mechanisms);
+  assertDeepFrozen(expertReviews);
+  const byPacket = new Map();
+  for (const mechanism of mechanisms) {
+    const required = [
+      'findingId', 'packetId', 'rootMechanismFingerprint', 'critical',
+      'severityBand', 'mechanismConfidence', 'rankEligible', 'coverageScope',
+      'affectedVolume', 'excessObservedLoss', 'commercialValue', 'evidenceRefs',
+    ];
+    if (
+      !exactKeys(mechanism, required)
+      || byPacket.has(mechanism.packetId)
+      || typeof mechanism.findingId !== 'string'
+      || !OPAQUE.test(mechanism.packetId)
+      || !OPAQUE.test(mechanism.rootMechanismFingerprint)
+      || typeof mechanism.critical !== 'boolean'
+      || !['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].includes(mechanism.severityBand)
+      || !CONFIDENCE.has(mechanism.mechanismConfidence)
+      || typeof mechanism.rankEligible !== 'boolean'
+      || !['account_wide', 'comparable_subset', 'unranked_partial'].includes(mechanism.coverageScope)
+      || !plain(mechanism.commercialValue)
+      || !['MEASURED', 'BOUNDED', 'UNKNOWN'].includes(mechanism.commercialValue.kind)
+    ) throw codedError('MECHANISM_INPUT_INVALID', TypeError);
+    strings(mechanism.evidenceRefs, EVIDENCE);
+    byPacket.set(mechanism.packetId, mechanism);
+  }
+  const reviews = new Map();
+  for (const review of expertReviews) {
+    if (
+      !plain(review)
+      || !Object.hasOwn(review, 'reviewHash')
+      || reviews.has(review.packetId)
+    ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+    const { reviewHash, ...body } = review;
+    if (
+      reviewHash !== sha256(body)
+      || !byPacket.has(review.packetId)
+      || !VERDICTS.has(review.verdict)
+    ) throw codedError('MECHANISM_REVIEW_MISMATCH');
+    reviews.set(review.packetId, review);
+  }
+  const severity = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
+  const confidence = { C3: 0, C2: 1, C1: 2, C0: 3 };
+  const ordered = [...mechanisms].sort((left, right) => (
+    Number(right.critical) - Number(left.critical)
+      || severity[left.severityBand] - severity[right.severityBand]
+      || confidence[left.mechanismConfidence] - confidence[right.mechanismConfidence]
+      || numericDescending(left.affectedVolume, right.affectedVolume)
+      || numericDescending(left.excessObservedLoss, right.excessObservedLoss)
+      || left.rootMechanismFingerprint.localeCompare(right.rootMechanismFingerprint)
+      || left.packetId.localeCompare(right.packetId)
+  ));
+  const criticalIssues = ordered.filter((mechanism) => (
+    mechanism.critical
+      && mechanism.mechanismConfidence !== 'C0'
+      && mechanism.evidenceRefs.length > 0
+  ));
+  const roots = new Map();
+  const backlog = [];
+  for (const mechanism of ordered.filter(({ critical }) => !critical)) {
+    const review = reviews.get(mechanism.packetId);
+    const eligible = mechanism.rankEligible
+      && ['C2', 'C3'].includes(mechanism.mechanismConfidence)
+      && mechanism.coverageScope !== 'unranked_partial'
+      && mechanism.evidenceRefs.length > 0
+      && review?.verdict === 'SUPPORTS';
+    if (!eligible || roots.has(mechanism.rootMechanismFingerprint)) {
+      backlog.push(mechanism);
+      continue;
+    }
+    roots.set(mechanism.rootMechanismFingerprint, mechanism);
+  }
+  const promoted = [...roots.values()].slice(0, maxPromoted);
+  const promotedIds = new Set(promoted.map(({ packetId }) => packetId));
+  for (const mechanism of roots.values()) {
+    if (!promotedIds.has(mechanism.packetId)) backlog.push(mechanism);
+  }
+  return deepFreeze({
+    criticalIssueIds: criticalIssues.map(({ findingId }) => findingId),
+    promotedIds: promoted.map(({ findingId }) => findingId),
+    backlogIds: backlog.map(({ findingId }) => findingId),
+    priorityOrder: [...criticalIssues, ...promoted].map(({ findingId }) => findingId),
+  });
+}

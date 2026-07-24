@@ -765,6 +765,61 @@ function assertVerifiedStaging(staging, manifest, payloadHashes) {
   }
 }
 
+function stagingSnapshot(staging) {
+  let directoryDescriptor;
+  try {
+    directoryDescriptor = openSync(
+      staging,
+      constants.O_RDONLY
+        | (constants.O_DIRECTORY ?? 0)
+        | (constants.O_NOFOLLOW ?? 0),
+    );
+    const directory = fstatSync(directoryDescriptor);
+    if (!directory.isDirectory()) {
+      throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED');
+    }
+    const files = [];
+    for (const name of listFiles(staging).sort()) {
+      let descriptor;
+      try {
+        descriptor = openSync(
+          join(staging, name),
+          constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+        );
+        const metadata = fstatSync(descriptor);
+        if (!metadata.isFile()) {
+          throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED');
+        }
+        files.push({
+          name,
+          dev: metadata.dev,
+          ino: metadata.ino,
+          size: metadata.size,
+          hash: byteHash(readFileSync(descriptor)),
+        });
+      } finally {
+        if (descriptor !== undefined) closeSync(descriptor);
+      }
+    }
+    return {
+      directory: { dev: directory.dev, ino: directory.ino },
+      files,
+    };
+  } catch (error) {
+    if (error?.code === 'VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED') throw error;
+    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED');
+  } finally {
+    if (directoryDescriptor !== undefined) closeSync(directoryDescriptor);
+  }
+}
+
+function assertStagingSnapshot(staging, expected) {
+  const current = stagingSnapshot(staging);
+  if (canonicalJson(current) !== canonicalJson(expected)) {
+    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED');
+  }
+}
+
 function nextIndexValue(index, pointer, status) {
   const prior = index.publications.find(({ publicationId, week }) => (
     publicationId === pointer.publicationId && week === pointer.week
@@ -918,6 +973,7 @@ export function publishAtomically({
           Buffer.from(`${canonicalJson(attestation)}\n`, 'utf8'),
         );
         makeImmutable(staging);
+        const verifiedStagingSnapshot = stagingSnapshot(staging);
         weekGuard.assertSame();
         invokePublicationTestSeam('before-publication-rename', {
           staging,
@@ -925,6 +981,7 @@ export function publishAtomically({
           weeklyDirectory: paths.weekly,
         });
         weekGuard.assertSame();
+        assertStagingSnapshot(staging, verifiedStagingSnapshot);
         renameSync(staging, publicationPath);
         weekGuard.assertSame();
       } catch (error) {

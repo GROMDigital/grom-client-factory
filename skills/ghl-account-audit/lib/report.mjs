@@ -1,4 +1,8 @@
 import { canonicalJson, sha256 } from './canonical.mjs';
+import { selectConversationSample } from './sampling.mjs';
+import { assertNoExecutionMaterial } from './publication-safety.mjs';
+import { compileProposal } from './proposals.mjs';
+import { reconstructSealedMechanisms } from './mechanisms.mjs';
 
 const VERDICTS = new Set(['PASS', 'WATCH', 'FAIL', 'UNKNOWN']);
 const PRIVATE_OR_EXECUTION = /(?:https?:\/\/|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|raw_[a-f0-9]{16,64}|\b(?:GET|POST|PUT|PATCH|DELETE)\b|raw[_ -]?request|tools?\/call|authorization|credential|cookie)/iu;
@@ -136,13 +140,6 @@ function normalizeFindings(findings, eligibleEvidence, coverage) {
   };
 }
 
-function priorityOrder(findings) {
-  return [...findings].sort((left, right) => (
-    canonicalJson(left.priorityInputs ?? {}).localeCompare(canonicalJson(right.priorityInputs ?? {}))
-      || left.findingId.localeCompare(right.findingId)
-  )).map(({ findingId }) => findingId);
-}
-
 function solutionArtifacts(solutionPacks, findings, evidenceRefs) {
   if (!Array.isArray(solutionPacks)) throw codedError('PROPOSAL_INVALID_PACKS', TypeError);
   const commercial = solutionPacks.filter(({ finding }) => finding?.critical !== true);
@@ -153,7 +150,20 @@ function solutionArtifacts(solutionPacks, findings, evidenceRefs) {
     .map((finding) => [finding.findingId, finding]));
   const artifacts = {};
   const eligibility = [];
+  const verifierInputs = [];
   for (const pack of solutionPacks) {
+    if (
+      !pack.verificationInputs
+      || !pack.verificationInputs.finding
+      || !Array.isArray(pack.verificationInputs.currentObjects)
+      || typeof pack.verificationInputs.evidenceCutoff !== 'string'
+    ) throw codedError('PROPOSAL_INELIGIBLE_VERIFICATION_INPUTS');
+    let rebuilt;
+    try {
+      rebuilt = compileProposal(pack.verificationInputs);
+    } catch {
+      throw codedError('PROPOSAL_INELIGIBLE_RECOMPILE');
+    }
     if (
       !pack
       || !pack.proposal
@@ -164,6 +174,9 @@ function solutionArtifacts(solutionPacks, findings, evidenceRefs) {
       || pack.proposal.evidenceRefs.some((ref) => !evidenceRefs.has(ref))
       || pack.proposal.packHash !== sha256((({ packHash: _ignored, ...body }) => body)(pack.proposal))
       || pack.proposalHash !== sha256(pack.proposal)
+      || canonicalJson(rebuilt.proposal) !== canonicalJson(pack.proposal)
+      || rebuilt.readme !== pack.readme
+      || rebuilt.acceptanceTests !== pack.acceptanceTests
     ) throw codedError('PROPOSAL_INELIGIBLE_PUBLICATION_PACK');
     for (const [path, value] of Object.entries(pack.payloadArtifacts)) {
       if (Object.hasOwn(artifacts, path)) throw codedError('PROPOSAL_INVALID_PACK_PATH');
@@ -182,11 +195,64 @@ function solutionArtifacts(solutionPacks, findings, evidenceRefs) {
       proposalHash: pack.proposalHash,
       eligible: true,
     });
+    verifierInputs.push({
+      solutionId: pack.proposal.solutionId,
+      finding: pack.verificationInputs.finding,
+      currentObjects: pack.verificationInputs.currentObjects,
+      evidenceCutoff: pack.verificationInputs.evidenceCutoff,
+      expectedProposalHash: pack.proposalHash,
+    });
   }
   return {
     artifacts,
     eligibility: eligibility.sort((left, right) => left.solutionId.localeCompare(right.solutionId)),
+    verifierInputs: verifierInputs.sort((left, right) => left.solutionId.localeCompare(right.solutionId)),
   };
+}
+
+function sealMechanisms(findings) {
+  const eligible = findings.filter(({ publicationLane }) => (
+    ['critical', 'commercial'].includes(publicationLane)
+  ));
+  const mechanisms = eligible.map((finding) => {
+    if (!finding.mechanismVerification) {
+      throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+    }
+    return structuredClone(finding.mechanismVerification);
+  });
+  const expertReviews = eligible
+    .filter(({ expertReview }) => expertReview)
+    .map(({ expertReview }) => structuredClone(expertReview));
+  deepFreeze(mechanisms);
+  deepFreeze(expertReviews);
+  let reconstruction;
+  try {
+    reconstruction = reconstructSealedMechanisms({
+      mechanisms,
+      expertReviews,
+      maxPromoted: 3,
+    });
+  } catch {
+    throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+  }
+  const criticalIds = findings
+    .filter(({ publicationLane }) => publicationLane === 'critical')
+    .map(({ findingId }) => findingId).sort();
+  const promotedIds = findings
+    .filter(({ publicationLane }) => publicationLane === 'commercial')
+    .map(({ findingId }) => findingId).sort();
+  if (
+    canonicalJson([...reconstruction.criticalIssueIds].sort()) !== canonicalJson(criticalIds)
+    || canonicalJson([...reconstruction.promotedIds].sort()) !== canonicalJson(promotedIds)
+  ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONCILIATION');
+  const body = {
+    schemaVersion: '1.0.0',
+    mechanisms,
+    expertReviews,
+    maxPromoted: 3,
+    reconstruction,
+  };
+  return { ...body, commitment: sha256(body) };
 }
 
 function reportFinding(finding) {
@@ -240,6 +306,26 @@ function gromScorecards(run, metrics) {
   ].join('\n');
 }
 
+function gromJourneyFindings(findings, kind) {
+  return findings.filter(({ journeyId = '' }) => (
+    String(journeyId).toLowerCase().includes(kind)
+  ));
+}
+
+function splitGrom(label, findings, render) {
+  const acquisition = gromJourneyFindings(findings, 'acquisition');
+  const onboarding = gromJourneyFindings(findings, 'onboarding');
+  return [
+    `### Acquisition ${label}`,
+    '',
+    render(acquisition, 'journey_grom_acquisition_v1'),
+    '',
+    `### Onboarding ${label}`,
+    '',
+    render(onboarding, 'journey_grom_onboarding_v1'),
+  ].join('\n');
+}
+
 function renderReport({
   run,
   systemOverview,
@@ -248,8 +334,10 @@ function renderReport({
   findings,
   conversationReview,
   memoryProjection,
+  actionOrder,
 }) {
   const partial = coverage.state === 'complete_partial';
+  const grom = run.target?.operatingProfile === 'grom_internal';
   const critical = findings.filter(({ publicationLane }) => publicationLane === 'critical');
   const commercial = findings
     .filter(({ publicationLane }) => publicationLane === 'commercial')
@@ -272,19 +360,44 @@ function renderReport({
     gromScorecards(run, metrics),
     '## Critical issues',
     '',
-    critical.length ? critical.map(reportFinding).join('\n') : 'No eligible critical issue was found.',
+    grom
+      ? splitGrom('critical issues', critical, (items) => (
+        items.length ? items.map(reportFinding).join('\n') : 'No eligible critical issue was found.'
+      ))
+      : critical.length ? critical.map(reportFinding).join('\n') : 'No eligible critical issue was found.',
     '',
     '## Commercial movement',
     '',
-    'Movement is reported from the sealed weekly metric outputs only.',
+    grom
+      ? splitGrom('commercial movement', findings, (_items, journeyId) => {
+        const cohort = metrics.cohorts?.currentClosedWeek?.[journeyId] ?? 0;
+        const kpis = Object.entries(metrics.metrics?.currentClosedWeek ?? {})
+          .filter(([, metric]) => metric.journeyInstanceId === journeyId)
+          .map(([id, metric]) => `${id}: ${metric.numerator ?? 'unknown'}/${metric.denominator ?? 'unknown'}`)
+          .join(', ') || 'No complete KPI';
+        return `Entry cohort: ${cohort}\n\nKPIs: ${kpis}`;
+      })
+      : 'Movement is reported from the sealed weekly metric outputs only.',
     '',
     '## What is working',
     '',
-    working.length ? working.map(({ findingId }) => `- ${findingId}`).join('\n') : 'No broad pass is inferred from missing evidence.',
+    grom
+      ? splitGrom('working controls', working, (items) => (
+        items.length
+          ? items.map(({ findingId }) => `- ${findingId}`).join('\n')
+          : 'No broad pass is inferred from missing evidence.'
+      ))
+      : working.length ? working.map(({ findingId }) => `- ${findingId}`).join('\n') : 'No broad pass is inferred from missing evidence.',
     '',
     '## Commercial findings',
     '',
-    commercial.length ? commercial.map(reportFinding).join('\n') : 'No eligible commercial finding was promoted.',
+    grom
+      ? splitGrom('commercial findings', commercial, (items) => (
+        items.length
+          ? items.map(reportFinding).join('\n')
+          : 'No eligible commercial finding was promoted.'
+      ))
+      : commercial.length ? commercial.map(reportFinding).join('\n') : 'No eligible commercial finding was promoted.',
     '',
     '## Conversation and Voice AI conclusions',
     '',
@@ -293,15 +406,28 @@ function renderReport({
     '',
     '## Configuration/execution/experience/outcome matrix',
     '',
-    verdictTable(findings),
+    grom
+      ? splitGrom('verdict matrix', findings, (items) => verdictTable(items))
+      : verdictTable(findings),
     '',
     '## Recommended action order',
     '',
-    priorityOrder(findings).map((id, index) => `${index + 1}. ${id}`).join('\n') || 'No action pack is eligible.',
+    grom
+      ? splitGrom('recommended action order', findings, (items) => (
+        actionOrder.filter((id) => items.some(({ findingId }) => findingId === id))
+          .map((id, index) => `${index + 1}. ${id}`).join('\n')
+          || 'No action pack is eligible.'
+      ))
+      : actionOrder.map((id, index) => `${index + 1}. ${id}`).join('\n') || 'No action pack is eligible.',
     '',
     '## Week-over-week finding movement',
     '',
-    'Movement is derived from immutable finding events.',
+    grom
+      ? splitGrom('finding movement', findings, (items) => (
+        items.map(({ findingId }) => `- ${findingId}: derived from immutable events`).join('\n')
+          || 'No finding movement.'
+      ))
+      : 'Movement is derived from immutable finding events.',
     '',
     '## Backlog changes and next evidence required',
     '',
@@ -322,6 +448,43 @@ function evidenceJsonl(evidenceManifest) {
     .sort((left, right) => left.evidenceRef.localeCompare(right.evidenceRef))
     .map((record) => canonicalJson(record))
     .join('\n')}\n`;
+}
+
+function sealSampling(sample) {
+  const verification = sample.verification;
+  if (
+    !verification
+    || !Array.isArray(verification.interactions)
+    || !Number.isInteger(verification.censusThreshold)
+    || !Number.isInteger(verification.maxSample)
+    || verification.universeHash !== sha256(verification.interactions)
+  ) throw codedError('VERIFIER_INPUT_INVALID_SAMPLING_UNIVERSE');
+  let rebuilt;
+  try {
+    rebuilt = selectConversationSample({
+      interactions: verification.interactions,
+      seed: sample.seed,
+      censusThreshold: verification.censusThreshold,
+      maxSample: verification.maxSample,
+    });
+  } catch {
+    throw codedError('VERIFIER_INPUT_INVALID_SAMPLING_UNIVERSE');
+  }
+  const { verification: _verification, ...publicSample } = sample;
+  if (canonicalJson(rebuilt) !== canonicalJson(publicSample)) {
+    throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_SAMPLE_MEMBERSHIP');
+  }
+  return {
+    publicSample,
+    sealedUniverse: {
+      schemaVersion: '1.0.0',
+      seed: sample.seed,
+      censusThreshold: verification.censusThreshold,
+      maxSample: verification.maxSample,
+      universeHash: verification.universeHash,
+      interactions: verification.interactions,
+    },
+  };
 }
 
 export function compilePublicationArtifacts(input = {}) {
@@ -352,7 +515,9 @@ export function compilePublicationArtifacts(input = {}) {
   }
   if (coverage.state !== run.status) throw codedError('VERIFIER_SCOPE_VIOLATION_COVERAGE');
   const eligibleEvidence = validateEvidenceManifest(evidenceManifest);
+  const sampling = sealSampling(sample);
   const normalized = normalizeFindings(findings, eligibleEvidence, coverage);
+  const mechanismSeal = sealMechanisms(normalized.findings);
   const packs = solutionArtifacts(solutionPacks, normalized.findings, eligibleEvidence);
   const report = renderReport({
     run,
@@ -362,13 +527,14 @@ export function compilePublicationArtifacts(input = {}) {
     findings: normalized.findings,
     conversationReview,
     memoryProjection,
+    actionOrder: mechanismSeal.reconstruction.priorityOrder,
   });
   const verification = {
     coverageClass: coverage.state,
     metricHash: sha256(metrics),
     cohortHash: sha256(metrics.cohorts ?? {}),
-    sampleHash: sample.sampleHash,
-    priorityOrder: priorityOrder(normalized.findings),
+    sampleHash: sampling.publicSample.sampleHash,
+    priorityOrder: mechanismSeal.reconstruction.priorityOrder,
     overlapDedupe: [...new Set(normalized.findings.map(({ fingerprint, findingId }) => (
       fingerprint ?? findingId
     )))].sort(),
@@ -395,12 +561,19 @@ export function compilePublicationArtifacts(input = {}) {
     'diff.json': diff,
     'metrics-and-findings.json': machine,
     'conversation-sample.json': {
-      ...sample,
+      ...sampling.publicSample,
       conversationReview: {
         availability: conversationReview.availability ?? 'UNKNOWN',
         judgments: conversationReview.judgments ?? [],
       },
     },
+    'evidence/sanitized/sampling-universe.json': sampling.sealedUniverse,
+    'evidence/sanitized/proposal-verification.json': {
+      schemaVersion: '1.0.0',
+      proposals: packs.verifierInputs,
+      commitment: sha256(packs.verifierInputs),
+    },
+    'evidence/sanitized/mechanism-verification.json': mechanismSeal,
     'evidence-manifest.jsonl': evidenceJsonl(evidenceManifest),
     ...packs.artifacts,
   };
@@ -412,6 +585,9 @@ export function compilePublicationArtifacts(input = {}) {
   };
   assertPublishable(payloadArtifacts);
   assertPublishable(projections);
+  assertNoExecutionMaterial(payloadArtifacts, {
+    code: 'PROPOSAL_EXECUTION_MATERIAL_FORBIDDEN_PUBLICATION',
+  });
   return deepFreeze({
     payloadArtifacts,
     projections,

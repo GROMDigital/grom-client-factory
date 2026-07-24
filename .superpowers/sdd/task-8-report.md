@@ -69,15 +69,48 @@
 - Closed-directory independent publication verification
 - Verifier-before-rename atomic publication gate
 
-## Remaining concern for independent review
+## Independent-review hardening pass
 
-The approved Task 6 sample manifest contains selected interactions, counts,
-strata, probabilities, and `sampleHash`, but it does not retain the normalized
-identities of unselected interactions. The Task 8 compiler interface receives
-that final manifest, not the original eligible interaction universe. The
-verifier therefore independently recomputes the sample hash, fully verifies a
-census, and validates sampled counts, uniqueness, probabilities, and mandatory
-inclusion bounds, but it cannot reproduce the exact stratified membership for
-a universe above 50 from the available sealed input alone. This implementation
-does not broaden or change Task 6. Independent review should decide whether the
-sealed unselected universe must become a separately approved upstream input.
+Base: `80c52721c7ae33d3ef899a530705917163931b2c`.
+
+RED command:
+`node --test skills/ghl-account-audit/tests/weekly-memory.test.mjs`
+
+- Node: `v24.13.0`
+- Exit code: `1`
+- Tests: 18
+- Passed: 13
+- Failed: 5
+- Expected failures proved the raw-expiry private-data write path, absent
+  sampling-universe authentication, normalized execution-material bypass,
+  finding-ID backlog duplication, and boolean-only verification promotion.
+
+The hardening pass closed the original sampling limitation by publishing a
+sealed, canonical, privacy-safe eligible-universe artifact containing only
+opaque references and allowlisted categorical metadata. The verifier now
+replays the approved Task 6 selector for census and above-50 stratified samples.
+
+Additional hardening:
+
+- New raw-expiry events use a strict sanitized schema. Historical vault expiry
+  events remain readable but cannot be appended through the new writer.
+- Mechanism priority and reconciliation are reconstructed through the Task 7
+  mechanism module from sealed mechanism facts and hash-bound expert verdicts.
+- Proposal eligibility is independently recompiled from the sealed finding,
+  current objects, captured versions and hashes, dependencies, and cutoff.
+- Grom acquisition and onboarding render independent movement, findings,
+  verdict, action-order, and finding-movement subsections.
+- The final publication rename reopens the staging directory and every member
+  with no-follow semantics and compares device, inode, size, and byte hash.
+- Backlog entries deduplicate by stable fingerprint while preserving finding
+  aliases and immutable history.
+- A matching independent reread receipt with source, evidence, payload hash,
+  captured time, and cutoff is required before `VERIFIED`.
+- One shared recursive scanner rejects normalized execution fields, executable
+  code fences, shell forms, and SDK mutation forms in both compilation and
+  verification.
+
+Hardening GREEN:
+
+- Focused publication and weekly-memory tests: 39/39 passed
+- Full runtime suite: 190/190 passed
