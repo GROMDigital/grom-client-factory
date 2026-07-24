@@ -1,0 +1,266 @@
+import assert from 'node:assert/strict';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { auditPaths } from '../lib/paths.mjs';
+import {
+  openVault,
+  resolveVaultKeys,
+} from '../lib/vault.mjs';
+import { sanitizeForPublication } from '../lib/artifacts.mjs';
+
+const PRIVATE_CANARIES = Object.freeze([
+  'Bearer private-authorization-canary',
+  'eyJhbGciOiJIUzI1NiJ9.private.jwt-canary',
+  'ava.private@example.invalid',
+  '+61 412 345 678',
+  'Ava Privatecanary',
+  'RAW TRANSCRIPT PRIVATE CANARY',
+  'RAW MESSAGE BODY PRIVATE CANARY',
+  'https://example.invalid/magic-login?token=magic-private-canary',
+  'key-reference-private-canary',
+]);
+
+const privateFixture = {
+  headers: {
+    authorization: PRIVATE_CANARIES[0],
+    nested: [{ jwt: PRIVATE_CANARIES[1] }],
+  },
+  contact: {
+    email: PRIVATE_CANARIES[2],
+    phone: PRIVATE_CANARIES[3],
+    name: PRIVATE_CANARIES[4],
+  },
+  conversation: {
+    transcript: PRIVATE_CANARIES[5],
+    messages: [{ body: PRIVATE_CANARIES[6] }],
+  },
+  nextStep: PRIVATE_CANARIES[7],
+  provider: {
+    keyReference: PRIVATE_CANARIES[8],
+  },
+  finding: {
+    summary: `${PRIVATE_CANARIES[4]} missed a follow-up for ${PRIVATE_CANARIES[2]} (${PRIVATE_CANARIES[3]}).`,
+  },
+};
+
+function withProject(callback) {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-vault-'));
+  try {
+    return callback({ projectRoot, paths: auditPaths(projectRoot, 'L1') });
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
+}
+
+test('publishable artifacts contain no seeded private canaries', () => {
+  const result = sanitizeForPublication(privateFixture, {
+    pseudonymKey: Buffer.alloc(32, 7),
+  });
+  const text = JSON.stringify(result);
+  for (const canary of PRIVATE_CANARIES) assert.equal(text.includes(canary), false, canary);
+  assert.match(result.contact.email, /^psn_[a-f0-9]{32}$/u);
+  assert.equal(result.contact.email, sanitizeForPublication(privateFixture, {
+    pseudonymKey: Buffer.alloc(32, 7),
+  }).contact.email);
+  assert.match(result.finding.summary, /psn_[a-f0-9]{32}/u);
+  assert.equal(result.finding.summary.includes(PRIVATE_CANARIES[4]), false);
+});
+
+test('protected key-file adapter accepts only an absolute current-user 0600 file', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'ghl-audit-keys-'));
+  const keyPath = join(directory, 'vault-keys.json');
+  const encryptionKey = Buffer.alloc(32, 11);
+  const pseudonymKey = Buffer.alloc(32, 12);
+  try {
+    writeFileSync(keyPath, JSON.stringify({
+      encryptionKey: encryptionKey.toString('base64'),
+      pseudonymKey: pseudonymKey.toString('base64'),
+    }), { mode: 0o600 });
+    const resolved = resolveVaultKeys({
+      keyReference: { type: 'protected-file', path: keyPath },
+    });
+    assert.deepEqual(resolved.encryptionKey, encryptionKey);
+    assert.deepEqual(resolved.pseudonymKey, pseudonymKey);
+    resolved.encryptionKey.fill(0);
+    resolved.pseudonymKey.fill(0);
+
+    chmodSync(keyPath, 0o640);
+    assert.throws(
+      () => resolveVaultKeys({
+        keyReference: { type: 'protected-file', path: keyPath },
+      }),
+      (error) => error.code === 'VAULT_KEY_FILE_PERMISSIONS'
+        && !error.message.includes(keyPath),
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('missing keys and keychain failures expose only stable redacted codes', () => {
+  const keyReference = 'key-reference-private-canary';
+  const provider = {
+    readKeychain(name) {
+      assert.equal(name, keyReference);
+      assert.equal(JSON.stringify(process.argv).includes(name), false);
+      assert.equal(JSON.stringify(process.env).includes(name), false);
+      throw new Error(`missing ${name}`);
+    },
+  };
+  assert.throws(
+    () => resolveVaultKeys({
+      keyReference: { type: 'os-keychain', name: keyReference },
+      keyProvider: provider,
+    }),
+    (error) => error.code === 'VAULT_KEYS_UNAVAILABLE'
+      && error.message === 'VAULT_KEYS_UNAVAILABLE'
+      && !String(error.stack).includes(keyReference),
+  );
+  assert.throws(
+    () => resolveVaultKeys({
+      keyReference: { type: 'protected-file', path: '/missing/key-file-private-canary' },
+    }),
+    (error) => error.code === 'VAULT_KEYS_UNAVAILABLE'
+      && !String(error.stack).includes('key-file-private-canary'),
+  );
+});
+
+test('OS-keychain adapter returns copied key buffers and clears provider material', () => {
+  const providerMaterial = Buffer.concat([
+    Buffer.alloc(32, 21),
+    Buffer.alloc(32, 22),
+  ]);
+  const resolved = resolveVaultKeys({
+    keyReference: { type: 'os-keychain', name: 'weekly-auditor' },
+    keyProvider: {
+      readKeychain: () => providerMaterial,
+    },
+  });
+  assert.deepEqual(resolved.encryptionKey, Buffer.alloc(32, 21));
+  assert.deepEqual(resolved.pseudonymKey, Buffer.alloc(32, 22));
+  assert.ok(providerMaterial.every((byte) => byte === 0));
+  resolved.encryptionKey.fill(0);
+  resolved.pseudonymKey.fill(0);
+});
+
+test('vault encrypts raw evidence under 0700 paths and zeroes handed-off keys', () => withProject(({ paths }) => {
+  const encryptionKey = Buffer.alloc(32, 31);
+  const pseudonymKey = Buffer.alloc(32, 32);
+  const rawCanary = Buffer.from('RAW MESSAGE BODY PRIVATE CANARY', 'utf8');
+  const vault = openVault({ paths, encryptionKey, pseudonymKey });
+  assert.ok(encryptionKey.every((byte) => byte === 0));
+  assert.ok(pseudonymKey.every((byte) => byte === 0));
+
+  const sealed = vault.sealRaw({
+    source: 'public_ghl',
+    bytes: rawCanary,
+    expiresAt: '2026-08-01T00:00:00.000Z',
+  });
+  assert.match(sealed.rawHash, /^[a-f0-9]{64}$/u);
+  assert.match(sealed.opaqueRef, /^raw_[a-f0-9]{32}$/u);
+  assert.equal(statSync(paths.privateRaw).mode & 0o777, 0o700);
+  const recordPath = join(paths.privateRaw, `${sealed.opaqueRef}.json`);
+  assert.equal(statSync(recordPath).mode & 0o777, 0o600);
+  const recordText = readFileSync(recordPath, 'utf8');
+  assert.equal(recordText.includes(rawCanary.toString('utf8')), false);
+  const record = JSON.parse(recordText);
+  assert.equal(record.expiresAt, '2026-08-01T00:00:00.000Z');
+  assert.equal(record.deletionState, 'active');
+  assert.equal(record.purgeResult, null);
+  assert.equal(record.algorithm, 'aes-256-gcm');
+  vault.close();
+}));
+
+test('doctor validates protected-file policy without reading or printing keys or references', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ghl-audit-doctor-'));
+  const fakeBin = join(home, 'bin');
+  const clientRoot = join(home, 'client-root');
+  const tracking = join(home, 'tracking');
+  const docs = join(home, 'docs');
+  const plugin = join(home, 'plugin');
+  const keyPath = join(home, 'key-reference-private-canary');
+  const doctor = fileURLToPath(new URL('../../doctor/checks.sh', import.meta.url));
+  try {
+    for (const directory of [fakeBin, clientRoot, tracking, docs, plugin]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    for (const directory of [tracking, docs, plugin]) mkdirSync(join(directory, '.git'));
+    writeFileSync(join(fakeBin, 'gh'), `#!/usr/bin/env bash
+if [ "$1" = api ]; then printf 'authenticated\\n'; fi
+exit 0
+`, { mode: 0o700 });
+    writeFileSync(join(fakeBin, 'git'), `#!/usr/bin/env bash
+case "$*" in
+  *rev-list*) printf '0\\n' ;;
+esac
+exit 0
+`, { mode: 0o700 });
+    writeFileSync(keyPath, 'RAW-KEY-BYTES-PRIVATE-CANARY', { mode: 0o600 });
+    writeFileSync(join(home, '.grom-factory.json'), JSON.stringify({
+      audit: {
+        vault_key_reference: {
+          type: 'protected-file',
+          path: keyPath,
+        },
+      },
+      client_root: clientRoot,
+      plugin_path: plugin,
+      deps: {
+        'client-lp-tracking': { path: tracking, author_of: true },
+        'ghl-workflow-api-docs': { path: docs, author_of: true },
+        'ghl-plugin': { path: plugin, author_of: true },
+      },
+    }));
+    const output = execFileSync('bash', [doctor], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
+    assert.match(output, /audit-vault-key\tPASS\tprotected vault key file reference and permissions are valid/u);
+    assert.equal(output.includes(keyPath), false);
+    assert.equal(output.includes('RAW-KEY-BYTES-PRIVATE-CANARY'), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('purge removes ciphertext and creates an immutable expiry event', () => withProject(({ paths }) => {
+  const vault = openVault({
+    paths,
+    encryptionKey: Buffer.alloc(32, 41),
+    pseudonymKey: Buffer.alloc(32, 42),
+  });
+  const sealed = vault.sealRaw({
+    source: 'internal_ghl',
+    bytes: Buffer.from('RAW TRANSCRIPT PRIVATE CANARY', 'utf8'),
+    expiresAt: '2026-07-01T00:00:00.000Z',
+  });
+  const result = vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' });
+  assert.equal(result.purged, 1);
+  assert.equal(existsSync(join(paths.privateRaw, `${sealed.opaqueRef}.json`)), false);
+  assert.equal(result.events.length, 1);
+  const eventPath = join(paths.memoryEvents, `${result.events[0]}.json`);
+  assert.equal(statSync(eventPath).mode & 0o222, 0);
+  const event = JSON.parse(readFileSync(eventPath, 'utf8'));
+  assert.equal(event.type, 'raw_evidence_expired');
+  assert.equal(event.opaqueRef, sealed.opaqueRef);
+  assert.equal(event.deletionState, 'deleted');
+  assert.equal(event.purgeResult, 'deleted');
+  vault.close();
+}));

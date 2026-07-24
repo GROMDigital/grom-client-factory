@@ -15,6 +15,87 @@ else
   say config FAIL "missing or invalid $CONFIG (doctor will offer to create it)"
 fi
 
+# Validate only the vault-key REFERENCE and its storage policy. This check
+# intentionally never reads a protected key file, requests a keychain password,
+# or includes the configured reference in output or a child-process argument.
+check_audit_vault_reference() {
+  local key_ref_json key_ref_type key_file key_mode key_name
+  if ! jq -e '
+    ([.. | objects | keys[]?]
+      | any(. == "encryptionKey" or . == "pseudonymKey" or . == "encryption_key" or . == "pseudonym_key"))
+    | not
+  ' "$CONFIG" >/dev/null 2>&1; then
+    say audit-vault-key FAIL "raw vault key material is forbidden in config"
+    return
+  fi
+
+  key_ref_json=$(jq -c '
+    .audit.vault_key_reference
+      // .audit.vaultKeyReference
+      // .vault_key_reference
+      // .vaultKeyReference
+      // empty
+  ' "$CONFIG" 2>/dev/null)
+  if [ -z "$key_ref_json" ]; then
+    say audit-vault-key FAIL "vault key reference missing from config"
+    return
+  fi
+  key_ref_type=$(printf '%s' "$key_ref_json" | jq -r '.type // .provider // empty' 2>/dev/null)
+  case "$key_ref_type" in
+    protected-file|file)
+      key_file=$(printf '%s' "$key_ref_json" | jq -r '.path // empty' 2>/dev/null)
+      case "$key_file" in
+        /*) ;;
+        *)
+          say audit-vault-key FAIL "protected vault key file reference must be absolute"
+          return
+          ;;
+      esac
+      if [ ! -f "$key_file" ] || [ -L "$key_file" ]; then
+        say audit-vault-key FAIL "protected vault key file is missing or invalid"
+        return
+      fi
+      if [ ! -O "$key_file" ]; then
+        say audit-vault-key FAIL "protected vault key file is not owned by the current user"
+        return
+      fi
+      if ! exec 9<"$key_file"; then
+        say audit-vault-key FAIL "protected vault key file is unavailable"
+        return
+      fi
+      key_mode=$(node -e 'process.stdout.write((require("node:fs").fstatSync(9).mode & 0o7777).toString(8))' 2>/dev/null || echo invalid)
+      exec 9<&-
+      if [ "$key_mode" = "600" ]; then
+        say audit-vault-key PASS "protected vault key file reference and permissions are valid"
+      else
+        say audit-vault-key FAIL "protected vault key file must use mode 0600"
+      fi
+      ;;
+    os-keychain|keychain)
+      key_name=$(printf '%s' "$key_ref_json" | jq -r '.name // .reference // empty' 2>/dev/null)
+      if [ -z "$key_name" ] || ! command -v security >/dev/null 2>&1; then
+        say audit-vault-key FAIL "OS keychain reference is missing or unavailable"
+        return
+      fi
+      if security dump-keychain 2>/dev/null | {
+        while IFS= read -r keychain_line; do
+          case "$keychain_line" in
+            *\""$key_name\""*) exit 0 ;;
+          esac
+        done
+        exit 1
+      }; then
+        say audit-vault-key PASS "OS keychain reference exists"
+      else
+        say audit-vault-key FAIL "OS keychain reference is unavailable"
+      fi
+      ;;
+    *)
+      say audit-vault-key FAIL "vault key reference provider is invalid"
+      ;;
+  esac
+}
+
 if gh auth status >/dev/null 2>&1; then
   say gh-auth PASS "$(gh api user -q .login 2>/dev/null || echo authenticated)"
 else
@@ -74,6 +155,7 @@ check_clone() {
 }
 
 if [ -f "$CONFIG" ]; then
+  check_audit_vault_reference
   for dep in client-lp-tracking ghl-workflow-api-docs; do
     check_clone "$dep" "dep:$dep" "not cloned; doctor will clone it"
   done
