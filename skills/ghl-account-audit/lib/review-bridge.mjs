@@ -292,7 +292,7 @@ function validateJudgment(judgment, state) {
   } else if (
     expectedAvailability !== 'AVAILABLE'
     || !plain(judgment.scores)
-    || Object.keys(judgment.scores).length === 0
+    || Object.keys(judgment.scores).length !== SCORE_KEYS.size
     || Object.keys(judgment.scores).some((key) => !SCORE_KEYS.has(key))
     || Object.values(judgment.scores).some((score) => (
       !Number.isInteger(score) || score < 1 || score > 5

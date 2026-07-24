@@ -1,7 +1,16 @@
 import { sha256 } from './canonical.mjs';
 
 const REF = /^(?:obj|psn|ev|actor)_[a-f0-9]{16,64}$/u;
-const SAFE_TOKEN = /^[a-z0-9][a-z0-9_.:-]{0,127}$/u;
+const OPAQUE_SEED = /^seed_[a-f0-9]{16,64}$/u;
+const OPAQUE_SOURCE = /^src_[a-f0-9]{16,64}$/u;
+const OPAQUE_STAGE = /^stage_[a-f0-9]{16,64}$/u;
+const CATEGORIES = Object.freeze({
+  occurredAtBand: new Set(['early_week', 'mid_week', 'late_week']),
+  outcome: new Set(['open', 'lost', 'won', 'booked', 'no_show', 'cancelled', 'unknown']),
+  responseTimeBand: new Set(['instant', 'fast', 'moderate', 'slow', 'unknown']),
+  callDurationBand: new Set(['none', 'short', 'medium', 'long', 'unknown']),
+  handoffState: new Set(['not_required', 'pending', 'completed', 'failed', 'unknown']),
+});
 const MANDATORY = new Set([
   'complaint',
   'opt_out',
@@ -25,10 +34,6 @@ function safeRef(value, prefix) {
   return typeof value === 'string' && REF.test(value) && value.startsWith(`${prefix}_`);
 }
 
-function token(value) {
-  return typeof value === 'string' && SAFE_TOKEN.test(value);
-}
-
 function normalize(interaction) {
   if (
     !interaction
@@ -41,6 +46,18 @@ function normalize(interaction) {
     || !Array.isArray(interaction.flags)
     || !interaction.flags.every((value) => MANDATORY.has(value))
   ) throw codedError('SAMPLE_INTERACTION_INVALID', TypeError);
+  if (
+    !CATEGORIES.occurredAtBand.has(interaction.occurredAtBand)
+    || !OPAQUE_SOURCE.test(interaction.source)
+    || !OPAQUE_STAGE.test(interaction.stage)
+    || !CATEGORIES.outcome.has(interaction.outcome)
+    || !CATEGORIES.responseTimeBand.has(interaction.responseTimeBand)
+    || !CATEGORIES.callDurationBand.has(interaction.callDurationBand)
+    || !CATEGORIES.handoffState.has(interaction.handoffState)
+    || !safeRef(interaction.ownerRef, 'actor')
+  ) {
+    throw codedError('SAMPLE_INTERACTION_INVALID', TypeError);
+  }
   const fields = [
     interaction.occurredAtBand,
     interaction.source,
@@ -50,9 +67,6 @@ function normalize(interaction) {
     interaction.callDurationBand,
     interaction.handoffState,
   ];
-  if (!fields.every(token) || !safeRef(interaction.ownerRef, 'actor')) {
-    throw codedError('SAMPLE_INTERACTION_INVALID', TypeError);
-  }
   const stratum = fields.join('|');
   return {
     interactionRef: interaction.interactionRef,
@@ -76,7 +90,7 @@ export function selectConversationSample({
   if (
     !Array.isArray(interactions)
     || typeof seed !== 'string'
-    || seed.length === 0
+    || !OPAQUE_SEED.test(seed)
     || !Number.isInteger(censusThreshold)
     || censusThreshold < 0
     || !Number.isInteger(maxSample)

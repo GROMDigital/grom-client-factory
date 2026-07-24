@@ -311,6 +311,68 @@ test('real Task 5 graph preserves explicit cohort instances for re-entry dedupli
   );
 });
 
+test('real Task 5 graph preserves collected revenue and rejects missing, negative, or nonfinite amounts', () => {
+  const value = gromFixture();
+  const revenueEvent = {
+    recordType: 'journey_event',
+    nativeId: 'event-collected-revenue',
+    subjectNativeId: 'contact-1',
+    stage: 'collected_revenue',
+    journeyId: 'agency_new_business',
+    journeyInstanceId: 'journey_agency_new_business',
+    eventTime: '2026-07-15T02:00:00.000Z',
+    evidenceRef: 'ev_f0f0f0f0f0f0f0f0',
+    revenueAmount: 2500,
+  };
+  value.collections[0].items.push(revenueEvent);
+  value.collections[0].page.reportedCount += 1;
+  value.collections[0].page.collectedCount += 1;
+  const records = normalizeEvidence(value.collections, value.context);
+  const realGraph = buildEvidenceGraph({ records, context: value.context, profile: gromProfile });
+  const revenueNode = realGraph.nodes.find(({ evidenceRefs }) => (
+    evidenceRefs.includes(revenueEvent.evidenceRef)
+  ));
+  assert.equal(revenueNode.revenueAmount, 2500);
+  const revenueMetric = computeJourneyMetrics({
+    graph: realGraph,
+    metricContracts: {
+      version: '1.0.0',
+      edges: [contract('revenue', 'won', 'collected_revenue', {
+        journeyId: 'agency_new_business',
+        journeyInstanceId: 'journey_agency_new_business',
+        allowedLag: { amount: 2, unit: 'days' },
+        minimumSample: 1,
+      })],
+    },
+    windows: buildWindows({
+      cutoff: '2026-07-20T10:00:00Z',
+      timezone: 'UTC',
+      maturityDays: 0,
+    }),
+  }).metrics.currentClosedWeek.revenue;
+  assert.deepEqual(
+    [revenueMetric.state, revenueMetric.numerator, revenueMetric.denominator, revenueMetric.value],
+    ['OBSERVED', 1, 1, 2500],
+  );
+
+  for (const invalidAmount of [undefined, -1, Number.POSITIVE_INFINITY]) {
+    const invalid = gromFixture();
+    invalid.collections[0].items.push({
+      ...revenueEvent,
+      ...(invalidAmount === undefined ? {} : { revenueAmount: invalidAmount }),
+    });
+    if (invalidAmount === undefined) {
+      delete invalid.collections[0].items.at(-1).revenueAmount;
+    }
+    invalid.collections[0].page.reportedCount += 1;
+    invalid.collections[0].page.collectedCount += 1;
+    assert.throws(
+      () => normalizeEvidence(invalid.collections, invalid.context),
+      /EVIDENCE_RECORD_INVALID/,
+    );
+  }
+});
+
 test('versioned re-entry rules either preserve distinct cohort instances or deduplicate the subject', () => {
   const windows = buildWindows({
     cutoff: '2026-03-16T09:00:00-07:00',

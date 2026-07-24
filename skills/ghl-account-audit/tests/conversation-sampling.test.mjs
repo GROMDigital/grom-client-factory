@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { selectConversationSample } from '../lib/sampling.mjs';
 
+const SEED = 'seed_1111111111111111';
+
 function interaction(index, extra = {}) {
   const hex = index.toString(16).padStart(16, '0');
   return {
@@ -9,8 +11,8 @@ function interaction(index, extra = {}) {
     subjectRef: `psn_${hex}`,
     evidenceRefs: [`ev_${hex}`],
     occurredAtBand: index % 2 ? 'late_week' : 'early_week',
-    source: index % 3 ? 'meta' : 'organic',
-    stage: index % 4 ? 'engaged' : 'lost',
+    source: index % 3 ? 'src_1111111111111111' : 'src_2222222222222222',
+    stage: index % 4 ? 'stage_1111111111111111' : 'stage_2222222222222222',
     ownerRef: `actor_${(index % 5).toString(16).padStart(16, '0')}`,
     outcome: index % 4 ? 'open' : 'lost',
     responseTimeBand: index % 2 ? 'fast' : 'slow',
@@ -28,7 +30,7 @@ test('eligible universes of 50 or fewer are a deterministic census without priva
   const interactions = Array.from({ length: 50 }, (_, index) => interaction(index + 1));
   const sample = selectConversationSample({
     interactions,
-    seed: 'week-2026-13',
+    seed: SEED,
     censusThreshold: 50,
     maxSample: 50,
   });
@@ -50,13 +52,13 @@ test('above 50 sampling is input-order independent, reproducibly stratified, and
     index < flags.length ? { flags: [flags[index]] } : {}));
   const forward = selectConversationSample({
     interactions,
-    seed: 'week-2026-13',
+    seed: SEED,
     censusThreshold: 50,
     maxSample: 30,
   });
   const reversed = selectConversationSample({
     interactions: structuredClone(interactions).reverse(),
-    seed: 'week-2026-13',
+    seed: SEED,
     censusThreshold: 50,
     maxSample: 30,
   });
@@ -84,15 +86,15 @@ test('above 50 sampling is input-order independent, reproducibly stratified, and
 test('sampling rejects unsafe refs, duplicate interactions, and impossible contracts', () => {
   assert.throws(() => selectConversationSample({
     interactions: [interaction(1, { interactionRef: 'raw_secret' })],
-    seed: 'seed',
+    seed: SEED,
   }), /SAMPLE_INTERACTION_INVALID/);
   assert.throws(() => selectConversationSample({
     interactions: [interaction(1), interaction(1)],
-    seed: 'seed',
+    seed: SEED,
   }), /SAMPLE_INTERACTION_DUPLICATE/);
   assert.throws(() => selectConversationSample({
     interactions: [interaction(1)],
-    seed: 'seed',
+    seed: SEED,
     censusThreshold: 50,
     maxSample: 0,
   }), /SAMPLE_CONTRACT_INVALID/);
@@ -104,7 +106,7 @@ test('mandatory cases exceeding maxSample remain included and are disclosed as d
   }));
   const sample = selectConversationSample({
     interactions,
-    seed: 'mandatory-overflow',
+    seed: SEED,
     censusThreshold: 50,
     maxSample: 50,
   });
@@ -116,4 +118,25 @@ test('mandatory cases exceeding maxSample remain included and are disclosed as d
   assert.ok(sample.selections.every(({ inclusionProbability, selectionReasons }) => (
     inclusionProbability === 1 && selectionReasons.includes('mandatory:complaint')
   )));
+});
+
+test('seed and categorical strata reject safe-looking PII, credentials, and key references', () => {
+  for (const leaked of ['john.smith', '15551234567', 'credential_supersecret']) {
+    assert.throws(() => selectConversationSample({
+      interactions: [interaction(1, { source: leaked })],
+      seed: SEED,
+    }), /SAMPLE_INTERACTION_INVALID/);
+  }
+  assert.throws(() => selectConversationSample({
+    interactions: [interaction(1)],
+    seed: 'credential_supersecret',
+  }), /SAMPLE_CONTRACT_INVALID/);
+  const sample = selectConversationSample({
+    interactions: [interaction(1)],
+    seed: SEED,
+  });
+  const published = JSON.stringify(sample);
+  for (const leaked of ['john.smith', '15551234567', 'credential_supersecret']) {
+    assert.equal(published.includes(leaked), false);
+  }
 });

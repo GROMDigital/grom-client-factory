@@ -254,6 +254,8 @@ function computeEdge(graph, nodes, contract, window, analysisCutoff, matureAsOf)
 
   let numerator = 0;
   let value = 0;
+  const isRevenueMetric = contract.toStage === 'collected_revenue'
+    || contract.edgeId.toLowerCase().includes('revenue');
   for (const [key, from] of mature) {
     const fromTime = instant(from.eventTime);
     const deadline = addLag(from.eventTime, contract.allowedLag, window);
@@ -268,6 +270,10 @@ function computeEdge(graph, nodes, contract, window, analysisCutoff, matureAsOf)
         ) <= 0
     ));
     if (to) {
+      if (
+        isRevenueMetric
+        && (!Number.isFinite(to.revenueAmount) || to.revenueAmount < 0)
+      ) return unknownMetric(window, threshold, 'INVALID_REVENUE_EVIDENCE');
       numerator += 1;
       if (Number.isFinite(to.revenueAmount)) value += to.revenueAmount;
     }
@@ -285,7 +291,7 @@ function computeEdge(graph, nodes, contract, window, analysisCutoff, matureAsOf)
     coverage: 'COMPLETE',
     reasonCode: denominator === 0 ? 'NO_ELIGIBLE_POPULATION' : null,
   };
-  if (contract.toStage === 'collected_revenue' || value !== 0) result.value = value;
+  if (isRevenueMetric || value !== 0) result.value = denominator === 0 ? null : value;
   return result;
 }
 

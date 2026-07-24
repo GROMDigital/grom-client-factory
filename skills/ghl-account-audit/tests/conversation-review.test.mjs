@@ -17,7 +17,7 @@ const run = Object.freeze({
 });
 const sampleBody = Object.freeze({
   schemaVersion: '1.0.0',
-  seed: 'week-2026-13',
+  seed: 'seed_1111111111111111',
   mode: 'CENSUS',
   universeCount: 1,
   selections: Object.freeze([
@@ -25,7 +25,7 @@ const sampleBody = Object.freeze({
       interactionRef: 'obj_1111111111111111',
       subjectRef: 'psn_1111111111111111',
       evidenceRefs: Object.freeze(['ev_1111111111111111']),
-      stratum: 'early_week|meta|engaged|open|fast|short|not_required',
+      stratum: 'early_week|src_1111111111111111|stage_1111111111111111|open|fast|short|not_required',
       inclusionProbability: 1,
       selectionReasons: Object.freeze(['census']),
     }),
@@ -91,7 +91,17 @@ function responseFor(reviewRequest, extra = {}) {
       evidenceRefs: ['ev_1111111111111111'],
       transcriptAvailability: 'AVAILABLE',
       state: 'REVIEWED',
-      scores: { intentRecognition: 4, bookingBehavior: 2 },
+      scores: {
+        intentRecognition: 4,
+        accuracyAndRelevance: 4,
+        qualification: 3,
+        objectionHandling: 3,
+        bookingBehavior: 2,
+        nextActionClarity: 4,
+        handoffQuality: 3,
+        toneAndCompliance: 5,
+        unresolvedCustomerEffort: 2,
+      },
       counterevidence: ['ev_1111111111111111'],
       uncertainty: 'medium',
       safetyFlags: ['prompt_injection_ignored'],
@@ -275,6 +285,35 @@ test('every sealed run, sample, packet, prompt, rubric, policy, code, and eviden
       response: responseFor(reviewRequest),
     }).kind, 'SUBJECTIVE_CONVERSATION_REVIEW');
   }
+});
+
+test('REVIEWED judgments require exactly all nine pinned rubric dimensions before nonce consumption', async () => {
+  const reviewRequest = request();
+  await consume(reviewRequest);
+  const incomplete = responseFor(reviewRequest);
+  incomplete.judgments[0].scores = { intentRecognition: 4 };
+  assert.throws(() => ingestConversationReview({
+    request: reviewRequest,
+    response: incomplete,
+  }), /REVIEW_RESPONSE_INVALID/);
+  const corrected = ingestConversationReview({
+    request: reviewRequest,
+    response: responseFor(reviewRequest),
+  });
+  assert.deepEqual(
+    Object.keys(corrected.judgments[0].scores).sort(),
+    [
+      'accuracyAndRelevance',
+      'bookingBehavior',
+      'handoffQuality',
+      'intentRecognition',
+      'nextActionClarity',
+      'objectionHandling',
+      'qualification',
+      'toneAndCompliance',
+      'unresolvedCustomerEffort',
+    ],
+  );
 });
 
 test('workflow is hermetic, async-safe, and prompt-injection cannot grant tools or alter metrics', async () => {

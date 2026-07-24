@@ -124,6 +124,14 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
       Object.hasOwn(item, 'cohortInstanceRef')
       && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef)
     )
+    || (
+      Object.hasOwn(item, 'revenueAmount')
+      && (
+        typeof item.revenueAmount !== 'number'
+        || !Number.isFinite(item.revenueAmount)
+        || item.revenueAmount < 0
+      )
+    )
   ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
   const effectiveClassification = provenance.completeness === 'COMPLETE'
     ? (item.classification ?? 'OBSERVED')
@@ -151,6 +159,16 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
     effectiveClassification === 'OBSERVED'
     && item.recordType === 'journey_event'
     && (typeof item.stage !== 'string' || !identifierPattern.test(item.stage))
+  ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
+  if (
+    effectiveClassification === 'OBSERVED'
+    && item.recordType === 'journey_event'
+    && item.stage === 'collected_revenue'
+    && (
+      typeof item.revenueAmount !== 'number'
+      || !Number.isFinite(item.revenueAmount)
+      || item.revenueAmount < 0
+    )
   ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
   if (
     effectiveClassification === 'OBSERVED'
@@ -264,10 +282,16 @@ export function normalizeEvidence(records, context) {
       continue;
     }
     for (const item of collection.items) {
+      let sortKey;
+      try {
+        sortKey = canonicalJson({ item, provenance });
+      } catch {
+        throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
+      }
       pending.push({
         item,
         provenance,
-        sortKey: canonicalJson({ item, provenance }),
+        sortKey,
       });
     }
   }

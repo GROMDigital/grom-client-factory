@@ -107,6 +107,9 @@ function recordNode(record) {
   ]) {
     if (typeof record[field] === 'string') node[field] = record[field];
   }
+  if (Number.isFinite(record.revenueAmount) && record.revenueAmount >= 0) {
+    node.revenueAmount = record.revenueAmount;
+  }
   return node;
 }
 
