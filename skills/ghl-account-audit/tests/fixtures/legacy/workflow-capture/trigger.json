@@ -1,0 +1,8 @@
+{
+  "triggers": [
+    {
+      "id": "trigger-1",
+      "type": "facebook_lead_form"
+    }
+  ]
+}

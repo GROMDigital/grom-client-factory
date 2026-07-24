@@ -16,7 +16,9 @@ finding needs fixing, it goes in the report for a human or a mutating skill.
 2. Resolve the client folder (argument, else cwd) and target location ID
    (argument, else `client-manifest.json`.ghl_location_id, else ask). Confirm
    both with the user before fetching anything.
-3. Ask which mode: `capture` (default), `verify`, or `harvest`.
+3. Ask which mode: `capture` (default), `verify`, `harvest`, or explicit
+   `weekly`. An omitted mode always means `capture`; never select `weekly`
+   implicitly.
 
 ## Output convention (all modes)
 
@@ -96,6 +98,13 @@ From the fresh sweep, fill `client-manifest.json`:
 - Never invent an ID: anything not found live stays null and is listed in the
   report
 Then run `golive_check.mjs` and include its output in the report.
+
+## Mode: weekly (explicit commercial diagnostic)
+
+Invoke the checked-in Task 9 audit CLI explicitly for the governed weekly
+path. A public-only or otherwise incomplete evidence run reports
+`complete_partial`. Proposed fixes remain local proposal artifacts for approval
+and are never executed by this skill.
 
 ## Boundaries (inherited + plugin)
 

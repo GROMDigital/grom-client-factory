@@ -1,0 +1,19 @@
+{
+  "_id": "workflow-1",
+  "locationId": "L1",
+  "name": "Lead Nurture",
+  "status": "PUBLISHED",
+  "workflowData": {
+    "templates": [
+      {
+        "id": "step-1",
+        "order": 1,
+        "attributes": {
+          "notificationType": "internal"
+        },
+        "name": "Notify team",
+        "type": "notification"
+      }
+    ]
+  }
+}
