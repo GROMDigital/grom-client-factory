@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { sha256 } from '../lib/canonical.mjs';
+import { canonicalJson, sha256 } from '../lib/canonical.mjs';
 import { buildEvidenceGraph } from '../lib/evidence-graph.mjs';
 import { normalizeEvidence } from '../lib/normalize.mjs';
 
@@ -108,6 +108,82 @@ test('normalization rejects journey records without canonical event identity and
     () => normalizeEvidence(wrongInstance.collections, wrongInstance.context),
     /EVIDENCE_RECORD_INVALID/,
   );
+
+  const missingStage = fixture('grom-dual-journey-portal-complete');
+  delete missingStage.collections[0].items
+    .find(({ recordType }) => recordType === 'journey_event').stage;
+  assert.throws(
+    () => normalizeEvidence(missingStage.collections, missingStage.context),
+    /EVIDENCE_RECORD_INVALID/,
+  );
+
+  const missingMilestone = fixture('grom-dual-journey-portal-complete');
+  delete missingMilestone.collections[1].items[0].milestone;
+  assert.throws(
+    () => normalizeEvidence(missingMilestone.collections, missingMilestone.context),
+    /EVIDENCE_RECORD_INVALID/,
+  );
+
+  const noIdentity = fixture('grom-dual-journey-portal-complete');
+  const event = noIdentity.collections[0].items
+    .find(({ nativeId }) => nativeId === 'event-onboarding');
+  delete event.subjectNativeId;
+  delete event.organizationNativeId;
+  delete event.opportunityNativeId;
+  assert.throws(
+    () => normalizeEvidence(noIdentity.collections, noIdentity.context),
+    /EVIDENCE_RECORD_INVALID/,
+  );
+
+  const invalidStage = fixture('grom-dual-journey-portal-complete');
+  invalidStage.collections[0].items
+    .find(({ recordType }) => recordType === 'journey_event').stage = 'Invalid Stage';
+  assert.throws(
+    () => normalizeEvidence(invalidStage.collections, invalidStage.context),
+    /EVIDENCE_RECORD_INVALID/,
+  );
+
+  const invalidMilestone = fixture('grom-dual-journey-portal-complete');
+  invalidMilestone.collections[1].items[0].milestone = 'invalid-milestone';
+  assert.throws(
+    () => normalizeEvidence(invalidMilestone.collections, invalidMilestone.context),
+    /EVIDENCE_RECORD_INVALID/,
+  );
+});
+
+test('generated refs and record IDs are stable under item reversal including exact duplicates', () => {
+  const value = fixture('grom-dual-journey-portal-complete');
+  for (const collection of value.collections) {
+    for (const item of collection.items) delete item.evidenceRef;
+  }
+  const duplicate = structuredClone(value.collections[0].items[0]);
+  value.collections[0].items.push(duplicate);
+  value.collections[0].page.reportedCount += 1;
+  value.collections[0].page.collectedCount += 1;
+
+  const forward = normalizeEvidence(value.collections, value.context);
+  const reversedCollections = structuredClone(value.collections).reverse();
+  for (const collection of reversedCollections) collection.items.reverse();
+  const reversed = normalizeEvidence(reversedCollections, value.context);
+
+  assert.equal(new Set(forward.map(({ recordId }) => recordId)).size, forward.length);
+  assert.equal(sha256(forward), sha256(reversed));
+  assert.deepEqual(
+    forward.map(({ evidenceRef }) => evidenceRef),
+    reversed.map(({ evidenceRef }) => evidenceRef),
+  );
+  assert.equal(
+    sha256(buildEvidenceGraph({
+      records: forward,
+      context: value.context,
+      profile: profileById.grom_internal,
+    })),
+    sha256(buildEvidenceGraph({
+      records: reversed,
+      context: value.context,
+      profile: profileById.grom_internal,
+    })),
+  );
 });
 
 test('native IDs outrank execution metadata and deterministic composites outrank fuzzy links', () => {
@@ -190,11 +266,12 @@ test('portal unavailable is conditional UNKNOWN only and ambiguous portal links 
   assert.equal(unavailable.conflicts.length, 0);
 
   const ambiguous = build('grom-portal-ambiguous-link').graph;
-  assert.ok(ambiguous.edges.some(({ type, joinMethod }) => (
+  const ambiguousEdges = ambiguous.edges.filter(({ type, joinMethod }) => (
     type === 'inferred_match' && joinMethod === 'fuzzy_candidate'
-  )));
+  ));
+  assert.equal(ambiguousEdges.length, 2);
   assert.equal(ambiguous.edges.some(({ type }) => type === 'preceded'), false);
-  assert.ok(ambiguous.unresolvedJoins.some(({ reason }) => reason === 'FUZZY_ONLY'));
+  assert.ok(ambiguous.unresolvedJoins.some(({ reason }) => reason === 'AMBIGUOUS_IDENTITY'));
 });
 
 test('ambiguous composite identity remains unresolved and cannot prove progression', () => {
@@ -245,6 +322,94 @@ test('historical workflow binding requires the effective definition hash', () =>
   )));
 });
 
+test('native contact claims aggregate evidence and preserve material contradictions', () => {
+  const { graph } = build('grom-dual-journey-portal-complete', (value) => {
+    const original = value.collections[0].items
+      .find(({ recordType, nativeId }) => recordType === 'contact' && nativeId === 'contact-1');
+    original.normalizedEmail = 'original@example.test';
+    original.normalizedPhone = '+15551239999';
+    value.collections[0].items.push({
+      recordType: 'contact',
+      nativeId: 'contact-1',
+      normalizedEmail: 'contradiction@example.test',
+      normalizedPhone: '+15551230000',
+      eventTime: '2026-07-13T01:01:00.000Z',
+      evidenceRef: 'ev_f0f0f0f0f0f0f0f0',
+    });
+    value.collections[0].page.reportedCount += 1;
+    value.collections[0].page.collectedCount += 1;
+    return value;
+  });
+  const entity = graph.nodes.find(({ type, nativeId }) => (
+    type === 'contact_entity' && nativeId === 'contact-1'
+  ));
+  assert.deepEqual(
+    entity.evidenceRefs,
+    ['ev_4444444444444444', 'ev_f0f0f0f0f0f0f0f0'],
+  );
+  const contradiction = graph.conflicts.find(({ type, evidenceRefs }) => (
+    type === 'contradictory_native_identity_claim'
+      && evidenceRefs.includes('ev_4444444444444444')
+      && evidenceRefs.includes('ev_f0f0f0f0f0f0f0f0')
+  ));
+  assert.ok(contradiction);
+  assert.doesNotMatch(
+    canonicalJson(contradiction),
+    /original@example|contradiction@example|1555123/u,
+  );
+  const downstream = graph.edges.find(({ type, toNodeId }) => (
+    type === 'identity_exact'
+      && graph.nodes.some(({ nodeId, nativeId }) => (
+        nodeId === toNodeId && nativeId === 'execution-1'
+      ))
+  ));
+  assert.ok(downstream.evidenceRefs.includes('ev_4444444444444444'));
+  assert.ok(downstream.evidenceRefs.includes('ev_f0f0f0f0f0f0f0f0'));
+});
+
+test('NOT_APPLICABLE and nested mixed-location evidence cannot prove edges', () => {
+  const value = fixture('grom-dual-journey-portal-complete');
+  const enquiry = value.collections[0].items
+    .find(({ nativeId }) => nativeId === 'event-enquiry');
+  enquiry.classification = 'NOT_APPLICABLE';
+  const records = normalizeEvidence(value.collections, value.context);
+  const graph = buildEvidenceGraph({
+    records,
+    context: value.context,
+    profile: profileById.grom_internal,
+  });
+  assert.equal(graph.edges.some(({ evidenceRefs }) => (
+    evidenceRefs.includes('ev_5555555555555555')
+  )), false);
+
+  const mixed = fixture('grom-dual-journey-portal-complete');
+  mixed.collections[0].items[0].metadata = { locationId: 'OTHER' };
+  assert.throws(
+    () => normalizeEvidence(mixed.collections, mixed.context),
+    /EVIDENCE_LOCATION_MISMATCH/,
+  );
+});
+
+test('normalized and graph outputs are deeply frozen', () => {
+  const value = fixture('grom-dual-journey-portal-complete');
+  const records = normalizeEvidence(value.collections, value.context);
+  const graph = buildEvidenceGraph({
+    records,
+    context: value.context,
+    profile: profileById.grom_internal,
+  });
+
+  assert.throws(() => { records[0].classification = 'UNKNOWN'; }, TypeError);
+  assert.throws(() => {
+    records[0].provenance.requestedWindow.from = '2020-01-01T00:00:00.000Z';
+  }, TypeError);
+  assert.throws(() => { graph.nodes[0].type = 'mutated'; }, TypeError);
+  assert.throws(() => { graph.edges[0].type = 'mutated'; }, TypeError);
+  assert.throws(() => { graph.edges[0].fromNodeId = 'node_missing'; }, TypeError);
+  assert.throws(() => { graph.edges[0].evidenceRefs.push('ev_0000000000000000'); }, TypeError);
+  assert.throws(() => { graph.nodes.push({ nodeId: 'node_missing' }); }, TypeError);
+});
+
 test('partial or incomplete records cannot prove progression and all graph output is deterministic', () => {
   const value = fixture('grom-dual-journey-portal-complete');
   value.collections[0].page.complete = false;
@@ -270,7 +435,7 @@ test('partial or incomplete records cannot prove progression and all graph outpu
   assert.equal(sha256(first.graph), sha256(reversed));
   assert.equal(
     sha256(first.graph),
-    '76f1e4de438e3a9df54bfac2c5b1d31ebe77ed1402b38618f2b2b4eebfaf5369',
+    '5e0d8653a376d3256c46bb696960cdb680671460953eb5da065f8b18bc346e91',
   );
   assert.ok(first.graph.edges.every((edge) => (
     Object.keys(edge).sort().join(',') === [

@@ -24,13 +24,20 @@
           "normalizedEmail": "client@example.test",
           "eventTime": "2026-07-13T01:00:00.000Z",
           "evidenceRef": "ev_cccccccccccccccc"
+        },
+        {
+          "recordType": "contact",
+          "nativeId": "contact-2",
+          "normalizedEmail": "client@example.test",
+          "eventTime": "2026-07-13T01:01:00.000Z",
+          "evidenceRef": "ev_cdcddddddddddddd"
         }
       ],
       "page": {
         "cursor": null,
         "nextCursor": null,
-        "reportedCount": 1,
-        "collectedCount": 1,
+        "reportedCount": 2,
+        "collectedCount": 2,
         "complete": true,
         "truncated": false
       }

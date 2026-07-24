@@ -27,6 +27,13 @@ function isCanonicalTimestamp(value) {
   return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
 }
 
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
+  return Object.freeze(value);
+}
+
 function assertLocation(value, locationId, seen = new WeakSet()) {
   if (!value || typeof value !== 'object') return;
   if (seen.has(value)) throw codedError('EVIDENCE_VALUE_INVALID', TypeError);
@@ -99,7 +106,7 @@ function validateCollection(collection, locationId) {
   }
 }
 
-function normalizeItem(item, provenance, index) {
+function normalizeItem(item, provenance, occurrenceOrdinal) {
   if (!isPlainObject(item) || typeof item.recordType !== 'string' || item.recordType.length === 0) {
     throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
   }
@@ -114,6 +121,9 @@ function normalizeItem(item, provenance, index) {
       && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash)
     )
   ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
+  const effectiveClassification = provenance.completeness === 'COMPLETE'
+    ? (item.classification ?? 'OBSERVED')
+    : 'UNKNOWN';
   const eventTypes = new Set([
     'journey_event',
     'portal_milestone',
@@ -130,6 +140,34 @@ function normalizeItem(item, provenance, index) {
       || item.journeyId.length === 0
       || typeof item.journeyInstanceId !== 'string'
       || item.journeyInstanceId.length === 0
+    )
+  ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
+  const identifierPattern = /^[a-z][a-z0-9_]{0,127}$/u;
+  if (
+    effectiveClassification === 'OBSERVED'
+    && item.recordType === 'journey_event'
+    && (typeof item.stage !== 'string' || !identifierPattern.test(item.stage))
+  ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
+  if (
+    effectiveClassification === 'OBSERVED'
+    && item.recordType === 'portal_milestone'
+    && (typeof item.milestone !== 'string' || !identifierPattern.test(item.milestone))
+  ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
+  if (
+    effectiveClassification === 'OBSERVED'
+    && ['journey_event', 'portal_milestone'].includes(item.recordType)
+    && !(
+      (typeof item.subjectNativeId === 'string' && item.subjectNativeId.length > 0)
+      || (
+        typeof item.organizationNativeId === 'string'
+        && item.organizationNativeId.length > 0
+        && (
+          (typeof item.opportunityNativeId === 'string' && item.opportunityNativeId.length > 0)
+          || (typeof item.projectNativeId === 'string' && item.projectNativeId.length > 0)
+        )
+      )
+      || (typeof item.normalizedEmail === 'string' && item.normalizedEmail.length > 0)
+      || (typeof item.normalizedPhone === 'string' && item.normalizedPhone.length > 0)
     )
   ) throw codedError('EVIDENCE_RECORD_INVALID', TypeError);
   if (
@@ -167,7 +205,7 @@ function normalizeItem(item, provenance, index) {
   const sourceItem = clone(item, 'EVIDENCE_RECORD_INVALID');
   const evidenceRef = typeof sourceItem.evidenceRef === 'string'
     ? sourceItem.evidenceRef
-    : `ev_${sha256({ provenance, index, sourceItem }).slice(0, 32)}`;
+    : `ev_${sha256({ provenance, occurrenceOrdinal, sourceItem }).slice(0, 32)}`;
   const canonical = {
     ...sourceItem,
     evidenceRef,
@@ -177,12 +215,10 @@ function normalizeItem(item, provenance, index) {
     requestedWindow: provenance.requestedWindow,
     appliedWindow: provenance.appliedWindow,
     capturedAt: provenance.capturedAt,
-    classification: provenance.completeness === 'COMPLETE'
-      ? (sourceItem.classification ?? 'OBSERVED')
-      : 'UNKNOWN',
+    classification: effectiveClassification,
     provenance,
   };
-  canonical.recordId = `record_${sha256(canonical).slice(0, 32)}`;
+  canonical.recordId = `record_${sha256({ canonical, occurrenceOrdinal }).slice(0, 32)}`;
   return canonical;
 }
 
@@ -195,10 +231,10 @@ export function normalizeEvidence(records, context) {
     || context.locationId.length === 0
   ) throw codedError('EVIDENCE_NORMALIZATION_INPUT_INVALID', TypeError);
 
-  const normalized = [];
+  const pending = [];
   for (const collection of records) {
     validateCollection(collection, context.locationId);
-    const provenance = Object.freeze({
+    const provenance = {
       source: collection.source,
       operationId: collection.operationId,
       boundLocationId: collection.boundLocationId,
@@ -207,20 +243,38 @@ export function normalizeEvidence(records, context) {
       capturedAt: collection.capturedAt,
       completeness: collection.page.complete ? 'COMPLETE' : 'INCOMPLETE',
       incompleteReason: collection.page.complete ? null : collection.incompleteReason,
-    });
+    };
     assertLocation(collection.items, context.locationId);
     if (collection.items.length === 0 && !collection.page.complete) {
-      normalized.push(normalizeItem({
+      const item = {
         recordType: 'collection_status',
         status: 'UNKNOWN',
         reason: collection.incompleteReason,
-      }, provenance, 0));
+      };
+      pending.push({
+        item,
+        provenance,
+        sortKey: canonicalJson({ item, provenance }),
+      });
       continue;
     }
-    collection.items.forEach((item, index) => {
-      normalized.push(normalizeItem(item, provenance, index));
-    });
+    for (const item of collection.items) {
+      pending.push({
+        item,
+        provenance,
+        sortKey: canonicalJson({ item, provenance }),
+      });
+    }
+  }
+  pending.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  const normalized = [];
+  let priorKey = null;
+  let occurrenceOrdinal = -1;
+  for (const entry of pending) {
+    occurrenceOrdinal = entry.sortKey === priorKey ? occurrenceOrdinal + 1 : 0;
+    priorKey = entry.sortKey;
+    normalized.push(normalizeItem(entry.item, entry.provenance, occurrenceOrdinal));
   }
   normalized.sort((left, right) => left.recordId.localeCompare(right.recordId));
-  return Object.freeze(normalized.map((record) => Object.freeze(record)));
+  return deepFreeze(normalized);
 }

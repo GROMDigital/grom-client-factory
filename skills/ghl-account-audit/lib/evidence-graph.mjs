@@ -20,6 +20,13 @@ function stableId(prefix, value) {
   return `${prefix}_${sha256(value).slice(0, 32)}`;
 }
 
+function deepFreeze(value, seen = new WeakSet()) {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
+  return Object.freeze(value);
+}
+
 function evidenceRefs(...records) {
   return [...new Set(records.flatMap((record) => (
     typeof record?.evidenceRef === 'string' ? [record.evidenceRef] : []
@@ -209,37 +216,78 @@ export function buildEvidenceGraph({ records, context, profile }) {
   const contactsByNativeId = new Map();
   const contactsByFuzzyKey = new Map();
   for (const contact of contacts) {
+    contactsByNativeId.set(
+      contact.nativeId,
+      [...(contactsByNativeId.get(contact.nativeId) ?? []), contact],
+    );
+  }
+  for (const [nativeId, claimsValue] of contactsByNativeId) {
+    const claims = [...claimsValue].sort((left, right) => left.recordId.localeCompare(right.recordId));
     const entity = addNode({
       nodeId: stableId('contact', {
         locationId: context.locationId,
-        nativeId: contact.nativeId,
+        nativeId,
       }),
       type: 'contact_entity',
-      nativeId: contact.nativeId,
-      evidenceRefs: evidenceRefs(contact),
+      nativeId,
+      evidenceRefs: evidenceRefs(...claims),
     });
-    contactsByNativeId.set(contact.nativeId, { contact, entity });
-    const key = fuzzyKey(contact);
-    if (key) contactsByFuzzyKey.set(key, [...(contactsByFuzzyKey.get(key) ?? []), { contact, entity }]);
-    edges.push(makeEdge({
-      type: 'identity_exact',
-      fromNodeId: entity.nodeId,
-      toNodeId: recordNodes.get(contact.recordId).nodeId,
-      eventTime: contact.eventTime ?? null,
-      capturedAt: contact.provenance.capturedAt,
-      refs: evidenceRefs(contact),
-      joinMethod: 'native_id',
-      joinConfidence: 'exact',
-    }));
+    contactsByNativeId.set(nativeId, { claims, entity });
+
+    const contradictoryFields = {};
+    for (const field of [
+      'normalizedEmail',
+      'normalizedPhone',
+      'organizationNativeId',
+      'opportunityNativeId',
+      'projectNativeId',
+    ]) {
+      const values = [...new Set(claims.map((claim) => claim[field]).filter(Boolean))].sort();
+      if (values.length > 1) {
+        contradictoryFields[field] = values.map((value) => sha256({ field, value }));
+      }
+    }
+    if (Object.keys(contradictoryFields).length > 0) {
+      const conflict = {
+        type: 'contradictory_native_identity_claim',
+        nativeIdHash: sha256(nativeId),
+        contradictoryFields,
+        nodeIds: [entity.nodeId],
+        evidenceRefs: evidenceRefs(...claims),
+      };
+      conflicts.push({ conflictId: stableId('conflict', conflict), ...conflict });
+    }
+
+    for (const contact of claims) {
+      const key = fuzzyKey(contact);
+      if (key) {
+        const byEntity = contactsByFuzzyKey.get(key) ?? new Map();
+        const prior = byEntity.get(entity.nodeId) ?? { claims: [], entity };
+        byEntity.set(entity.nodeId, { claims: [...prior.claims, contact], entity });
+        contactsByFuzzyKey.set(key, byEntity);
+      }
+      edges.push(makeEdge({
+        type: 'identity_exact',
+        fromNodeId: entity.nodeId,
+        toNodeId: recordNodes.get(contact.recordId).nodeId,
+        eventTime: contact.eventTime ?? null,
+        capturedAt: contact.provenance.capturedAt,
+        refs: evidenceRefs(...claims),
+        joinMethod: 'native_id',
+        joinConfidence: 'exact',
+      }));
+    }
   }
 
-  for (const [key, claims] of contactsByFuzzyKey) {
+  for (const [key, claimsByEntity] of contactsByFuzzyKey) {
+    const claims = [...claimsByEntity.values()]
+      .sort((left, right) => left.entity.nodeId.localeCompare(right.entity.nodeId));
     if (claims.length > 1) {
       const conflict = {
         type: 'duplicate_identity_claim',
         identityKeyHash: sha256(key),
         nodeIds: claims.map(({ entity }) => entity.nodeId).sort(),
-        evidenceRefs: evidenceRefs(...claims.map(({ contact }) => contact)),
+        evidenceRefs: evidenceRefs(...claims.flatMap((claim) => claim.claims)),
       };
       conflicts.push({ conflictId: stableId('conflict', conflict), ...conflict });
     }
@@ -285,7 +333,7 @@ export function buildEvidenceGraph({ records, context, profile }) {
         toNodeId: recordId,
         eventTime: record.eventTime ?? null,
         capturedAt: record.provenance.capturedAt,
-        refs: evidenceRefs(nativeContact.contact, record),
+        refs: evidenceRefs(...nativeContact.claims, record),
         joinMethod: 'native_id',
         joinConfidence: 'exact',
       }));
@@ -319,7 +367,10 @@ export function buildEvidenceGraph({ records, context, profile }) {
     }
 
     const fuzzy = fuzzyKey(record);
-    const fuzzyCandidates = fuzzy ? (contactsByFuzzyKey.get(fuzzy) ?? []) : [];
+    const fuzzyCandidates = fuzzy
+      ? [...(contactsByFuzzyKey.get(fuzzy)?.values() ?? [])]
+        .sort((left, right) => left.entity.nodeId.localeCompare(right.entity.nodeId))
+      : [];
     if (fuzzyCandidates.length > 0) {
       for (const candidate of fuzzyCandidates) {
         edges.push(makeEdge({
@@ -328,7 +379,7 @@ export function buildEvidenceGraph({ records, context, profile }) {
           toNodeId: recordId,
           eventTime: record.eventTime ?? null,
           capturedAt: record.provenance.capturedAt,
-          refs: evidenceRefs(candidate.contact, record),
+          refs: evidenceRefs(...candidate.claims, record),
           joinMethod: 'fuzzy_candidate',
           joinConfidence: 'candidate',
         }));
@@ -339,7 +390,7 @@ export function buildEvidenceGraph({ records, context, profile }) {
         source: record.provenance.source,
         recordNodeId: recordId,
         candidateNodeIds: fuzzyCandidates.map(({ entity }) => entity.nodeId).sort(),
-        evidenceRefs: evidenceRefs(record, ...fuzzyCandidates.map(({ contact }) => contact)),
+        evidenceRefs: evidenceRefs(record, ...fuzzyCandidates.flatMap(({ claims }) => claims)),
       });
     }
   }
@@ -503,10 +554,10 @@ export function buildEvidenceGraph({ records, context, profile }) {
     }
   }
 
-  return Object.freeze({
-    nodes: Object.freeze(sortGraphPart(nodes, 'nodeId')),
-    edges: Object.freeze(sortGraphPart(edges, 'edgeId')),
-    conflicts: Object.freeze(sortGraphPart(conflicts, 'conflictId')),
-    unresolvedJoins: Object.freeze(sortGraphPart(unresolvedJoins, 'unresolvedId')),
+  return deepFreeze({
+    nodes: sortGraphPart(nodes, 'nodeId'),
+    edges: sortGraphPart(edges, 'edgeId'),
+    conflicts: sortGraphPart(conflicts, 'conflictId'),
+    unresolvedJoins: sortGraphPart(unresolvedJoins, 'unresolvedId'),
   });
 }
