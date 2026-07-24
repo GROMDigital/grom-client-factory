@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { lstatSync, realpathSync } from 'node:fs';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { auditPaths, ensureAuditPaths, verifyAuditDatabasePath } from './paths.mjs';
 
@@ -318,6 +319,14 @@ export class AuditState {
     this.paths = paths;
     this.locationId = locationId;
     const auditRoot = ensureAuditPaths(paths);
+    const checkpointMetadata = lstatSync(paths.privateCheckpoints, { bigint: true });
+    this.pathBindings = Object.freeze({
+      privateCheckpoints: Object.freeze({
+        dev: String(checkpointMetadata.dev),
+        ino: String(checkpointMetadata.ino),
+        realpath: realpathSync(paths.privateCheckpoints),
+      }),
+    });
     const Constructor = databaseSyncConstructor();
     this.db = new Constructor(paths.stateDb);
     verifyAuditDatabasePath(paths, auditRoot);
@@ -394,6 +403,89 @@ export class AuditState {
         createdAt: now,
         updatedAt: now,
       };
+    });
+  }
+
+  createRunWithLease({
+    runId,
+    frozenInputs,
+    invocation,
+    now = Date.now(),
+    ttlMs,
+  }) {
+    assertNonEmptyString(runId, 'INVALID_RUN_ID');
+    assertTimestamp(now, 'INVALID_TIMESTAMP');
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw codedError('INVALID_LEASE_TTL');
+    validateFrozenInputs(frozenInputs);
+    if (
+      frozenInputs.locationId !== this.locationId
+      || frozenInputs.target.locationId !== this.locationId
+    ) throw codedError('LOCATION_MISMATCH');
+    const frozenInputsJson = canonicalJson(frozenInputs);
+    const frozenInputsHash = sha256(frozenInputs);
+    if (invocation !== undefined) validateRunInvocation(invocation, frozenInputs);
+    const invocationJson = invocation === undefined ? undefined : canonicalJson(invocation);
+    const invocationHash = invocation === undefined ? undefined : sha256(invocation);
+    return this.#transaction(() => {
+      const lease = this.db.prepare(
+        'SELECT run_id, expires_at FROM leases WHERE location_id = ?',
+      ).get(this.locationId);
+      if (lease && lease.expires_at > now && lease.run_id !== runId) {
+        throw codedError('LEASE_HELD');
+      }
+      const existing = this.db.prepare(
+        'SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?',
+      ).get(runId);
+      let run;
+      if (existing) {
+        if (
+          existing.location_id !== this.locationId
+          || existing.frozen_inputs_hash !== frozenInputsHash
+        ) throw codedError('RUN_ID_COLLISION');
+        const existingInvocation = this.db.prepare(
+          'SELECT invocation_hash FROM run_invocations WHERE run_id = ?',
+        ).get(runId);
+        if (
+          invocationHash !== undefined
+          && existingInvocation?.invocation_hash !== invocationHash
+        ) throw codedError('RUN_INVOCATION_CONFLICT');
+        run = this.#runRecord(existing);
+      } else {
+        this.db.prepare(`
+          INSERT INTO runs (
+            run_id, location_id, status, frozen_inputs_json,
+            frozen_inputs_hash, created_at, updated_at
+          ) VALUES (?, ?, 'running', ?, ?, ?, ?)
+        `).run(
+          runId,
+          this.locationId,
+          frozenInputsJson,
+          frozenInputsHash,
+          now,
+          now,
+        );
+        if (invocationJson !== undefined) {
+          this.db.prepare(`
+            INSERT INTO run_invocations (run_id, invocation_json, invocation_hash)
+            VALUES (?, ?, ?)
+          `).run(runId, invocationJson, invocationHash);
+        }
+        run = this.getRun(runId);
+      }
+      const expiresAt = now + ttlMs;
+      this.db.prepare(`
+        INSERT INTO leases (location_id, run_id, expires_at) VALUES (?, ?, ?)
+        ON CONFLICT(location_id) DO UPDATE
+        SET run_id = excluded.run_id, expires_at = excluded.expires_at
+      `).run(this.locationId, runId, expiresAt);
+      return Object.freeze({
+        run,
+        lease: Object.freeze({
+          locationId: this.locationId,
+          runId,
+          expiresAt,
+        }),
+      });
     });
   }
 

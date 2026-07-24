@@ -1,25 +1,38 @@
 import assert from 'node:assert/strict';
-import {
+import fs, {
+  chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { canonicalJson, sha256 } from '../lib/canonical.mjs';
 import { createAuditKernel } from '../lib/kernel.mjs';
+import {
+  ingestPrivateSourceBundle,
+  publishAtomically,
+  sanitizeForPublication,
+} from '../lib/artifacts.mjs';
 import { enforcePublicOnlyPublication } from '../lib/modes/weekly.mjs';
+import { auditPaths } from '../lib/paths.mjs';
 import {
   createConversationReviewRequest,
   exportConversationReviewValidationState,
   readSelectedEvidence,
 } from '../lib/review-bridge.mjs';
 import { openState } from '../lib/state.mjs';
+import { openVault } from '../lib/vault.mjs';
 
 function sourceInventory() {
   const values = [{
@@ -194,6 +207,190 @@ function emptyMatrixCalls() {
   };
 }
 
+function integrationFixture() {
+  const source = Object.freeze({
+    sourceId: 'source-integration',
+    kind: 'private-content',
+    payload: Object.freeze({ marker: 'authoritative integration source' }),
+  });
+  const inventory = [{
+    sourceId: source.sourceId,
+    kind: source.kind,
+    sourceHash: sha256({ schemaVersion: '1.0.0', source }),
+  }];
+  return {
+    source,
+    frozen: frozenInputs({
+      privateSourceInventory: inventory,
+      privateSourceInventoryHash: sha256(inventory),
+    }),
+  };
+}
+
+function integrationKernel({
+  runId,
+  frozen,
+  source,
+  counts,
+  faultInjector,
+}) {
+  let registry;
+  const verifyPublication = ({ publicationDir }) => {
+    counts.verifier += 1;
+    const manifest = JSON.parse(
+      readFileSync(join(publicationDir, 'run-manifest.json'), 'utf8'),
+    );
+    return {
+      verifierVersion: 'integration-test',
+      result: 'pass',
+      manifestHash: sha256(manifest),
+      publicationRoot: manifest.publicationRoot,
+    };
+  };
+  const publisher = ({
+    paths,
+    runManifest,
+    payloadArtifacts,
+    verifierAttestation,
+    projections,
+  }) => {
+    counts.publisherAttempts += 1;
+    if (!registry) {
+      const state = openState({
+        projectRoot: paths.project,
+        locationId: 'L1',
+      });
+      const vault = openVault({
+        paths,
+        encryptionKey: Buffer.alloc(32, 81),
+        pseudonymKey: Buffer.alloc(32, 82),
+      });
+      try {
+        const collector = vault.beginPrivateSourceCollection({ state, runManifest });
+        collector.add(source);
+        registry = ingestPrivateSourceBundle(collector.finalize());
+      } finally {
+        vault.close();
+        state.close();
+      }
+    }
+    const sanitized = sanitizeForPublication({
+      runManifest,
+      payloadArtifacts,
+      verifierAttestation,
+      projections,
+    }, {
+      pseudonymKey: Buffer.alloc(32, 83),
+      registry,
+    });
+    return publishAtomically({
+      paths,
+      ...sanitized,
+      verifyPublication,
+    });
+  };
+  return createAuditKernel({
+    clock: () => frozen.cutoff,
+    idFactory: () => runId,
+    keyResolver: () => ({
+      encryptionKey: Buffer.alloc(32, 84),
+      pseudonymKey: Buffer.alloc(32, 85),
+    }),
+    stateStore: { open: openState },
+    adapters: {
+      collectContext: async () => {
+        counts.context += 1;
+        return { safe: 'context' };
+      },
+      collectPublic: async () => {
+        counts.public += 1;
+        return { events: [] };
+      },
+    },
+    analyzer: {
+      freezeInputs: () => frozen,
+      normalize: async () => ({ graph: 'safe' }),
+      discover: async () => ({ findings: [] }),
+      falsify: async () => ({ packets: [] }),
+      loadMemory: async () => ({ events: [] }),
+      compile: async () => {
+        counts.compile += 1;
+        return {
+          manifestInput: {
+            schemaVersion: '1.0.0',
+            runId,
+            week: '2025-W25',
+            status: 'complete_partial',
+          },
+          projections: {
+            'BACKLOG.md': '# Backlog\n',
+          },
+          payloadArtifacts: {
+            'coverage.json': {
+              state: 'complete_partial',
+              limitations: [
+                'INTERNAL_WORKFLOW_DEFINITION_MISSING',
+                'INTERNAL_WORKFLOW_RUNTIME_MISSING',
+              ],
+            },
+            'metrics-and-findings.json': {
+              sealedInputs: { run: { status: 'complete_partial' } },
+              findings: [],
+            },
+            'REPORT.md': '# Public comparable subset\n',
+          },
+        };
+      },
+    },
+    verifier: verifyPublication,
+    publisher,
+    faultInjector,
+  });
+}
+
+function publicByteSnapshot(projectRoot) {
+  const root = auditPaths(projectRoot, 'L1').root;
+  const selected = [
+    join(root, 'CURRENT.md'),
+    join(root, 'index.json'),
+    join(root, 'weekly'),
+    join(root, 'memory', 'BACKLOG.md'),
+  ];
+  const files = new Map();
+  const visit = (pathname) => {
+    if (!existsSync(pathname)) return;
+    const metadata = fs.lstatSync(pathname);
+    if (metadata.isDirectory()) {
+      for (const name of readdirSync(pathname).sort()) visit(join(pathname, name));
+    } else {
+      files.set(
+        pathname.slice(root.length + 1),
+        readFileSync(pathname).toString('base64'),
+      );
+    }
+  };
+  selected.forEach(visit);
+  return Object.fromEntries([...files.entries()].sort(([left], [right]) => (
+    left.localeCompare(right)
+  )));
+}
+
+function makePublicTreeWritable(projectRoot) {
+  const root = auditPaths(projectRoot, 'L1').root;
+  const visit = (pathname) => {
+    if (!existsSync(pathname)) return;
+    const metadata = fs.lstatSync(pathname);
+    if (metadata.isSymbolicLink()) return;
+    if (metadata.isDirectory()) {
+      chmodSync(pathname, 0o700);
+      for (const name of readdirSync(pathname)) visit(join(pathname, name));
+    } else {
+      chmodSync(pathname, 0o600);
+    }
+  };
+  visit(root);
+}
+
 const startArgs = (projectRoot) => ({
   mode: 'weekly',
   target: frozenInputs().target,
@@ -240,6 +437,260 @@ test('Task8-shaped public-only artifacts fail closed on nested account-wide over
     () => enforcePublicOnlyPublication(malicious, { firstBaseline: true }),
     /AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE/u,
   );
+});
+
+test('public-only guard permits scoped component verdicts and measured subset impact', () => {
+  const legitimate = {
+    manifestInput: {
+      schemaVersion: '1.0.0',
+      runId: 'run-scoped',
+      status: 'complete_partial',
+    },
+    projections: {},
+    payloadArtifacts: {
+      'coverage.json': {
+        state: 'complete_partial',
+        limitations: [
+          'INTERNAL_WORKFLOW_DEFINITION_MISSING',
+          'INTERNAL_WORKFLOW_RUNTIME_MISSING',
+        ],
+      },
+      'metrics-and-findings.json': {
+        sealedInputs: { run: { status: 'complete_partial' } },
+        findings: [{
+          scope: 'public_comparable_subset',
+          componentVerdicts: {
+            configuration: 'PASS',
+            execution: 'FAIL',
+            experience: 'UNKNOWN',
+            outcome: 'FAIL',
+          },
+          measuredLocalImpact: {
+            scope: 'public_comparable_subset',
+            numerator: 2,
+            denominator: 10,
+          },
+        }],
+      },
+      'REPORT.md': '# Scoped public comparable subset\n',
+    },
+  };
+  assert.equal(
+    enforcePublicOnlyPublication(legitimate).status,
+    'complete_partial',
+  );
+});
+
+test('frozen-input mismatch preserves an active old-run lease and creates no run', async () => {
+  const fixture = tempProject();
+  const now = frozenInputs().cutoff;
+  try {
+    const state = openState({ projectRoot: fixture.projectRoot, locationId: 'L1' });
+    try {
+      state.createRun({
+        runId: 'run_active_old',
+        frozenInputs: frozenInputs(),
+        invocation: {
+          mode: 'weekly',
+          target: frozenInputs().target,
+          cutoff: frozenInputs().cutoff,
+          providerId: 'provider-hardening',
+          profile: 'client',
+          providerDescriptor: {
+            kind: 'inline_safe',
+            configHash: sha256({}),
+            config: {},
+          },
+        },
+        now,
+      });
+      state.acquireLease({ runId: 'run_active_old', now, ttlMs: 300_000 });
+    } finally {
+      state.close();
+    }
+    const calls = { context: 0, public: 0 };
+    const kernel = kernelFor({
+      runId: 'run_must_not_exist',
+      frozen: frozenInputs({ codeHash: 'changed-code' }),
+      calls,
+    });
+    const result = await kernel.resume({
+      projectRoot: fixture.projectRoot,
+      locationId: 'L1',
+      runId: 'run_active_old',
+      vaultKeyReference: 'test-only:key',
+    });
+    assert.deepEqual(result, {
+      status: 'RESUME_INPUT_MISMATCH_ACTIVE_LEASE',
+      oldRunId: 'run_active_old',
+    });
+    const reopened = openState({ projectRoot: fixture.projectRoot, locationId: 'L1' });
+    try {
+      assert.equal(reopened.getRun('run_active_old').status, 'running');
+      assert.throws(() => reopened.getRun('run_must_not_exist'), /RUN_NOT_FOUND/u);
+      assert.throws(
+        () => reopened.acquireLease({
+          runId: 'run_competitor',
+          now: now + 1,
+          ttlMs: 300_000,
+        }),
+        /LEASE_HELD/u,
+      );
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    fixture.close();
+  }
+});
+
+test('frozen-input mismatch replaces only an expired lease with a distinct run', async () => {
+  const fixture = tempProject();
+  const now = frozenInputs().cutoff;
+  try {
+    const state = openState({ projectRoot: fixture.projectRoot, locationId: 'L1' });
+    try {
+      state.createRun({
+        runId: 'run_expired_old',
+        frozenInputs: frozenInputs(),
+        invocation: {
+          mode: 'weekly',
+          target: frozenInputs().target,
+          cutoff: frozenInputs().cutoff,
+          providerId: 'provider-hardening',
+          profile: 'client',
+          providerDescriptor: {
+            kind: 'inline_safe',
+            configHash: sha256({}),
+            config: {},
+          },
+        },
+        now: now - 600_000,
+      });
+      state.acquireLease({
+        runId: 'run_expired_old',
+        now: now - 600_000,
+        ttlMs: 300_000,
+      });
+    } finally {
+      state.close();
+    }
+    const calls = { context: 0, public: 0 };
+    const kernel = kernelFor({
+      runId: 'run_after_expiry',
+      frozen: frozenInputs({ codeHash: 'changed-code' }),
+      calls,
+    });
+    const result = await kernel.resume({
+      projectRoot: fixture.projectRoot,
+      locationId: 'L1',
+      runId: 'run_expired_old',
+      vaultKeyReference: 'test-only:key',
+    });
+    assert.deepEqual(result, {
+      status: 'RESUME_INPUT_MISMATCH',
+      oldRunId: 'run_expired_old',
+      newRunId: 'run_after_expiry',
+    });
+    const reopened = openState({ projectRoot: fixture.projectRoot, locationId: 'L1' });
+    try {
+      assert.equal(reopened.getRun('run_expired_old').status, 'running');
+      assert.equal(reopened.getRun('run_after_expiry').status, 'complete_partial');
+    } finally {
+      reopened.close();
+    }
+  } finally {
+    fixture.close();
+  }
+});
+
+test('phase artifact writes reject symlinked run and phases ancestors', async () => {
+  for (const symlinkLevel of ['run', 'phases']) {
+    const fixture = tempProject();
+    const calls = { context: 0, public: 0 };
+    const external = join(fixture.projectRoot, `external-${symlinkLevel}`);
+    const checkpoints = join(
+      fixture.projectRoot,
+      'audits',
+      'ghl',
+      'L1',
+      'private',
+      'checkpoints',
+    );
+    try {
+      const state = openState({ projectRoot: fixture.projectRoot, locationId: 'L1' });
+      state.close();
+      mkdirSync(external);
+      writeFileSync(join(external, 'sentinel.txt'), 'untouched');
+      if (symlinkLevel === 'run') {
+        symlinkSync(external, join(checkpoints, 'run_symlink_write'), 'dir');
+      } else {
+        mkdirSync(join(checkpoints, 'run_symlink_write'));
+        symlinkSync(external, join(checkpoints, 'run_symlink_write', 'phases'), 'dir');
+      }
+      const kernel = kernelFor({
+        runId: 'run_symlink_write',
+        calls,
+      });
+      await assert.rejects(() => kernel.start({
+        ...startArgs(fixture.projectRoot),
+        providerId: 'provider-hardening',
+      }), /AUDIT_QUARANTINED|AUDIT_CHECKPOINT_INVALID/u);
+      assert.deepEqual(readdirSync(external), ['sentinel.txt']);
+      assert.equal(readFileSync(join(external, 'sentinel.txt'), 'utf8'), 'untouched');
+    } finally {
+      fixture.close();
+    }
+  }
+});
+
+test('phase artifact restore rejects a copied tree behind a swapped ancestor', async () => {
+  const fixture = tempProject();
+  const calls = { context: 0, public: 0 };
+  let crashed = false;
+  try {
+    const first = kernelFor({
+      runId: 'run_swapped_restore',
+      calls,
+      faultInjector: ({ phase }) => {
+        if (!crashed && phase === 'collecting_public') {
+          crashed = true;
+          throw Object.assign(new Error('SEEDED_CRASH'), { code: 'SEEDED_CRASH' });
+        }
+      },
+    });
+    await assert.rejects(() => first.start({
+      ...startArgs(fixture.projectRoot),
+      providerId: 'provider-hardening',
+    }));
+    const runRoot = join(
+      fixture.projectRoot,
+      'audits',
+      'ghl',
+      'L1',
+      'private',
+      'checkpoints',
+      'run_swapped_restore',
+    );
+    const phases = join(runRoot, 'phases');
+    const original = join(runRoot, 'phases-original');
+    const external = join(fixture.projectRoot, 'external-restore');
+    mkdirSync(external);
+    cpSync(phases, external, { recursive: true });
+    writeFileSync(join(external, 'sentinel.txt'), 'untouched');
+    renameSync(phases, original);
+    symlinkSync(external, phases, 'dir');
+    const fresh = kernelFor({ runId: 'unused-new-id', calls });
+    await assert.rejects(() => fresh.resume({
+      projectRoot: fixture.projectRoot,
+      locationId: 'L1',
+      runId: 'run_swapped_restore',
+      vaultKeyReference: 'test-only:key',
+    }), /AUDIT_QUARANTINED|AUDIT_CHECKPOINT_INVALID/u);
+    assert.equal(readFileSync(join(external, 'sentinel.txt'), 'utf8'), 'untouched');
+  } finally {
+    fixture.close();
+  }
 });
 
 test('run invocation survives state reopen without provider defaults or secret references', () => {
@@ -632,6 +1083,127 @@ test('publication side effects are idempotent after rename and projection crash'
     } finally {
       fixture.close();
     }
+  }
+});
+
+test('real Task8 publisher recovery is byte-identical across intent rename and projection faults', async () => {
+  const executeCase = async (fault) => {
+    const fixture = tempProject();
+    const { source, frozen } = integrationFixture();
+    const counts = {
+      context: 0,
+      public: 0,
+      compile: 0,
+      verifier: 0,
+      publisherAttempts: 0,
+    };
+    let injected = false;
+    const runId = 'run_real_publication';
+    const args = {
+      mode: 'weekly',
+      target: frozen.target,
+      projectRoot: fixture.projectRoot,
+      cutoff: frozen.cutoff,
+      providerId: 'provider-real-publication',
+      profile: 'client',
+      providerConfig: {},
+      providerDescriptor: {
+        kind: 'inline_safe',
+        configHash: sha256({}),
+        config: {},
+      },
+      vaultKeyReference: 'test-only:key',
+    };
+    const originalRename = fs.renameSync;
+    try {
+      if (fault === 'projection') {
+        const paths = auditPaths(fixture.projectRoot, 'L1');
+        mkdirSync(paths.root, { recursive: true });
+        mkdirSync(join(paths.root, 'CURRENT.md'));
+      }
+      if (fault === 'rename') {
+        fs.renameSync = (sourcePath, destinationPath) => {
+          const result = originalRename(sourcePath, destinationPath);
+          if (
+            !injected
+            && basename(sourcePath).startsWith('.publication-staging-')
+          ) {
+            injected = true;
+            throw Object.assign(new Error('SEEDED_VERIFIED_RENAME_CRASH'), {
+              code: 'SEEDED_VERIFIED_RENAME_CRASH',
+            });
+          }
+          return result;
+        };
+        syncBuiltinESMExports();
+      }
+      const first = integrationKernel({
+        runId,
+        frozen,
+        source,
+        counts,
+        faultInjector: fault === 'intent'
+          ? ({ phase }) => {
+              if (!injected && phase === 'publication_intent_prepared') {
+                injected = true;
+                throw Object.assign(new Error('SEEDED_INTENT_CRASH'), {
+                  code: 'SEEDED_INTENT_CRASH',
+                });
+              }
+            }
+          : undefined,
+      });
+      if (fault === undefined) {
+        assert.equal((await first.start(args)).status, 'complete_partial');
+      } else {
+        await assert.rejects(() => first.start(args));
+        if (fault === 'rename') {
+          fs.renameSync = originalRename;
+          syncBuiltinESMExports();
+        }
+        if (fault === 'projection') {
+          rmSync(join(auditPaths(fixture.projectRoot, 'L1').root, 'CURRENT.md'), {
+            recursive: true,
+          });
+        }
+        const fresh = integrationKernel({
+          runId: 'unused-new-id',
+          frozen,
+          source,
+          counts,
+        });
+        assert.equal((await fresh.resume({
+          projectRoot: fixture.projectRoot,
+          locationId: 'L1',
+          runId,
+          vaultKeyReference: 'test-only:key',
+        })).status, 'complete_partial');
+      }
+      assert.equal(counts.context, 1);
+      assert.equal(counts.public, 1);
+      assert.equal(counts.compile, 1);
+      assert.equal(counts.verifier, 1);
+      const paths = auditPaths(fixture.projectRoot, 'L1');
+      const index = JSON.parse(readFileSync(join(paths.root, 'index.json'), 'utf8'));
+      assert.equal(index.publications.length, 1);
+      assert.equal(index.latest.publicationId, index.publications[0].publicationId);
+      assert.equal(index.latestFull, null);
+      assert.equal(
+        readdirSync(join(paths.weekly, '2025-W25'))
+          .filter((name) => !name.startsWith('.')).length,
+        1,
+      );
+      return publicByteSnapshot(fixture.projectRoot);
+    } finally {
+      fs.renameSync = originalRename;
+      syncBuiltinESMExports();
+      makePublicTreeWritable(fixture.projectRoot);
+      fixture.close();
+    }
+  };
+  const baseline = await executeCase();
+  for (const fault of ['intent', 'rename', 'projection']) {
+    assert.deepEqual(await executeCase(fault), baseline, fault);
   }
 });
 

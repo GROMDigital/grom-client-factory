@@ -70,7 +70,7 @@ npm --prefix skills/ghl-account-audit test
 
 Initial Task 9 result: 214 tests passed, 0 failed.
 
-Final hardening result after independent review: 225 tests passed, 0 failed.
+First hardening result after independent review: 225 tests passed, 0 failed.
 
 ### Build, bundle, and static gates
 
@@ -113,7 +113,7 @@ Final focused command:
 node --test skills/ghl-account-audit/tests/task9-hardening.test.mjs
 ```
 
-Final result: 11 passed, 0 failed.
+First hardening result: 11 passed, 0 failed.
 
 Final package commands:
 
@@ -122,7 +122,49 @@ npm --prefix skills/ghl-account-audit run build
 npm --prefix skills/ghl-account-audit test
 ```
 
-Final result: build passed; 225 tests passed, 0 failed.
+First hardening result: build passed; 225 tests passed, 0 failed.
+
+## Second independent review hardening
+
+A second independent review found two critical and two important gaps. The
+narrow RED probes initially produced 12 passes and 4 failures:
+
+- an active old-run lease was released during frozen-input mismatch;
+- phase artifact writes followed symlinked run/phases ancestors;
+- restore accepted a copied artifact tree behind a swapped ancestor; and
+- scoped component verdicts and measured comparable-subset impact were rejected.
+
+The final focused hardening suite now passes 17 tests with 0 failures. It also
+uses the real Task 8 `publishAtomically` path and trusted verifier to compare an
+uninterrupted baseline with fresh-kernel recovery after:
+
+- durable publication-intent preparation;
+- verified staging rename; and
+- projection failure after the immutable publication exists.
+
+The complete public publication, `CURRENT.md`, `index.json`, `latestFull`
+state, and backlog projection are byte-identical in all four executions. Each
+index contains one publication, and context collection, public collection,
+compilation, and verifier work each occur once.
+
+Final commands:
+
+```text
+npm --prefix skills/ghl-account-audit run build
+npm --prefix skills/ghl-account-audit test
+node --check skills/ghl-account-audit/lib/kernel.mjs
+node --check skills/ghl-account-audit/lib/state.mjs
+node --check skills/ghl-account-audit/lib/modes/weekly.mjs
+node --check skills/ghl-account-audit/lib/local-runtime.mjs
+node --check skills/ghl-account-audit/cli/audit.mjs
+node --check skills/ghl-account-audit/dist/audit-cli.mjs
+git diff --check
+```
+
+Final result: build passed; 231 tests passed, 0 failed; all syntax and diff
+checks passed. The bundle imports Node built-ins only, the direct-process CLI
+matrix passed, and the kernel/local-runtime/CLI static scan found no network or
+mutation call surface.
 
 ## Implemented behavior
 
@@ -161,6 +203,11 @@ Final result: build passed; 225 tests passed, 0 failed.
 - Run invocation identity, provider descriptor, configuration hash, and frozen
   inputs persist in SQLite. Resume reloads the exact project-relative provider
   configuration and creates a distinct run on a hash or frozen-input mismatch.
+- Run creation and lease acquisition now share one immediate SQLite
+  transaction. A frozen-input mismatch returns
+  `RESUME_INPUT_MISMATCH_ACTIVE_LEASE` without changing the old run or creating
+  a new run while its lease is live. Only an absent or expired lease can be
+  atomically replaced by the distinct run.
 - Completed phase outputs are canonical, AES-256-GCM encrypted, hash-bound to
   run, phase, and input, and restored from private checkpoint artifacts after a
   process restart. Tampering quarantines before adapter replay.
@@ -171,8 +218,18 @@ Final result: build passed; 225 tests passed, 0 failed.
   execution and direct process testing. It accepts only the explicit
   `test-only:key` reference and never provides a live-provider binding.
 - Recursive Task 8 shaped publication checks require both exact internal
-  workflow limitations and reject nested account-wide scope, PASS verdicts,
-  measured commercial impact, revenue promises, and broad report language.
+  workflow limitations and reject nested account-wide scope, broad PASS
+  verdicts, total-account impact, unbounded revenue promises, and broad report
+  language.
+- Public-only checks now preserve scoped component PASS/FAIL/UNKNOWN verdicts
+  and measured local impact when the finding explicitly binds them to
+  `public_comparable_subset`; account-wide, complete-full, total-account, and
+  unbounded revenue/impact claims still fail closed.
+- Phase artifacts bind the authorized checkpoint-root realpath and inode plus
+  run/phases directory inodes. Every ancestor is lstat-checked as a real
+  directory, final files are opened no-follow, and root/parent identities are
+  revalidated around reads, temp writes, and rename. Swapped or symlinked
+  ancestors quarantine without touching an external sentinel.
 
 ## Crash and recovery seams exercised
 
@@ -198,6 +255,8 @@ Final result: build passed; 225 tests passed, 0 failed.
   replay is rejected.
 - GET-shaped read traces pass; POST-shaped write traces quarantine before
   publication.
+- Real Task 8 publication recovery is exercised through the kernel at intent,
+  rename, and projection boundaries rather than through a mock publisher.
 
 ## Changed files
 

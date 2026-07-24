@@ -131,7 +131,12 @@ function isUnmeasuredValue(value) {
     ));
 }
 
-function assertNoPublicOnlyOverclaim(value, path = [], seen = new WeakSet()) {
+function assertNoPublicOnlyOverclaim(
+  value,
+  path = [],
+  seen = new WeakSet(),
+  inheritedScope,
+) {
   if (value === null || typeof value !== 'object') return;
   if (seen.has(value)) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
   seen.add(value);
@@ -140,24 +145,41 @@ function assertNoPublicOnlyOverclaim(value, path = [], seen = new WeakSet()) {
       child,
       [...path, String(index)],
       seen,
+      inheritedScope,
     ));
   } else {
+    const localScope = typeof value.scope === 'string'
+      ? value.scope
+      : typeof value.coverageScope === 'string'
+        ? value.coverageScope
+        : inheritedScope;
+    const subsetScoped = localScope === 'public_comparable_subset';
     for (const [key, child] of Object.entries(value)) {
       const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, '');
       if (
         ['scope', 'coveragescope'].includes(normalized)
         && typeof child === 'string'
-        && /account.?wide|whole.?account/iu.test(child)
+        && /account.?wide|whole.?account|complete.?full/iu.test(child)
       ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
       if (
         (normalized === 'verdict' || path.includes('verdicts'))
         && child === 'PASS'
+        && !subsetScoped
       ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
       if (
-        /(?:impact|commercialvalue|revenuepromise)/u.test(normalized)
+        /(?:total.*impact|account.*impact|revenuepromise|totalrevenue)/u.test(normalized)
         && !isUnmeasuredValue(child)
       ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
-      assertNoPublicOnlyOverclaim(child, [...path, key], seen);
+      if (
+        /(?:impact|commercialvalue)/u.test(normalized)
+        && !subsetScoped
+        && !(child && typeof child === 'object' && (
+          child.scope === 'public_comparable_subset'
+          || child.coverageScope === 'public_comparable_subset'
+        ))
+        && !isUnmeasuredValue(child)
+      ) throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE');
+      assertNoPublicOnlyOverclaim(child, [...path, key], seen, localScope);
     }
   }
   seen.delete(value);

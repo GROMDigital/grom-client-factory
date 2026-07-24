@@ -5279,7 +5279,7 @@ function isUnmeasuredValue(value) {
   const state = value.kind ?? value.state;
   return ["UNKNOWN", "UNMEASURED", "NOT_AVAILABLE"].includes(state) && Object.entries(value).every(([key, child]) => ["kind", "state", "reasonCode", "limitationCode"].includes(key) || child === null || child === "UNKNOWN" || child === "UNMEASURED");
 }
-function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ new WeakSet()) {
+function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ new WeakSet(), inheritedScope) {
   if (value === null || typeof value !== "object") return;
   if (seen.has(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
   seen.add(value);
@@ -5287,15 +5287,19 @@ function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ ne
     value.forEach((child, index) => assertNoPublicOnlyOverclaim(
       child,
       [...path, String(index)],
-      seen
+      seen,
+      inheritedScope
     ));
   } else {
+    const localScope = typeof value.scope === "string" ? value.scope : typeof value.coverageScope === "string" ? value.coverageScope : inheritedScope;
+    const subsetScoped = localScope === "public_comparable_subset";
     for (const [key, child] of Object.entries(value)) {
       const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
-      if (["scope", "coveragescope"].includes(normalized) && typeof child === "string" && /account.?wide|whole.?account/iu.test(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-      if ((normalized === "verdict" || path.includes("verdicts")) && child === "PASS") throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-      if (/(?:impact|commercialvalue|revenuepromise)/u.test(normalized) && !isUnmeasuredValue(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-      assertNoPublicOnlyOverclaim(child, [...path, key], seen);
+      if (["scope", "coveragescope"].includes(normalized) && typeof child === "string" && /account.?wide|whole.?account|complete.?full/iu.test(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if ((normalized === "verdict" || path.includes("verdicts")) && child === "PASS" && !subsetScoped) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if (/(?:total.*impact|account.*impact|revenuepromise|totalrevenue)/u.test(normalized) && !isUnmeasuredValue(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if (/(?:impact|commercialvalue)/u.test(normalized) && !subsetScoped && !(child && typeof child === "object" && (child.scope === "public_comparable_subset" || child.coverageScope === "public_comparable_subset")) && !isUnmeasuredValue(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      assertNoPublicOnlyOverclaim(child, [...path, key], seen, localScope);
     }
   }
   seen.delete(value);
@@ -5561,6 +5565,7 @@ __export(state_exports, {
   openState: () => openState
 });
 import { createRequire } from "node:module";
+import { lstatSync as lstatSync3, realpathSync as realpathSync3 } from "node:fs";
 function databaseSyncConstructor() {
   if (DatabaseSync === void 0) {
     ({ DatabaseSync } = createRequire(import.meta.url)("node:sqlite"));
@@ -5836,6 +5841,14 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         this.paths = paths;
         this.locationId = locationId;
         const auditRoot = ensureAuditPaths(paths);
+        const checkpointMetadata = lstatSync3(paths.privateCheckpoints, { bigint: true });
+        this.pathBindings = Object.freeze({
+          privateCheckpoints: Object.freeze({
+            dev: String(checkpointMetadata.dev),
+            ino: String(checkpointMetadata.ino),
+            realpath: realpathSync3(paths.privateCheckpoints)
+          })
+        });
         const Constructor = databaseSyncConstructor();
         this.db = new Constructor(paths.stateDb);
         verifyAuditDatabasePath(paths, auditRoot);
@@ -5904,6 +5917,79 @@ CREATE TABLE IF NOT EXISTS publication_intents (
             createdAt: now,
             updatedAt: now
           };
+        });
+      }
+      createRunWithLease({
+        runId,
+        frozenInputs,
+        invocation,
+        now = Date.now(),
+        ttlMs
+      }) {
+        assertNonEmptyString(runId, "INVALID_RUN_ID");
+        assertTimestamp(now, "INVALID_TIMESTAMP");
+        if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw codedError3("INVALID_LEASE_TTL");
+        validateFrozenInputs(frozenInputs);
+        if (frozenInputs.locationId !== this.locationId || frozenInputs.target.locationId !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+        const frozenInputsJson = canonicalJson(frozenInputs);
+        const frozenInputsHash = sha256(frozenInputs);
+        if (invocation !== void 0) validateRunInvocation(invocation, frozenInputs);
+        const invocationJson = invocation === void 0 ? void 0 : canonicalJson(invocation);
+        const invocationHash = invocation === void 0 ? void 0 : sha256(invocation);
+        return this.#transaction(() => {
+          const lease = this.db.prepare(
+            "SELECT run_id, expires_at FROM leases WHERE location_id = ?"
+          ).get(this.locationId);
+          if (lease && lease.expires_at > now && lease.run_id !== runId) {
+            throw codedError3("LEASE_HELD");
+          }
+          const existing = this.db.prepare(
+            "SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?"
+          ).get(runId);
+          let run;
+          if (existing) {
+            if (existing.location_id !== this.locationId || existing.frozen_inputs_hash !== frozenInputsHash) throw codedError3("RUN_ID_COLLISION");
+            const existingInvocation = this.db.prepare(
+              "SELECT invocation_hash FROM run_invocations WHERE run_id = ?"
+            ).get(runId);
+            if (invocationHash !== void 0 && existingInvocation?.invocation_hash !== invocationHash) throw codedError3("RUN_INVOCATION_CONFLICT");
+            run = this.#runRecord(existing);
+          } else {
+            this.db.prepare(`
+          INSERT INTO runs (
+            run_id, location_id, status, frozen_inputs_json,
+            frozen_inputs_hash, created_at, updated_at
+          ) VALUES (?, ?, 'running', ?, ?, ?, ?)
+        `).run(
+              runId,
+              this.locationId,
+              frozenInputsJson,
+              frozenInputsHash,
+              now,
+              now
+            );
+            if (invocationJson !== void 0) {
+              this.db.prepare(`
+            INSERT INTO run_invocations (run_id, invocation_json, invocation_hash)
+            VALUES (?, ?, ?)
+          `).run(runId, invocationJson, invocationHash);
+            }
+            run = this.getRun(runId);
+          }
+          const expiresAt = now + ttlMs;
+          this.db.prepare(`
+        INSERT INTO leases (location_id, run_id, expires_at) VALUES (?, ?, ?)
+        ON CONFLICT(location_id) DO UPDATE
+        SET run_id = excluded.run_id, expires_at = excluded.expires_at
+      `).run(this.locationId, runId, expiresAt);
+          return Object.freeze({
+            run,
+            lease: Object.freeze({
+              locationId: this.locationId,
+              runId,
+              expiresAt
+            })
+          });
         });
       }
       getRunInvocation(runId) {
@@ -8048,11 +8134,13 @@ import {
   closeSync,
   constants,
   existsSync as existsSync2,
+  fstatSync,
   fsyncSync,
-  lstatSync as lstatSync3,
+  lstatSync as lstatSync4,
   mkdirSync as mkdirSync3,
   openSync,
   readFileSync as readFileSync2,
+  realpathSync as realpathSync4,
   renameSync,
   writeFileSync as writeFileSync2
 } from "node:fs";
@@ -8061,7 +8149,14 @@ import {
   createDecipheriv,
   randomBytes as randomBytes2
 } from "node:crypto";
-import { dirname, join as join2, relative as relative3, resolve as resolve3, sep as sep3 } from "node:path";
+import {
+  basename as basename2,
+  dirname,
+  join as join2,
+  relative as relative3,
+  resolve as resolve3,
+  sep as sep3
+} from "node:path";
 function codedError6(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
@@ -8133,6 +8228,136 @@ function phaseArtifactPath(state, runId, phase) {
 function checkpointPhase(phase, input) {
   return REVISION_PHASES.has(phase) ? `${phase}@${sha256(input ?? null).slice(0, 24)}` : phase;
 }
+function filesystemIdentity(metadata) {
+  return Object.freeze({
+    dev: String(metadata.dev),
+    ino: String(metadata.ino)
+  });
+}
+function sameIdentity(left, right) {
+  return left?.dev === right?.dev && left?.ino === right?.ino;
+}
+function directoryIdentity(pathname, code) {
+  let metadata;
+  try {
+    metadata = lstatSync4(pathname, { bigint: true });
+  } catch {
+    throw codedError6(code);
+  }
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw codedError6(code);
+  return filesystemIdentity(metadata);
+}
+function openPhaseDirectory({ state, runId, create, expectedBinding }) {
+  if (!Number.isInteger(constants.O_NOFOLLOW) || !Number.isInteger(constants.O_DIRECTORY)) throw codedError6("AUDIT_CHECKPOINT_INVALID_FS_UNSUPPORTED");
+  const root = resolve3(state.paths.privateCheckpoints);
+  const authorizedRoot = state.pathBindings?.privateCheckpoints;
+  const runDirectory = join2(root, runId);
+  const phasesDirectory = join2(runDirectory, "phases");
+  let canonicalRoot;
+  const assertDirectory = (pathname, expected, code) => {
+    const identity = directoryIdentity(pathname, code);
+    if (expected && !sameIdentity(identity, expected)) throw codedError6(code);
+    let canonical;
+    try {
+      canonical = realpathSync4(pathname);
+    } catch {
+      throw codedError6(code);
+    }
+    if (resolve3(pathname) === root) {
+      if (expected?.realpath && canonical !== expected.realpath) throw codedError6(code);
+      canonicalRoot = canonical;
+      return Object.freeze({ ...identity, realpath: canonical });
+    } else if (canonical === canonicalRoot || !canonical.startsWith(`${canonicalRoot}${sep3}`)) throw codedError6(code);
+    return identity;
+  };
+  const rootIdentity = assertDirectory(
+    root,
+    authorizedRoot,
+    "AUDIT_CHECKPOINT_INVALID_ROOT_DIRECTORY"
+  );
+  const ensureChild = (parent, pathname) => {
+    assertDirectory(parent, void 0, "AUDIT_CHECKPOINT_INVALID_DIRECTORY");
+    if (!existsSync2(pathname)) {
+      if (!create) throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
+      try {
+        mkdirSync3(pathname, { mode: 448 });
+      } catch {
+        throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
+      }
+    }
+  };
+  ensureChild(root, runDirectory);
+  const runIdentity = assertDirectory(
+    runDirectory,
+    expectedBinding?.run,
+    "AUDIT_CHECKPOINT_INVALID_RUN_DIRECTORY"
+  );
+  ensureChild(runDirectory, phasesDirectory);
+  const phasesIdentity = assertDirectory(
+    phasesDirectory,
+    expectedBinding?.phases,
+    "AUDIT_CHECKPOINT_INVALID_PHASES_DIRECTORY"
+  );
+  const binding = Object.freeze({
+    root: rootIdentity,
+    run: runIdentity,
+    phases: phasesIdentity
+  });
+  if (expectedBinding && canonicalJson(binding) !== canonicalJson(expectedBinding)) {
+    throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY_BINDING");
+  }
+  let descriptor;
+  try {
+    descriptor = openSync(
+      phasesDirectory,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
+    );
+  } catch {
+    throw codedError6("AUDIT_CHECKPOINT_INVALID_PHASES_DIRECTORY");
+  }
+  const assertSame = () => {
+    assertDirectory(root, binding.root, "AUDIT_CHECKPOINT_INVALID_ROOT_DIRECTORY");
+    assertDirectory(runDirectory, binding.run, "AUDIT_CHECKPOINT_INVALID_RUN_DIRECTORY");
+    assertDirectory(
+      phasesDirectory,
+      binding.phases,
+      "AUDIT_CHECKPOINT_INVALID_PHASES_DIRECTORY"
+    );
+    const opened = filesystemIdentity(fstatSync(descriptor, { bigint: true }));
+    if (!sameIdentity(opened, binding.phases)) {
+      throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY_BINDING");
+    }
+  };
+  assertSame();
+  return {
+    directory: phasesDirectory,
+    binding,
+    assertSame,
+    close() {
+      if (descriptor !== void 0) {
+        closeSync(descriptor);
+        descriptor = void 0;
+      }
+    }
+  };
+}
+function readPhaseEnvelope(pathname, guard) {
+  let descriptor;
+  try {
+    guard.assertSame();
+    descriptor = openSync(pathname, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const metadata = fstatSync(descriptor);
+    if (!metadata.isFile()) throw new Error();
+    const envelope = JSON.parse(readFileSync2(descriptor, "utf8"));
+    guard.assertSame();
+    return envelope;
+  } catch (error) {
+    if (error?.code?.startsWith?.("AUDIT_CHECKPOINT_INVALID")) throw error;
+    throw codedError6("AUDIT_CHECKPOINT_INVALID_ARTIFACT");
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+}
 function phaseAad({ runId, phase, inputHash: inputHash2 }) {
   return Buffer.from(canonicalJson({
     schemaVersion: "1.0.0",
@@ -8167,119 +8392,149 @@ function decryptPhaseArtifact({ envelope, runId, phase, inputHash: inputHash2, k
   }
 }
 function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output, keys }) {
-  const pathname = phaseArtifactPath(state, runId, phase);
+  const priorBinding = state.listCheckpoints(runId).map(({ payload }) => payload?.phaseDirectoryBinding).find(Boolean);
+  const guard = openPhaseDirectory({
+    state,
+    runId,
+    create: true,
+    expectedBinding: priorBinding
+  });
+  const pathname = join2(
+    guard.directory,
+    basename2(phaseArtifactPath(state, runId, phase))
+  );
   const temporary = `${pathname}.tmp`;
-  mkdirSync3(dirname(pathname), { recursive: true, mode: 448 });
-  if (existsSync2(pathname)) {
-    const existing = JSON.parse(readFileSync2(pathname, "utf8"));
-    const restored = decryptPhaseArtifact({
-      envelope: existing,
-      runId,
-      phase,
-      inputHash: inputHash2,
-      keys
-    });
-    if (canonicalJson(restored) !== canonicalJson(output)) {
-      throw codedError6("AUDIT_CHECKPOINT_INVALID_OUTPUT_CONFLICT");
-    }
-    return {
-      artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
-      artifactHash: sha256(existing)
-    };
-  }
-  if (existsSync2(temporary)) {
-    let orphan;
-    try {
-      const metadata = lstatSync3(temporary);
-      if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error();
-      orphan = JSON.parse(readFileSync2(temporary, "utf8"));
+  try {
+    if (existsSync2(pathname)) {
+      const existing = readPhaseEnvelope(pathname, guard);
       const restored = decryptPhaseArtifact({
-        envelope: orphan,
+        envelope: existing,
         runId,
         phase,
         inputHash: inputHash2,
         keys
       });
-      if (canonicalJson(restored) !== canonicalJson(output)) throw new Error();
-      renameSync(temporary, pathname);
-      chmodSync(pathname, 384);
+      if (canonicalJson(restored) !== canonicalJson(output)) {
+        throw codedError6("AUDIT_CHECKPOINT_INVALID_OUTPUT_CONFLICT");
+      }
       return {
         artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
-        artifactHash: sha256(orphan)
+        artifactHash: sha256(existing),
+        phaseDirectoryBinding: guard.binding
       };
-    } catch (error) {
-      if (error?.code?.startsWith?.("AUDIT_CHECKPOINT_INVALID")) throw error;
-      throw codedError6("AUDIT_CHECKPOINT_INVALID_ORPHAN");
     }
-  }
-  const iv = randomBytes2(12);
-  const cipher = createCipheriv("aes-256-gcm", keys.encryptionKey, iv);
-  cipher.setAAD(phaseAad({ runId, phase, inputHash: inputHash2 }));
-  const plaintext = Buffer.from(canonicalJson(output), "utf8");
-  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-  const envelope = {
-    schemaVersion: "1.0.0",
-    runId,
-    phase,
-    inputHash: inputHash2,
-    iv: iv.toString("base64"),
-    tag: cipher.getAuthTag().toString("base64"),
-    ciphertext: ciphertext.toString("base64")
-  };
-  plaintext.fill(0);
-  ciphertext.fill(0);
-  let descriptor;
-  try {
-    descriptor = openSync(
-      temporary,
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      384
-    );
-    writeFileSync2(descriptor, `${canonicalJson(envelope)}
+    if (existsSync2(temporary)) {
+      let orphan;
+      try {
+        orphan = readPhaseEnvelope(temporary, guard);
+        const restored = decryptPhaseArtifact({
+          envelope: orphan,
+          runId,
+          phase,
+          inputHash: inputHash2,
+          keys
+        });
+        if (canonicalJson(restored) !== canonicalJson(output)) throw new Error();
+        guard.assertSame();
+        renameSync(temporary, pathname);
+        guard.assertSame();
+        chmodSync(pathname, 384);
+        return {
+          artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
+          artifactHash: sha256(orphan),
+          phaseDirectoryBinding: guard.binding
+        };
+      } catch (error) {
+        if (error?.code?.startsWith?.("AUDIT_CHECKPOINT_INVALID")) throw error;
+        throw codedError6("AUDIT_CHECKPOINT_INVALID_ORPHAN");
+      }
+    }
+    const iv = randomBytes2(12);
+    const cipher = createCipheriv("aes-256-gcm", keys.encryptionKey, iv);
+    cipher.setAAD(phaseAad({ runId, phase, inputHash: inputHash2 }));
+    const plaintext = Buffer.from(canonicalJson(output), "utf8");
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    const envelope = {
+      schemaVersion: "1.0.0",
+      runId,
+      phase,
+      inputHash: inputHash2,
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+      ciphertext: ciphertext.toString("base64")
+    };
+    plaintext.fill(0);
+    ciphertext.fill(0);
+    let descriptor;
+    try {
+      guard.assertSame();
+      descriptor = openSync(
+        temporary,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+        384
+      );
+      writeFileSync2(descriptor, `${canonicalJson(envelope)}
 `);
-    fsyncSync(descriptor);
+      fsyncSync(descriptor);
+      closeSync(descriptor);
+      descriptor = void 0;
+      guard.assertSame();
+      renameSync(temporary, pathname);
+      guard.assertSame();
+      chmodSync(pathname, 384);
+    } finally {
+      if (descriptor !== void 0) closeSync(descriptor);
+    }
+    return {
+      artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
+      artifactHash: sha256(envelope),
+      phaseDirectoryBinding: guard.binding
+    };
   } finally {
-    if (descriptor !== void 0) closeSync(descriptor);
+    guard.close();
   }
-  renameSync(temporary, pathname);
-  chmodSync(pathname, 384);
-  return {
-    artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
-    artifactHash: sha256(envelope)
-  };
 }
 function restorePhase({ state, runId, phase, input, keys }) {
   const checkpoint = state.getCheckpoint({ runId, phase });
   if (!checkpoint) return void 0;
   const inputHash2 = sha256(input ?? null);
-  if (checkpoint.inputHash !== inputHash2 || !checkpoint.payload || checkpoint.payload.schemaVersion !== "1.0.0" || typeof checkpoint.payload.artifactRef !== "string" || typeof checkpoint.payload.artifactHash !== "string" || checkpoint.payload.outputHash !== checkpoint.outputHash) throw codedError6("AUDIT_CHECKPOINT_INVALID_BINDING");
+  if (checkpoint.inputHash !== inputHash2 || !checkpoint.payload || checkpoint.payload.schemaVersion !== "1.0.0" || typeof checkpoint.payload.artifactRef !== "string" || typeof checkpoint.payload.artifactHash !== "string" || checkpoint.payload.outputHash !== checkpoint.outputHash || !checkpoint.payload.phaseDirectoryBinding) throw codedError6("AUDIT_CHECKPOINT_INVALID_BINDING");
+  const guard = openPhaseDirectory({
+    state,
+    runId,
+    create: false,
+    expectedBinding: checkpoint.payload.phaseDirectoryBinding
+  });
   const pathname = resolve3(state.paths.root, checkpoint.payload.artifactRef);
   const checkpointRoot = resolve3(state.paths.privateCheckpoints);
-  if (!pathname.startsWith(`${checkpointRoot}${sep3}`)) {
+  const expectedPathname = join2(
+    guard.directory,
+    basename2(phaseArtifactPath(state, runId, phase))
+  );
+  if (!pathname.startsWith(`${checkpointRoot}${sep3}`) || pathname !== expectedPathname) {
+    guard.close();
     throw codedError6("AUDIT_CHECKPOINT_INVALID_PATH");
   }
-  let envelope;
   try {
-    const metadata = lstatSync3(pathname);
-    if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error();
-    envelope = JSON.parse(readFileSync2(pathname, "utf8"));
-  } catch {
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_ARTIFACT");
+    const envelope = readPhaseEnvelope(pathname, guard);
+    if (sha256(envelope) !== checkpoint.payload.artifactHash) {
+      throw codedError6("AUDIT_CHECKPOINT_INVALID_HASH");
+    }
+    const output = decryptPhaseArtifact({
+      envelope,
+      runId,
+      phase,
+      inputHash: inputHash2,
+      keys
+    });
+    if (sha256(output) !== checkpoint.outputHash) {
+      throw codedError6("AUDIT_CHECKPOINT_INVALID_OUTPUT_HASH");
+    }
+    guard.assertSame();
+    return output;
+  } finally {
+    guard.close();
   }
-  if (sha256(envelope) !== checkpoint.payload.artifactHash) {
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_HASH");
-  }
-  const output = decryptPhaseArtifact({
-    envelope,
-    runId,
-    phase,
-    inputHash: inputHash2,
-    keys
-  });
-  if (sha256(output) !== checkpoint.outputHash) {
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_OUTPUT_HASH");
-  }
-  return output;
 }
 function savePhase(state, runId, phase, input, output, keys) {
   const inputHash2 = sha256(input ?? null);
@@ -8314,7 +8569,7 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
     join2(state.paths.privateCheckpoints, runId),
     directory
   ]) {
-    const metadata = lstatSync3(candidate);
+    const metadata = lstatSync4(candidate);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
       throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
     }
@@ -8335,14 +8590,14 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
   })}
 `, "utf8");
   if (existsSync2(destination)) {
-    const metadata = lstatSync3(destination);
+    const metadata = lstatSync4(destination);
     if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync2(destination).equals(bytes)) throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
   } else {
     const temporary = `${destination}.tmp`;
     let descriptor;
     try {
       if (existsSync2(temporary)) {
-        const metadata = lstatSync3(temporary);
+        const metadata = lstatSync4(temporary);
         if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync2(temporary).equals(bytes)) throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
       } else {
         descriptor = openSync(
@@ -8669,6 +8924,13 @@ function createAuditKernel({
           publicationId: `publication_${revisionHash.slice(0, 24)}`,
           now: clock()
         });
+        if (typeof faultInjector === "function") {
+          await faultInjector({
+            phase: "publication_intent_prepared",
+            runId,
+            publicationId: prepared.publicationId
+          });
+        }
         const publication = trustedPublication ? await publisher({
           paths: state.paths,
           runManifest: {
@@ -8763,8 +9025,13 @@ function createAuditKernel({
         profile: args.profile,
         providerDescriptor
       };
-      state.createRun({ runId, frozenInputs, invocation, now: clock() });
-      state.acquireLease({ runId, now: clock(), ttlMs: 3e5 });
+      state.createRunWithLease({
+        runId,
+        frozenInputs,
+        invocation,
+        now: clock(),
+        ttlMs: 3e5
+      });
       return await execute({ args, runId, frozenInputs, state, keys });
     } catch (error) {
       if (error?.code) throw error;
@@ -8813,12 +9080,20 @@ function createAuditKernel({
         resumeMismatch = true;
       }
       if (resumeMismatch) {
-        state.releaseLease({ runId: input.runId });
         state.close();
         state = void 0;
         zeroKeys(keys);
         keys = void 0;
-        const newResult = await start(args);
+        let newResult;
+        try {
+          newResult = await start(args);
+        } catch (error) {
+          if (error?.code !== "LEASE_HELD") throw error;
+          return deepFreeze4({
+            status: "RESUME_INPUT_MISMATCH_ACTIVE_LEASE",
+            oldRunId: input.runId
+          });
+        }
         return deepFreeze4({
           status: "RESUME_INPUT_MISMATCH",
           oldRunId: input.runId,
@@ -8893,8 +9168,8 @@ import {
   closeSync as closeSync2,
   constants as constants2,
   existsSync as existsSync3,
-  fstatSync,
-  lstatSync as lstatSync4,
+  fstatSync as fstatSync2,
+  lstatSync as lstatSync5,
   mkdirSync as mkdirSync4,
   openSync as openSync2,
   readFileSync as readFileSync3,
@@ -8926,7 +9201,7 @@ function readRegularJson(pathname, code) {
   let descriptor;
   try {
     descriptor = openSync2(pathname, constants2.O_RDONLY | constants2.O_NOFOLLOW);
-    const metadata = fstatSync(descriptor);
+    const metadata = fstatSync2(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync3(descriptor, "utf8"));
     if (!isPlainObject3(parsed)) throw new Error();
@@ -8961,7 +9236,7 @@ function writeImmutable(pathname, value) {
     "utf8"
   );
   if (existsSync3(pathname)) {
-    const metadata = lstatSync4(pathname);
+    const metadata = lstatSync5(pathname);
     if (metadata.isSymbolicLink() || !metadata.isFile()) {
       throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
@@ -8976,7 +9251,7 @@ function writeImmutable(pathname, value) {
     writeFileSync3(temporary, bytes, { flag: "wx", mode: 384 });
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
-    const metadata = existsSync3(temporary) ? lstatSync4(temporary) : void 0;
+    const metadata = existsSync3(temporary) ? lstatSync5(temporary) : void 0;
     if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync3(temporary).equals(bytes)) throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
   }
   renameSync2(temporary, pathname);
@@ -8992,7 +9267,7 @@ function localPublisher({
 }) {
   const publicationRoot = join3(paths.weekly, publicationId);
   if (existsSync3(publicationRoot)) {
-    const metadata = lstatSync4(publicationRoot);
+    const metadata = lstatSync5(publicationRoot);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
       throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
@@ -9129,7 +9404,7 @@ init_weekly();
 import {
   closeSync as closeSync3,
   constants as constants3,
-  fstatSync as fstatSync2,
+  fstatSync as fstatSync3,
   openSync as openSync3,
   readFileSync as readFileSync4
 } from "node:fs";
@@ -9195,7 +9470,7 @@ function readRegularJson2(pathname, code) {
   let descriptor;
   try {
     descriptor = openSync3(pathname, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-    const metadata = fstatSync2(descriptor);
+    const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const value = JSON.parse(readFileSync4(descriptor, "utf8"));
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
