@@ -140,3 +140,55 @@ injected host seams. This keeps Task 10 free of a new network client, browser
 driver, credential path, or unrestricted subprocess surface while retaining
 the checked-in legacy runbook, throttle, validator, sanitizer, baseline, and
 go-live tools as the authorities used by the host.
+
+## Independent-review hardening
+
+An independent review found two critical and two important compatibility
+gaps. Four adversarial tests were added before the fixes.
+
+Initial focused hardening result:
+
+- command:
+  `node --test skills/ghl-account-audit/tests/legacy-compatibility.test.mjs`
+- exit code: 1
+- tests: 24
+- passed: 20
+- failed: 4
+
+The failures proved that a collector with a forged public-policy envelope
+could dispatch, private values in live names could enter Markdown, cross-
+workflow browser evidence could pass, and verify could run with a missing or
+empty design registry.
+
+Final focused hardening result: 24 tests passed, 0 failed.
+
+Final review-hardening gates:
+
+- legacy floor: 11 passed, 0 failed;
+- full package: 255 passed, 0 failed;
+- full package plus baseline: 259 passed, 0 failed;
+- build: passed;
+- Task 9 offline replay: `complete_partial`, exit 0;
+- unchanged Python validator: `VALID`, exit 0;
+- frozen compatibility hashes, syntax, static network scan, authored
+  no-em-dash scan, and diff checks: passed.
+
+The hardening now:
+
+- validates the exact Task 4 trusted action tuple through
+  `loadTrustedPublicReadPolicy` and `assertTrustedAction`;
+- binds tool, operation, provider, location, capability-manifest,
+  allowlist, catalog revision, source hash, and source/provider versions before
+  the collector can dispatch;
+- rejects write-like operation and action semantics independently of a
+  claimed GET/read classification while retaining an explicitly approved
+  semantic-read POST;
+- projects every interpolated Markdown value through the approved legacy
+  sanitizer plus narrow credential and PII shape redaction;
+- binds every browser response to its exact GET endpoint, file, location, and
+  workflow request, and requires every exposed workflow identity to match;
+- combines injected workflow conformance with authoritative full-evidence
+  validity so an injected PASS cannot bypass a binding failure; and
+- validates non-empty workflow, stage, calendar, payment-product, and AI-agent
+  registry declarations before manifest reads, collection, or filesystem
+  effects.

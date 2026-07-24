@@ -5,9 +5,49 @@ import {
   legacyModeResult,
   readLegacyManifest,
   resolveCaptureDate,
+  sanitizeLegacyMarkdownText,
   writeLegacyCaptureTree,
 } from '../adapters/legacy-capture.mjs';
-import { codedError } from '../adapters/collection.mjs';
+import {
+  cloneJson,
+  codedError,
+  deepFreezeJson,
+} from '../adapters/collection.mjs';
+
+function plainObject(value) {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+function declarationValid(value, required) {
+  return plainObject(value)
+    && required.every((key) => typeof value[key] === 'string' && value[key].length > 0);
+}
+
+function validateVerifyRegistry(value) {
+  if (!plainObject(value)) throw codedError('LEGACY_VERIFY_INPUT_MISSING', TypeError);
+  const requiredArrays = ['workflows', 'stages', 'calendars', 'paymentProducts', 'aiAgents'];
+  if (requiredArrays.some((key) => !Array.isArray(value[key]) || value[key].length === 0)) {
+    throw codedError('LEGACY_VERIFY_INPUT_MISSING', TypeError);
+  }
+  if (
+    value.workflows.some((entry) =>
+      !declarationValid(entry, ['id', 'name', 'section']))
+    || value.stages.some((entry) =>
+      !declarationValid(entry, ['id', 'name', 'section']))
+    || ['calendars', 'paymentProducts', 'aiAgents'].some((key) =>
+      value[key].some((entry) => !declarationValid(entry, ['name', 'section'])))
+  ) throw codedError('LEGACY_VERIFY_INPUT_MISSING', TypeError);
+  try {
+    return deepFreezeJson(cloneJson(value, 'LEGACY_VERIFY_INPUT_MISSING'));
+  } catch {
+    throw codedError('LEGACY_VERIFY_INPUT_MISSING', TypeError);
+  }
+}
 
 function safeEvidenceRefs(value, fallback) {
   if (!Array.isArray(value)) return [fallback];
@@ -17,7 +57,7 @@ function safeEvidenceRefs(value, fallback) {
     && !entry.startsWith('/')
     && !entry.includes('..')
     && !/bearer|cookie|token|authorization/iu.test(entry));
-  return safe.length ? safe : [fallback];
+  return (safe.length ? safe : [fallback]).map(sanitizeLegacyMarkdownText);
 }
 
 function check(name, outcome, fallback) {
@@ -121,6 +161,7 @@ async function runRequiredCheck(fn, input) {
 }
 
 export async function runVerifyMode(args = {}) {
+  const registry = validateVerifyRegistry(args.registry);
   const captureDate = resolveCaptureDate(args);
   const manifestRecord = await readLegacyManifest({
     clientFolder: args.clientFolder,
@@ -136,7 +177,7 @@ export async function runVerifyMode(args = {}) {
     clientFolder: manifestRecord.clientRoot,
     manifestPath: manifestRecord.manifestPath,
     manifest: manifestRecord.manifest,
-    registry: args.registry ?? {},
+    registry,
     sweep,
   };
   const checks = [];
@@ -148,11 +189,17 @@ export async function runVerifyMode(args = {}) {
     }),
     'baseline.validate',
   ));
-  checks.push(check(
-    'workflows',
-    await (args.workflowConformance ?? defaultWorkflowConformance)(input),
-    'registry.workflows',
-  ));
+  const workflowOutcome = await (args.workflowConformance ?? defaultWorkflowConformance)(input);
+  const authoritativeWorkflowProof = registry.workflows.every((expected) => {
+    const live = sweep.areas.workflows.filter((item) =>
+      item.id === expected.id && item.name === expected.name);
+    return live.length === 1
+      && sweep.workflowValidity[expected.id]?.valid === true;
+  });
+  checks.push(check('workflows', {
+    ...workflowOutcome,
+    pass: workflowOutcome?.pass === true && authoritativeWorkflowProof,
+  }, 'registry.workflows'));
   checks.push(check(
     'stages',
     await (args.stageConformance ?? defaultStageConformance)(input),

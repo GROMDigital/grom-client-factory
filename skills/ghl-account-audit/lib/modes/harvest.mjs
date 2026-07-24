@@ -7,6 +7,7 @@ import {
   readLegacyManifest,
   resolveCaptureDate,
   resolveHarvestManifest,
+  sanitizeLegacyMarkdownText,
   writeLegacyCaptureTree,
 } from '../adapters/legacy-capture.mjs';
 import { canonicalJson } from '../canonical.mjs';
@@ -82,8 +83,8 @@ export async function runHarvestMode(args = {}) {
     '## Go-live checker',
     '',
     '```text',
-    typeof goLive.output === 'string' && !/bearer|cookie|authorization|token/iu.test(goLive.output)
-      ? goLive.output
+    typeof goLive.output === 'string'
+      ? sanitizeLegacyMarkdownText(goLive.output)
       : goLive.pass === true
         ? 'golive_check: READY'
         : 'GOLIVE_CHECK_FAILED',

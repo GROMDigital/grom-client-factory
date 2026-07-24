@@ -25,6 +25,8 @@ import {
 import { runCaptureMode } from '../lib/modes/capture.mjs';
 import { runVerifyMode } from '../lib/modes/verify.mjs';
 import { runHarvestMode } from '../lib/modes/harvest.mjs';
+import { loadTrustedPublicReadPolicy } from '../lib/adapters/trusted-public-policy.mjs';
+import { loadPublicCatalogSnapshot } from '../schemas/v1.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SKILL = join(HERE, '..');
@@ -33,6 +35,9 @@ const LEGACY_FIXTURE = join(HERE, 'fixtures', 'legacy', 'workflow-capture');
 const DIRTY_FIXTURE = join(HERE, 'fixtures', 'capture-dirty.json');
 const DATE = '2026-07-24';
 const LOCATION = 'L1';
+const CAPABILITY_HASH = '8'.repeat(64);
+const TRUSTED_POLICY = loadTrustedPublicReadPolicy();
+const PUBLIC_SNAPSHOT = loadPublicCatalogSnapshot();
 const OPTIONAL_WORKFLOW_FILES = [
   'sticky-notes.json',
   'step-counts.json',
@@ -92,11 +97,28 @@ function publicCollector({
   declaration = {},
   calls = [],
 } = {}) {
+  const action = TRUSTED_POLICY.allowlist.actions.find(({ actionId }) =>
+    actionId === 'opportunities.list');
+  const pinned = {
+    providerId: 'fixture-provider',
+    expectedLocationId: locationId,
+    capabilityManifestHash: CAPABILITY_HASH,
+    publicCatalogSnapshotHash: TRUSTED_POLICY.snapshotHash,
+    publicReadAllowlistHash: TRUSTED_POLICY.allowlistHash,
+  };
   return {
+    ...pinned,
     declaration: {
-      actionId: 'fixture.read',
-      method: 'GET',
-      risk: 'read',
+      tool: 'execute_action',
+      operationId: 'legacy.inventory.opportunities',
+      ...action,
+      sourceSnapshotHash: TRUSTED_POLICY.snapshotHash,
+      sourceSnapshotVersion: PUBLIC_SNAPSHOT.schemaVersion,
+      sourceCatalogRevision: PUBLIC_SNAPSHOT.catalogRevision,
+      providerId: pinned.providerId,
+      providerVersion: PUBLIC_SNAPSHOT.sourceServer.version,
+      capabilityManifestHash: pinned.capabilityManifestHash,
+      allowlistHash: TRUSTED_POLICY.allowlistHash,
       locationId,
       boundLocationId: locationId,
       ...declaration,
@@ -136,7 +158,18 @@ function browserCollector({
           : request.file === 'trigger.json'
             ? triggerBody()
             : { locationId, file: request.file, unknownProviderField: 'preserved' });
-      return { status, locationId, body };
+      return {
+        status,
+        locationId,
+        request: {
+          method: request.method,
+          endpoint: request.endpoint,
+          locationId: request.locationId,
+          workflowId: request.workflowId,
+          file: request.file,
+        },
+        body,
+      };
     },
   };
 }
@@ -217,6 +250,28 @@ function harvestBindings(overrides = {}) {
     'phone.tracked_number': { kind: 'phone', value: '+61400000000' },
     'ai_agents.chat_primary': { kind: 'ai-agent', name: 'Primary AI' },
     'secrets_pointers.pit_vault_secret_name': { kind: 'secret-pointer', value: 'GHL_EXAMPLE_PIT' },
+    ...overrides,
+  };
+}
+
+function validRegistry(overrides = {}) {
+  return {
+    workflows: [{
+      id: 'workflow-1',
+      name: 'Lead Nurture',
+      status: 'PUBLISHED',
+      triggerType: 'facebook_lead_form',
+      section: 'registry.workflows.lead-nurture',
+    }],
+    stages: [{
+      id: 'stage-lead',
+      name: 'Lead',
+      canonicalStep: 'lead',
+      section: 'registry.stage_map.lead',
+    }],
+    calendars: [{ name: 'Consultation', section: 'registry.calendars.consultation' }],
+    paymentProducts: [{ name: 'Deposit', section: 'registry.payment_products.deposit' }],
+    aiAgents: [{ name: 'Primary AI', section: 'registry.ai_agents.primary' }],
     ...overrides,
   };
 }
@@ -464,7 +519,7 @@ test('workflow validator remains authoritative and partial evidence cannot pass'
     ) }),
     baselineValidator: async () => ({ pass: true, evidenceRefs: ['baseline'] }),
     workflowCaptureValidator: async () => ({ valid: false, evidenceRefs: ['workflow.json'] }),
-    registry: { workflows: [{ id: 'workflow-1', section: 'registry.workflows' }] },
+    registry: validRegistry(),
     stageConformance: async () => ({ pass: true, evidenceRefs: ['stages'] }),
     namedObjectConformance: async () => ({ pass: true, evidenceRefs: ['objects'] }),
     goLiveChecker: async () => ({ pass: true, evidenceRefs: ['golive'] }),
@@ -488,7 +543,7 @@ test('verify runs the five legacy checks in order and reports exact conformance'
     stageConformance: pass('stages'),
     namedObjectConformance: pass('named-objects'),
     goLiveChecker: pass('go-live'),
-    registry: {},
+    registry: validRegistry(),
   }));
   assert.deepEqual(order, ['baseline', 'workflows', 'stages', 'named-objects', 'go-live']);
   assert.equal(result.status, 'PASS');
@@ -505,7 +560,7 @@ test('verify runs the five legacy checks in order and reports exact conformance'
       stageConformance: async () => ({ pass: failedName !== 'stages', evidenceRefs: ['registry.stage_map'] }),
       namedObjectConformance: async () => ({ pass: failedName !== 'named-objects', evidenceRefs: ['registry.objects'] }),
       goLiveChecker: async () => ({ pass: failedName !== 'go-live', evidenceRefs: ['manifest.golive'] }),
-      registry: {},
+      registry: validRegistry(),
     }));
     assert.equal(failed.status, 'FAIL');
     assert.ok(failed.checks.some((check) => check.status === 'FAIL' && check.evidenceRefs.length));
@@ -527,7 +582,7 @@ test('capture verify and weekly do not modify client manifest', async (t) => {
       stageConformance: async () => ({ pass: true, evidenceRefs: ['stage'] }),
       namedObjectConformance: async () => ({ pass: true, evidenceRefs: ['objects'] }),
       goLiveChecker: async () => ({ pass: false, evidenceRefs: ['golive'] }),
-      registry: {},
+      registry: validRegistry(),
     }));
     assertSnapshot(manifestPath, before);
   }
@@ -722,7 +777,7 @@ test('legacy migration creates no weekly state review memory or proposals', asyn
       stageConformance: async () => ({ pass: true, evidenceRefs: ['stage'] }),
       namedObjectConformance: async () => ({ pass: true, evidenceRefs: ['objects'] }),
       goLiveChecker: async () => ({ pass: true, evidenceRefs: ['golive'] }),
-      registry: {},
+      registry: validRegistry(),
     }));
     if (mode === 'harvest') await runHarvestMode(harvestArgs(root));
     const paths = walkFiles(root);
@@ -834,4 +889,190 @@ test('same-byte manifest inode replacement is a concurrent conflict', async (t) 
   );
   assert.notEqual(statSync(manifestPath).ino, originalInode);
   assert.equal(JSON.parse(readFileSync(manifestPath, 'utf8')).ids_harvested, false);
+});
+
+test('public sweep requires the exact trusted Task 4 policy envelope before dispatch', async (t) => {
+  const mutations = [
+    ['tool', 'raw_request'],
+    ['operationId', 'legacy.inventory.create'],
+    ['actionId', 'opportunities.create'],
+    ['method', 'POST'],
+    ['normalizedPath', '/opportunities/create'],
+    ['category', 'contacts'],
+    ['risk', 'write'],
+    ['sourceSnapshotHash', '1'.repeat(64)],
+    ['sourceSnapshotVersion', '0.0.0'],
+    ['sourceCatalogRevision', 'forged'],
+    ['providerId', 'forged-provider'],
+    ['providerVersion', '0'],
+    ['capabilityManifestHash', '2'.repeat(64)],
+    ['allowlistHash', '3'.repeat(64)],
+    ['locationId', 'L2'],
+    ['boundLocationId', 'L2'],
+  ];
+  for (const [field, replacement] of mutations) {
+    const root = tempClient(`policy-${field}`);
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const calls = [];
+    const collector = publicCollector({
+      calls,
+      declaration: { [field]: replacement },
+    });
+    await assert.rejects(
+      runCaptureMode(captureArgs(root, { publicCollector: collector })),
+      /LEGACY_READ_ONLY_VIOLATION|LEGACY_LOCATION_MISMATCH/,
+      field,
+    );
+    assert.equal(calls.length, 0, field);
+    assert.equal(existsSync(join(root, 'captures')), false, field);
+  }
+
+  const root = tempClient('policy-top-level-pin');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const calls = [];
+  const collector = publicCollector({ calls });
+  collector.capabilityManifestHash = '4'.repeat(64);
+  await assert.rejects(
+    runCaptureMode(captureArgs(root, { publicCollector: collector })),
+    /LEGACY_READ_ONLY_VIOLATION/,
+  );
+  assert.equal(calls.length, 0);
+
+  const postRoot = tempClient('policy-approved-post');
+  t.after(() => rmSync(postRoot, { recursive: true, force: true }));
+  const postAction = TRUSTED_POLICY.allowlist.actions.find(({ actionId }) =>
+    actionId === 'contacts.search');
+  const approvedPost = publicCollector({
+    declaration: {
+      ...postAction,
+      operationId: 'legacy.inventory.contacts',
+    },
+  });
+  const postResult = await runCaptureMode(captureArgs(postRoot, {
+    publicCollector: approvedPost,
+  }));
+  assert.equal(postResult.status, 'PASS');
+});
+
+test('all committable markdown derives from recursively sanitized projections', async (t) => {
+  const root = tempClient('markdown-projection');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const canaries = {
+    bearer: 'Bearer eyJprivate.header.payload',
+    jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.private',
+    email: 'private.person@example.com',
+    phone: '+61412345678',
+    apiKey: 'sk_live_markdownprivate123456',
+  };
+  const areas = liveAreas();
+  areas.pipelines[0].name = canaries.bearer;
+  areas.pipelines[0].stages[0].name = canaries.email;
+  areas['custom-fields'][0].name = canaries.jwt;
+  areas['custom-fields'][0].fieldKey = canaries.apiKey;
+  areas.tags[0].name = canaries.phone;
+  areas.workflows[0].name = canaries.email;
+  const result = await runCaptureMode(captureArgs(root, {
+    publicCollector: publicCollector({ areas }),
+    browserCollector: browserCollector({
+      bodyFor: ({ file }) => {
+        if (file === 'workflow.json') {
+          const body = workflowBody();
+          body.name = canaries.bearer;
+          body.status = canaries.apiKey;
+          body.workflowData.templates[0].type = canaries.email;
+          return body;
+        }
+        if (file === 'trigger.json') {
+          return { workflowId: 'workflow-1', triggers: [{ type: canaries.jwt }] };
+        }
+        return { locationId: LOCATION, privateNote: canaries.phone };
+      },
+    }),
+  }));
+  const committableMarkdown = walkFiles(join(root, result.captureRoot))
+    .filter((path) => path.endsWith('.md'))
+    .map((path) => readFileSync(join(root, result.captureRoot, path), 'utf8'))
+    .join('\n');
+  for (const canary of Object.values(canaries)) {
+    assert.ok(!committableMarkdown.includes(canary), canary);
+  }
+  assert.match(committableMarkdown, /<REDACTED:(?:bearer|credential|pii|private-content)>/);
+});
+
+test('workflow and trigger identity plus request provenance bind full evidence', async (t) => {
+  for (const bodyFor of [
+    ({ file }) => file === 'workflow.json'
+      ? { ...workflowBody(), _id: 'workflow-other' }
+      : { workflowId: 'workflow-1', triggers: triggerBody().triggers },
+    ({ file }) => file === 'workflow.json'
+      ? workflowBody()
+      : { workflowId: 'workflow-other', triggers: triggerBody().triggers },
+    ({ file }) => file === 'workflow.json'
+      ? { ...workflowBody(), id: 'workflow-other' }
+      : { workflowId: 'workflow-1', triggers: triggerBody().triggers },
+  ]) {
+    const root = tempClient('workflow-binding');
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    writeManifest(root, baseManifest());
+    const result = await runVerifyMode(captureArgs(root, {
+      browserCollector: browserCollector({ bodyFor }),
+      baselineValidator: async () => ({ pass: true, evidenceRefs: ['baseline'] }),
+      workflowConformance: async () => ({ pass: true, evidenceRefs: ['registry.workflows'] }),
+      stageConformance: async () => ({ pass: true, evidenceRefs: ['registry.stages'] }),
+      namedObjectConformance: async () => ({ pass: true, evidenceRefs: ['registry.objects'] }),
+      goLiveChecker: async () => ({ pass: true, evidenceRefs: ['manifest.golive'] }),
+      registry: validRegistry(),
+    }));
+    assert.equal(result.status, 'FAIL');
+    assert.equal(result.checks.find(({ name }) => name === 'workflows').status, 'FAIL');
+  }
+
+  const root = tempClient('request-provenance');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const collector = browserCollector();
+  const originalFetch = collector.fetch.bind(collector);
+  collector.fetch = async (request) => {
+    const response = await originalFetch(request);
+    return {
+      ...response,
+      request: { ...response.request, workflowId: 'workflow-other' },
+    };
+  };
+  const result = await runCaptureMode(captureArgs(root, { browserCollector: collector }));
+  assert.equal(result.status, 'FAIL');
+  assert.ok(result.unresolved.includes('workflows.workflow-1'));
+});
+
+test('verify rejects missing or empty design registry before every collection effect', async (t) => {
+  for (const registry of [
+    undefined,
+    {},
+    validRegistry({ workflows: [] }),
+    validRegistry({ stages: [] }),
+    validRegistry({ calendars: [], paymentProducts: [], aiAgents: [] }),
+  ]) {
+    const root = tempClient('verify-registry');
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const manifestPath = writeManifest(root, baseManifest());
+    const before = snapshot(manifestPath);
+    const publicCalls = [];
+    const browserCalls = [];
+    await assert.rejects(
+      runVerifyMode(captureArgs(root, {
+        publicCollector: publicCollector({ calls: publicCalls }),
+        browserCollector: browserCollector({ calls: browserCalls }),
+        registry,
+        baselineValidator: async () => ({ pass: true, evidenceRefs: ['baseline'] }),
+        workflowConformance: async () => ({ pass: true, evidenceRefs: ['workflows'] }),
+        stageConformance: async () => ({ pass: true, evidenceRefs: ['stages'] }),
+        namedObjectConformance: async () => ({ pass: true, evidenceRefs: ['objects'] }),
+        goLiveChecker: async () => ({ pass: true, evidenceRefs: ['golive'] }),
+      })),
+      /LEGACY_VERIFY_INPUT_MISSING/,
+    );
+    assert.equal(publicCalls.length, 0);
+    assert.equal(browserCalls.length, 0);
+    assert.equal(existsSync(join(root, 'captures')), false);
+    assertSnapshot(manifestPath, before);
+  }
 });

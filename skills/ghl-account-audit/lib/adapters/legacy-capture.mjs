@@ -13,12 +13,17 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { sanitizeCapture } from '../../scripts/sanitize_capture.mjs';
+import { loadPublicCatalogSnapshot } from '../../schemas/v1.mjs';
 import {
   cloneJson,
   codedError,
   deepFreezeJson,
 } from './collection.mjs';
 import { sha256 } from '../canonical.mjs';
+import {
+  assertTrustedAction,
+  loadTrustedPublicReadPolicy,
+} from './trusted-public-policy.mjs';
 
 export const LEGACY_WORKFLOW_ENDPOINTS = deepFreezeJson([
   {
@@ -91,6 +96,26 @@ const AREA_NAMES = [
 const DANGEROUS_DECLARATION_KEYS = /^(authorization|body|confirm|cookie|delete|mutation|publish|raw[_-]?request|requestbody|send|trigger)$/iu;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/u;
+const SHA256 = /^[a-f0-9]{64}$/u;
+const WRITE_LIKE_OPERATION = /(?:^|[._:/-])(?:create|delete|execute|mutate|patch|publish|remove|send|trigger|update|write)(?:$|[._:/-])/iu;
+const PUBLIC_DECLARATION_KEYS = [
+  'actionId',
+  'allowlistHash',
+  'boundLocationId',
+  'capabilityManifestHash',
+  'category',
+  'locationId',
+  'method',
+  'normalizedPath',
+  'operationId',
+  'providerId',
+  'providerVersion',
+  'risk',
+  'sourceCatalogRevision',
+  'sourceSnapshotHash',
+  'sourceSnapshotVersion',
+  'tool',
+].sort();
 
 const DEFAULT_FS = Object.freeze({
   lstat,
@@ -203,21 +228,50 @@ export function assertLegacyReadOnlyCollector(collector, expectedLocationId) {
     error('LEGACY_READ_ONLY_VIOLATION', TypeError);
   }
   const declaration = collector.declaration;
+  const trustedPolicy = loadTrustedPublicReadPolicy();
+  const snapshot = loadPublicCatalogSnapshot();
   if (
     !plainObject(declaration)
-    || declaration.method !== 'GET'
-    || declaration.risk !== 'read'
+    || JSON.stringify(Object.keys(declaration).sort()) !== JSON.stringify(PUBLIC_DECLARATION_KEYS)
+    || declaration.tool !== 'execute_action'
+    || typeof declaration.operationId !== 'string'
+    || declaration.operationId.length === 0
+    || WRITE_LIKE_OPERATION.test(declaration.operationId)
+    || WRITE_LIKE_OPERATION.test(declaration.actionId)
     || declaration.locationId !== expectedLocationId
     || declaration.boundLocationId !== expectedLocationId
+    || declaration.sourceSnapshotVersion !== snapshot.schemaVersion
+    || declaration.sourceCatalogRevision !== snapshot.catalogRevision
+    || declaration.providerVersion !== snapshot.sourceServer.version
+    || declaration.sourceSnapshotHash !== trustedPolicy.snapshotHash
+    || declaration.allowlistHash !== trustedPolicy.allowlistHash
+    || typeof declaration.providerId !== 'string'
+    || declaration.providerId.length === 0
+    || !SHA256.test(declaration.capabilityManifestHash)
+    || collector.providerId !== declaration.providerId
+    || collector.expectedLocationId !== expectedLocationId
+    || collector.capabilityManifestHash !== declaration.capabilityManifestHash
+    || collector.publicCatalogSnapshotHash !== declaration.sourceSnapshotHash
+    || collector.publicReadAllowlistHash !== declaration.allowlistHash
   ) {
     if (
       declaration?.locationId !== expectedLocationId
       || declaration?.boundLocationId !== expectedLocationId
+      || collector?.expectedLocationId !== expectedLocationId
     ) error('LEGACY_LOCATION_MISMATCH');
     error('LEGACY_READ_ONLY_VIOLATION');
   }
   if (inspectDangerousDeclaration(declaration)) error('LEGACY_READ_ONLY_VIOLATION');
-  return collector;
+  try {
+    assertTrustedAction(trustedPolicy, declaration);
+  } catch {
+    error('LEGACY_READ_ONLY_VIOLATION');
+  }
+  const dispatch = collector.collect.bind(collector);
+  return Object.freeze({
+    declaration: deepFreezeJson(cloneSafe(declaration, 'LEGACY_READ_ONLY_VIOLATION')),
+    collect: dispatch,
+  });
 }
 
 function assertBrowserCollector(collector, expectedLocationId) {
@@ -264,6 +318,34 @@ function cloneSafe(value, code = 'LEGACY_COLLECTION_INCOMPLETE') {
   }
 }
 
+function unwrappedBrowserBody(value) {
+  if (plainObject(value) && value.ok === true && Object.hasOwn(value, 'body')) return value.body;
+  if (plainObject(value) && value.status === 200 && Object.hasOwn(value, 'data')) return value.data;
+  return value;
+}
+
+function workflowIdentityIndicators(value, output = []) {
+  if (!value || typeof value !== 'object') return output;
+  for (const [key, nested] of Object.entries(value)) {
+    if (key.toLowerCase().replace(/[^a-z0-9]/gu, '') === 'workflowid') {
+      output.push(nested);
+    } else {
+      workflowIdentityIndicators(nested, output);
+    }
+  }
+  return output;
+}
+
+function exactBrowserRequestProvenance(response, request) {
+  return plainObject(response.request)
+    && Object.keys(response.request).sort().join(',') === 'endpoint,file,locationId,method,workflowId'
+    && response.request.method === request.method
+    && response.request.endpoint === request.endpoint
+    && response.request.locationId === request.locationId
+    && response.request.workflowId === request.workflowId
+    && response.request.file === request.file;
+}
+
 export async function collectBrowserWorkflowEvidence({
   locationId,
   workflowIds,
@@ -287,17 +369,19 @@ export async function collectBrowserWorkflowEvidence({
   const workflows = {};
   for (const workflowId of [...new Set(workflowIds)].sort()) {
     const files = {};
+    const bindingIssues = [];
     for (const endpoint of endpoints) {
       await browserThrottle.wait();
       let response;
+      const request = {
+        method: 'GET',
+        locationId: expectedLocationId,
+        workflowId,
+        file: endpoint.file,
+        endpoint: endpoint.endpoint({ locationId: expectedLocationId, workflowId }),
+      };
       try {
-        response = await browserCollector.fetch({
-          method: 'GET',
-          locationId: expectedLocationId,
-          workflowId,
-          file: endpoint.file,
-          endpoint: endpoint.endpoint({ locationId: expectedLocationId, workflowId }),
-        });
+        response = await browserCollector.fetch(request);
       } catch {
         error('LEGACY_COLLECTION_INCOMPLETE');
       }
@@ -316,10 +400,30 @@ export async function collectBrowserWorkflowEvidence({
       if (response.status !== 200 || !Object.hasOwn(response, 'body')) {
         error('LEGACY_COLLECTION_INCOMPLETE');
       }
+      if (!exactBrowserRequestProvenance(response, request)) {
+        bindingIssues.push(`REQUEST_PROVENANCE_INVALID:${endpoint.file}`);
+      }
       assertResponseLocations(response.body, expectedLocationId);
       files[endpoint.file] = cloneSafe(response.body);
     }
-    workflows[workflowId] = { files };
+    const workflow = unwrappedBrowserBody(files['workflow.json']);
+    const returnedWorkflowIds = plainObject(workflow)
+      ? [workflow._id, workflow.id].filter((value) => value !== undefined)
+      : [];
+    if (
+      returnedWorkflowIds.length === 0
+      || returnedWorkflowIds.some((value) => value !== workflowId)
+    ) bindingIssues.push('WORKFLOW_ID_MISMATCH');
+    const trigger = unwrappedBrowserBody(files['trigger.json']);
+    const triggerWorkflowIds = workflowIdentityIndicators(trigger);
+    if (triggerWorkflowIds.some((value) => value !== workflowId)) {
+      bindingIssues.push('TRIGGER_WORKFLOW_ID_MISMATCH');
+    }
+    workflows[workflowId] = {
+      files,
+      bindingValid: bindingIssues.length === 0,
+      bindingIssues,
+    };
   }
   return deepFreezeJson({ locationId: expectedLocationId, workflows });
 }
@@ -385,7 +489,8 @@ export async function collectLegacySweep({
       }
     }
     workflowValidity[workflowId] = {
-      valid: validation?.valid === true,
+      valid: validation?.valid === true
+        && browser.workflows[workflowId]?.bindingValid === true,
       evidenceRefs: Array.isArray(validation?.evidenceRefs)
         ? validation.evidenceRefs.filter(safeRelative)
         : [],
@@ -422,8 +527,18 @@ function sanitizedJson(value) {
   return rawJson(removePrivateContent(sanitized));
 }
 
+export function sanitizeLegacyMarkdownText(value) {
+  const { sanitized } = sanitizeCapture(String(value ?? ''));
+  return sanitized
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, '<REDACTED:pii>')
+    .replace(/(?:\+\d[\d\s().-]{7,}\d|\b\d{3}[\s().-]\d{3}[\s().-]\d{4}\b)/gu, '<REDACTED:pii>')
+    .replace(/\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9_-]{8,}\b/giu, '<REDACTED:credential>')
+    .replace(/\b(?:cookie|session)\s*=\s*[^\s|]+/giu, '<REDACTED:credential>')
+    .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token)\s*[:=]\s*[^\s|]+/giu, '<REDACTED:credential>');
+}
+
 function markdownCell(value) {
-  return String(value ?? '').replaceAll('|', '\\|').replaceAll('\n', ' ');
+  return sanitizeLegacyMarkdownText(value).replaceAll('|', '\\|').replaceAll('\n', ' ');
 }
 
 function areaMarkdown(area, items) {
