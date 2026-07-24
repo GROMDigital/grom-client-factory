@@ -471,7 +471,7 @@ export function createPublicGhlAdapter({
       let reportedCount = null;
       let responseBytes = 0;
       let pageCount = 0;
-      let segmentRecordCount = 0;
+      let collectedRecordCount = 0;
       let retryCount = 0;
       let retryDelay = 0;
       const items = [];
@@ -503,6 +503,8 @@ export function createPublicGhlAdapter({
         initialCursor = checkpoint.initialCursor;
         appliedWindow = checkpoint.appliedWindow;
         reportedCount = checkpoint.reportedCount;
+        responseBytes = checkpoint.responseBytes;
+        pageCount = checkpoint.pageCount;
         for (const artifact of checkpoint.pageArtifacts) {
           let restored;
           try {
@@ -540,6 +542,7 @@ export function createPublicGhlAdapter({
         if (items.length !== checkpoint.collectedCount) {
           throw codedError('RESUME_PAGE_INVALID');
         }
+        collectedRecordCount = items.length;
         if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
       }
 
@@ -595,6 +598,12 @@ export function createPublicGhlAdapter({
         if (pageCount >= budget.maximumPages) {
           return finishIncomplete('BUDGET_MAXIMUM_PAGES');
         }
+        if (collectedRecordCount >= budget.maximumRecords) {
+          return finishIncomplete('BUDGET_MAXIMUM_RECORDS');
+        }
+        if (responseBytes >= budget.maximumResponseBytes) {
+          return finishIncomplete('BUDGET_MAXIMUM_RESPONSE_BYTES');
+        }
 
         let raw;
         try {
@@ -635,7 +644,7 @@ export function createPublicGhlAdapter({
           const remainingAfterFailure = budget.wallClockMs - elapsed(started, runtime);
           if (remainingAfterFailure <= 0) return finishIncomplete('BUDGET_WALL_CLOCK');
           const remainingRetryDelay = budget.maximumTotalRetryDelayMs - retryDelay;
-          if (remainingRetryDelay <= 0) {
+          if (remainingRetryDelay < 0 || (remainingRetryDelay === 0 && delay > 0)) {
             return finishIncomplete('BUDGET_TOTAL_RETRY_DELAY');
           }
           if (
@@ -720,7 +729,7 @@ export function createPublicGhlAdapter({
           responseBytes: currentResponseBytes,
         });
         items.push(...response.items);
-        segmentRecordCount += response.items.length;
+        collectedRecordCount += response.items.length;
         currentCursor = response.page.nextCursor;
 
         if (elapsed(started, runtime) >= budget.wallClockMs) {
@@ -729,7 +738,7 @@ export function createPublicGhlAdapter({
         if (responseBytes > budget.maximumResponseBytes) {
           return finishIncomplete('BUDGET_MAXIMUM_RESPONSE_BYTES', { nextCursor: currentCursor });
         }
-        if (segmentRecordCount > budget.maximumRecords) {
+        if (collectedRecordCount > budget.maximumRecords) {
           return finishIncomplete('BUDGET_MAXIMUM_RECORDS', { nextCursor: currentCursor });
         }
         if (response.rateLimited === true) {

@@ -574,7 +574,6 @@ test('resume restores and verifies prior sealed pages before terminal inventory'
   const calls = [];
   const resumed = await publicAdapter({
     calls,
-    budget: { ...generousBudget, maximumPages: 1 },
     checkpointStore,
     rawPageSink,
     responses: [page({
@@ -594,6 +593,86 @@ test('resume restores and verifies prior sealed pages before terminal inventory'
   assert.equal(resumed.page.complete, true);
   assert.equal(resumed.page.reportedCount, 2);
   assert.equal(resumed.privateSourceInventory.length, 1);
+});
+
+test('resume enforces cumulative page, record, and response-byte budgets before dispatch', async () => {
+  let checkpoint;
+  const rawPageSink = fakeRawPageSink();
+  const checkpointStore = {
+    async save(value) {
+      checkpoint = structuredClone(value);
+    },
+  };
+  const first = await publicAdapter({
+    budget: { ...generousBudget, maximumPages: 1 },
+    checkpointStore,
+    rawPageSink,
+    responses: [page({
+      items: [{ id: 'C1' }],
+      nextCursor: 'C2',
+      reportedCount: 2,
+      complete: false,
+    })],
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(first.incompleteReason, 'BUDGET_MAXIMUM_PAGES');
+  const priorCheckpoint = structuredClone(checkpoint);
+
+  for (const fixture of [
+    {
+      name: 'pages',
+      budget: { ...generousBudget, maximumPages: 1 },
+      reason: 'BUDGET_MAXIMUM_PAGES',
+    },
+    {
+      name: 'records',
+      budget: { ...generousBudget, maximumRecords: 1 },
+      reason: 'BUDGET_MAXIMUM_RECORDS',
+    },
+    {
+      name: 'bytes',
+      budget: {
+        ...generousBudget,
+        maximumResponseBytes: priorCheckpoint.responseBytes,
+      },
+      reason: 'BUDGET_MAXIMUM_RESPONSE_BYTES',
+    },
+  ]) {
+    const calls = [];
+    let resumedCheckpoint;
+    const result = await publicAdapter({
+      calls,
+      budget: fixture.budget,
+      rawPageSink,
+      checkpointStore: {
+        async load() {
+          return structuredClone(priorCheckpoint);
+        },
+        async save(value) {
+          resumedCheckpoint = structuredClone(value);
+        },
+      },
+      responses: [page({
+        cursor: 'C2',
+        items: [{ id: 'C2' }],
+        reportedCount: 2,
+      })],
+    }).collect({
+      capability: approvedCapability,
+      window,
+      cursor: priorCheckpoint.resumeCursor,
+    });
+    assert.equal(calls.length, 0, fixture.name);
+    assert.equal(result.incompleteReason, fixture.reason, fixture.name);
+    assert.deepEqual(result.items, [{ id: 'C1' }], fixture.name);
+    assert.equal(result.page.nextCursor, 'C2', fixture.name);
+    assert.equal(resumedCheckpoint.pageCount, 1, fixture.name);
+    assert.equal(resumedCheckpoint.collectedCount, 1, fixture.name);
+    assert.equal(
+      resumedCheckpoint.responseBytes,
+      priorCheckpoint.responseBytes,
+      fixture.name,
+    );
+  }
 });
 
 test('resume rejects a bare cursor or tampered checkpoint before dispatch', async () => {
@@ -825,6 +904,32 @@ test('retry sleep is capped by the smaller remaining retry-delay budget', async 
   }).collect({ capability: approvedCapability, window });
   assert.deepEqual(slept, [2]);
   assert.equal(result.incompleteReason, 'BUDGET_TOTAL_RETRY_DELAY');
+});
+
+test('zero-delay retry is allowed when the total retry-delay budget is zero', async () => {
+  const calls = [];
+  const slept = [];
+  const retry = Object.assign(new Error('retry immediately'), {
+    code: 'RETRYABLE',
+    retryAfterMs: 0,
+  });
+  const result = await publicAdapter({
+    calls,
+    budget: {
+      ...generousBudget,
+      retryCount: 1,
+      maximumTotalRetryDelayMs: 0,
+    },
+    responses: [retry, page()],
+    runtime: {
+      async sleep(milliseconds) {
+        slept.push(milliseconds);
+      },
+    },
+  }).collect({ capability: approvedCapability, window });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(slept, [0]);
+  assert.equal(result.page.complete, true);
 });
 
 test('wall clock exhaustion checkpoints with a deterministic clock', async () => {
