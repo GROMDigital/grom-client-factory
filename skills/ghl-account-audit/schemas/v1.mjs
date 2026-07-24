@@ -6,6 +6,11 @@ import { z } from 'zod';
 export const SCHEMA_VERSION = '1.0.0';
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
+const PseudonymousSubjectRefSchema = z.string().regex(/^psn_[a-f0-9]{16,64}$/);
+const OpaqueObjectRefSchema = z.string().regex(/^obj_[a-f0-9]{16,64}$/);
+const EvidenceRefSchema = z.string().regex(/^ev_[a-f0-9]{16,64}$/);
+const ActorRefSchema = z.string().regex(/^actor_[a-f0-9]{16,64}$/);
+const JourneyInstanceIdSchema = z.string().regex(/^journey_[a-z][a-z0-9_]{2,127}$/);
 const NonEmptyRecordSchema = z.record(z.string(), z.unknown())
   .refine((value) => Object.keys(value).length > 0, 'must not be empty');
 const JsonRecordSchema = z.record(z.string(), z.unknown());
@@ -19,6 +24,7 @@ export const TargetSchema = z.object({
 
 const JourneySchema = z.object({
   journeyId: z.string().min(1),
+  journeyInstanceId: JourneyInstanceIdSchema,
   entryRule: z.string().min(1),
   denominator: z.string().min(1),
   outcomes: z.array(z.string().min(1)).min(1),
@@ -34,6 +40,10 @@ export const CoverageProfileSchema = z.object({
   const ids = profile.journeys.map(({ journeyId }) => journeyId);
   if (new Set(ids).size !== ids.length) {
     ctx.addIssue({ code: 'custom', message: 'journey IDs must be unique' });
+  }
+  const instanceIds = profile.journeys.map(({ journeyInstanceId }) => journeyInstanceId);
+  if (new Set(instanceIds).size !== instanceIds.length) {
+    ctx.addIssue({ code: 'custom', message: 'journey instance IDs must be unique' });
   }
 });
 
@@ -51,14 +61,14 @@ export const RunManifestSchema = z.object({
 
 export const EvidenceRecordSchema = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
-  evidenceRef: z.string().min(1),
+  evidenceRef: EvidenceRefSchema,
   source: z.enum(['context', 'public_ghl', 'internal_ghl', 'onboarding_portal']),
   capturedAt: z.string().min(1),
   payloadHash: Sha256Schema,
   classification: z.enum(['OBSERVED', 'UNKNOWN', 'NOT_APPLICABLE']),
   objectRefs: z.array(z.object({
     objectType: z.string().min(1),
-    objectId: z.string().min(1),
+    objectId: OpaqueObjectRefSchema,
   }).strict()),
 }).strict();
 
@@ -70,7 +80,7 @@ export const FindingSchema = z.object({
   journeyId: z.string().min(1),
   edgeId: z.string().min(1),
   summary: z.string().min(1),
-  evidenceRefs: z.array(z.string().min(1)).min(1),
+  evidenceRefs: z.array(EvidenceRefSchema).min(1),
 }).strict();
 
 const ExactStateSchema = z.object({
@@ -115,7 +125,7 @@ const ChangeSetSchema = z.discriminatedUnion('solutionType', [
   }).strict(),
   ExactStateSchema.extend({
     solutionType: z.literal('operating_process'),
-    owner: z.string().min(1),
+    owner: ActorRefSchema,
     raci: z.record(z.string(), z.string()),
     sla: z.string().min(1),
     trigger: z.string().min(1),
@@ -132,7 +142,7 @@ export const ProposalSchema = z.object({
   packHash: Sha256Schema,
   objectRefs: z.array(z.object({
     objectType: z.string().min(1),
-    objectId: z.string().min(1),
+    objectId: OpaqueObjectRefSchema,
     capturedVersion: z.union([z.string(), z.number()]).nullable(),
     capturedHash: Sha256Schema,
   }).strict()),
@@ -140,13 +150,13 @@ export const ProposalSchema = z.object({
   preconditions: z.array(z.string()),
   dependencies: z.array(z.string()),
   blastRadius: z.string().min(1),
-  owner: z.string().min(1),
+  owner: ActorRefSchema,
   monitoring: z.array(z.string()).min(1),
   rollout: NonEmptyRecordSchema,
   rollback: NonEmptyRecordSchema,
   guardrails: z.array(z.string()),
   tests: z.array(z.string()),
-  evidenceRefs: z.array(z.string().min(1)),
+  evidenceRefs: z.array(EvidenceRefSchema),
 }).strict();
 
 export const ConversationSampleSchema = z.object({
@@ -154,10 +164,10 @@ export const ConversationSampleSchema = z.object({
   seed: z.string().min(1),
   universeCount: z.number().int().nonnegative(),
   selections: z.array(z.object({
-    subjectRef: z.string().min(1),
+    subjectRef: PseudonymousSubjectRefSchema,
     stratum: z.string().min(1),
     inclusionProbability: z.number().positive().max(1),
-    evidenceRefs: z.array(z.string()),
+    evidenceRefs: z.array(EvidenceRefSchema),
     scores: z.record(z.string(), z.number()).optional(),
   }).strict()),
 }).strict();
@@ -167,7 +177,7 @@ export const ReceiptSchema = z.object({
   receiptId: z.string().min(1),
   proposalHash: Sha256Schema,
   approvedAt: z.string().min(1),
-  approvedBy: z.string().min(1),
+  approvedBy: ActorRefSchema,
   approvalScope: z.array(z.string().min(1)).min(1),
   executable: z.literal(false),
 }).strict();
@@ -175,6 +185,7 @@ export const ReceiptSchema = z.object({
 export const MetricEdgeSchema = z.object({
   edgeId: z.string().min(1),
   journeyId: z.string().min(1),
+  journeyInstanceId: JourneyInstanceIdSchema,
   fromStage: z.string().min(1),
   toStage: z.string().min(1),
   eligibilityRule: JsonRecordSchema,
@@ -190,11 +201,7 @@ export const MetricEdgeSchema = z.object({
   outcomeRule: JsonRecordSchema,
   required: z.boolean(),
   nativeMapping: z.enum(['MAPPED', 'UNKNOWN']),
-}).strict().superRefine((edge, ctx) => {
-  if (edge.required && edge.nativeMapping !== 'MAPPED' && edge.nativeMapping !== 'UNKNOWN') {
-    ctx.addIssue({ code: 'custom', message: 'unmapped required edges must be UNKNOWN' });
-  }
-});
+}).strict();
 
 export const MetricContractsSchema = z.object({
   profileId: z.enum(['client', 'grom_internal']),
@@ -214,6 +221,9 @@ const ActionTupleSchema = z.object({
   category: z.string().min(1),
   risk: z.string().min(1),
 }).strict();
+const ReadActionTupleSchema = ActionTupleSchema.extend({
+  risk: z.literal('read'),
+}).strict();
 const ApprovalSchema = z.object({
   provenance: z.string().min(1),
   reviewedAt: z.string().min(1),
@@ -225,6 +235,9 @@ const CatalogCandidateSchema = ActionTupleSchema.extend({
 }).strict().superRefine((candidate, ctx) => {
   if (candidate.approvedSemanticRead && !candidate.approval) {
     ctx.addIssue({ code: 'custom', message: 'approved actions require approval provenance' });
+  }
+  if (candidate.approvedSemanticRead && candidate.risk !== 'read') {
+    ctx.addIssue({ code: 'custom', message: 'approved semantic reads must have read risk' });
   }
 });
 
@@ -251,7 +264,7 @@ export const PublicReadAllowlistSchema = z.object({
   sourceCatalogRevision: z.string().min(1),
   sourceSnapshotHash: Sha256Schema,
   sourceServerIdentity: z.string().min(1),
-  actions: z.array(ActionTupleSchema),
+  actions: z.array(ReadActionTupleSchema),
 }).strict().superRefine((allowlist, ctx) => {
   const ids = allowlist.actions.map(({ actionId }) => actionId);
   if (new Set(ids).size !== ids.length) {
@@ -320,7 +333,25 @@ export function loadMetricContracts(profileId) {
   const normalized = normalizeProfileId(profileId);
   const filename = METRIC_FILES[normalized];
   if (!filename) throw new Error(`UNKNOWN_METRIC_PROFILE:${profileId}`);
-  return MetricContractsSchema.parse(readProfileFile(filename));
+  return validateMetricContractsForProfile(loadProfile(normalized), readProfileFile(filename));
+}
+
+export function validateMetricContractsForProfile(profile, contracts) {
+  const parsedProfile = CoverageProfileSchema.parse(profile);
+  const parsedContracts = MetricContractsSchema.parse(contracts);
+  if (parsedProfile.profileId !== parsedContracts.profileId) {
+    throw new Error('PROFILE_METRIC_MISMATCH');
+  }
+  const journeyInstances = new Map(parsedProfile.journeys.map((journey) => [
+    journey.journeyId,
+    journey.journeyInstanceId,
+  ]));
+  for (const edge of parsedContracts.edges) {
+    if (journeyInstances.get(edge.journeyId) !== edge.journeyInstanceId) {
+      throw new Error(`JOURNEY_INSTANCE_MISMATCH:${edge.edgeId}`);
+    }
+  }
+  return parsedContracts;
 }
 
 export function loadCollectionBudgets() {
@@ -330,6 +361,9 @@ export function loadCollectionBudgets() {
 export function assertAllowedPublicAction(profile, action) {
   const allowlist = PublicReadAllowlistSchema.parse(profile);
   const requested = ActionTupleSchema.extend({ sourceSnapshotHash: Sha256Schema }).strict().parse(action);
+  if (requested.risk !== 'read') {
+    throw new Error('PUBLIC_ACTION_NOT_ALLOWED: risk must be read');
+  }
   if (requested.sourceSnapshotHash !== allowlist.sourceSnapshotHash) {
     throw new Error('PUBLIC_ACTION_NOT_ALLOWED: source snapshot hash differs');
   }

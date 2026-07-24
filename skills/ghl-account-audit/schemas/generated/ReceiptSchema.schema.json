@@ -20,7 +20,7 @@
     },
     "approvedBy": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^actor_[a-f0-9]{16,64}$"
     },
     "approvalScope": {
       "minItems": 1,

@@ -16,6 +16,7 @@
   "journeys": [
     {
       "journeyId": "client_sales",
+      "journeyInstanceId": "journey_client_sales",
       "entryRule": "account_declared_lead_creation",
       "denominator": "lead_created",
       "outcomes": ["won", "lost", "collected_revenue", "reactivated"]

@@ -33,7 +33,7 @@
           },
           "objectId": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^obj_[a-f0-9]{16,64}$"
           },
           "capturedVersion": {
             "anyOf": [
@@ -355,7 +355,7 @@
             },
             "owner": {
               "type": "string",
-              "minLength": 1
+              "pattern": "^actor_[a-f0-9]{16,64}$"
             },
             "raci": {
               "type": "object",
@@ -422,7 +422,7 @@
     },
     "owner": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^actor_[a-f0-9]{16,64}$"
     },
     "monitoring": {
       "minItems": 1,
@@ -461,7 +461,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "pattern": "^ev_[a-f0-9]{16,64}$"
       }
     }
   },

@@ -41,7 +41,7 @@
           },
           "risk": {
             "type": "string",
-            "minLength": 1
+            "const": "read"
           }
         },
         "required": [

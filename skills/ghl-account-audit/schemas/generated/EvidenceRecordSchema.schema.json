@@ -8,7 +8,7 @@
     },
     "evidenceRef": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^ev_[a-f0-9]{16,64}$"
     },
     "source": {
       "type": "string",
@@ -46,7 +46,7 @@
           },
           "objectId": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^obj_[a-f0-9]{16,64}$"
           }
         },
         "required": [

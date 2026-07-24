@@ -22,7 +22,7 @@
         "properties": {
           "subjectRef": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^psn_[a-f0-9]{16,64}$"
           },
           "stratum": {
             "type": "string",
@@ -36,7 +36,8 @@
           "evidenceRefs": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^ev_[a-f0-9]{16,64}$"
             }
           },
           "scores": {

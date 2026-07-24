@@ -5,19 +5,21 @@ import {
   CoverageProfileSchema,
   MetricContractsSchema,
   PublicCatalogSnapshotSchema,
+  PublicReadAllowlistSchema,
   assertAllowedPublicAction,
   loadCollectionBudgets,
   loadMetricContracts,
   loadProfile,
   loadPublicReadAllowlist,
   snapshotHash,
+  validateMetricContractsForProfile,
 } from '../schemas/v1.mjs';
 import { generatePublicAllowlist, generatedAllowlistText } from '../scripts/generate-public-allowlist.mjs';
 
 const profilesUrl = new URL('../profiles/', import.meta.url);
 const readJson = (name) => JSON.parse(readFileSync(new URL(name, profilesUrl), 'utf8'));
 
-test('golden client and Grom profiles preserve scope and separate denominators', () => {
+test('golden client and Grom profiles preserve scope and separate journey instances', () => {
   const client = loadProfile('client');
   const grom = loadProfile('grom_internal');
   assert.deepEqual(client.excludedCapabilities, [
@@ -28,7 +30,30 @@ test('golden client and Grom profiles preserve scope and separate denominators',
     'agency_new_business', 'client_onboarding',
   ]);
   assert.notEqual(grom.journeys[0].denominator, grom.journeys[1].denominator);
+  assert.deepEqual(grom.journeys.map(({ journeyInstanceId }) => journeyInstanceId), [
+    'journey_agency_new_business', 'journey_client_onboarding',
+  ]);
   assert.equal(CoverageProfileSchema.parse(client).profileId, 'client');
+});
+
+test('journey instance identifiers are required, unique, and bound to their journey contracts', () => {
+  const grom = loadProfile('grom_internal');
+  const missing = structuredClone(grom);
+  delete missing.journeys[0].journeyInstanceId;
+  assert.throws(() => CoverageProfileSchema.parse(missing));
+
+  const duplicate = structuredClone(grom);
+  duplicate.journeys[1].journeyInstanceId = duplicate.journeys[0].journeyInstanceId;
+  assert.throws(() => CoverageProfileSchema.parse(duplicate));
+
+  const crossJourney = structuredClone(loadMetricContracts('grom_internal'));
+  const missingEdgeInstance = structuredClone(crossJourney);
+  delete missingEdgeInstance.edges[0].journeyInstanceId;
+  assert.throws(() => MetricContractsSchema.parse(missingEdgeInstance));
+
+  const onboarding = crossJourney.edges.find(({ journeyId }) => journeyId === 'client_onboarding');
+  onboarding.journeyInstanceId = grom.journeys[0].journeyInstanceId;
+  assert.throws(() => validateMetricContractsForProfile(grom, crossJourney), /JOURNEY_INSTANCE_MISMATCH/);
 });
 
 test('every versioned metric edge conforms and unmapped required edges are UNKNOWN', () => {
@@ -40,6 +65,7 @@ test('every versioned metric edge conforms and unmapped required edges are UNKNO
       assert.equal(edge.nativeMapping, 'UNKNOWN');
       assert.ok(edge.edgeId.length > 0);
       assert.ok(edge.journeyId.length > 0);
+      assert.ok(edge.journeyInstanceId.length > 0);
       assert.ok(edge.dispositions.includes('unknown'));
     }
   }
@@ -82,7 +108,7 @@ test('catalog snapshot hash and checked-in generated allowlist are exact', () =>
   assert.equal(readFileSync(new URL('public-read-allowlist.v1.json', profilesUrl), 'utf8'), generatedAllowlistText(snapshot));
 });
 
-test('catalog rejects hash drift, duplicate action IDs, and approvals without provenance', () => {
+test('catalog rejects hash drift, duplicate action IDs, approval gaps, and approved writes', () => {
   const snapshot = readJson('public-catalog-snapshot.v1.json');
   const drifted = structuredClone(snapshot);
   drifted.candidates[0].normalizedPath = '/different';
@@ -98,10 +124,24 @@ test('catalog rejects hash drift, duplicate action IDs, and approvals without pr
   missingProvenance.candidates[0].approval = undefined;
   missingProvenance.canonicalSha256 = snapshotHash(missingProvenance);
   assert.throws(() => PublicCatalogSnapshotSchema.parse(missingProvenance));
+
+  const approvedWrite = structuredClone(snapshot);
+  const writeCandidate = approvedWrite.candidates.find(({ risk }) => risk === 'write');
+  writeCandidate.approvedSemanticRead = true;
+  writeCandidate.approval = {
+    provenance: 'reviewed search_actions catalog entry',
+    reviewedAt: '2026-07-24T00:00:00.000Z',
+    reviewedBy: 'grom-audit-contract',
+  };
+  approvedWrite.canonicalSha256 = snapshotHash(approvedWrite);
+  assert.throws(() => PublicCatalogSnapshotSchema.parse(approvedWrite));
 });
 
 test('public action matching binds every tuple field and the catalog snapshot hash', () => {
   const allowlist = loadPublicReadAllowlist();
+  const invalidAllowlist = structuredClone(allowlist);
+  invalidAllowlist.actions[0].risk = 'write';
+  assert.throws(() => PublicReadAllowlistSchema.parse(invalidAllowlist));
   const action = {
     ...allowlist.actions[0],
     sourceSnapshotHash: allowlist.sourceSnapshotHash,
