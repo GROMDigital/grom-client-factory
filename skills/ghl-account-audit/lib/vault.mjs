@@ -21,8 +21,10 @@ import {
   randomBytes,
 } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
-import { canonicalJson } from './canonical.mjs';
+import { canonicalJson, sha256 } from './canonical.mjs';
 import { ensureAuditPaths, validateAuditPaths } from './paths.mjs';
+import { derivePrivateSourceEntries } from './private-source-authority.mjs';
+import { AuditState } from './state.mjs';
 
 const KEY_BYTES = 32;
 const KEY_FILE_BYTES = KEY_BYTES * 2;
@@ -32,9 +34,24 @@ const RAW_ALGORITHM = 'aes-256-gcm';
 const SAFE_SOURCE = /^[a-z][a-z0-9_:-]{0,63}$/u;
 const RAW_FILE = /^raw_[a-f0-9]{32}\.json$/u;
 const EVENT_FILE = /^evt_[a-f0-9]{32}\.json$/u;
+const AUTHORITATIVE_SOURCE_BUNDLES = new WeakMap();
+const VAULT_TEST_SEAM = Symbol.for('grom.audit.vault.fs-seam');
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
+}
+
+function issueAuthoritativePrivateSourceBundle(metadata) {
+  const token = Object.freeze(Object.create(null));
+  AUTHORITATIVE_SOURCE_BUNDLES.set(token, Object.freeze({
+    ...metadata,
+    entries: Object.freeze([...metadata.entries]),
+  }));
+  return token;
+}
+
+export function inspectAuthoritativePrivateSourceBundle(token) {
+  return AUTHORITATIVE_SOURCE_BUNDLES.get(token);
 }
 
 function copyKey(value) {
@@ -404,10 +421,12 @@ function validatePendingEvent(event, subjectKey) {
   }
 }
 
-function invokeHook(hooks, name) {
-  if (typeof hooks?.[name] !== 'function') return;
+function invokeVaultTestSeam(name) {
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  const seam = globalThis[VAULT_TEST_SEAM];
+  if (typeof seam !== 'function') return;
   try {
-    hooks[name]();
+    seam(name);
   } catch {
     throw codedError('PURGE_INTERRUPTED');
   }
@@ -421,7 +440,7 @@ function unlinkCiphertext(path) {
   }
 }
 
-export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
+export function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
   let cipherKey;
   let subjectKey;
   try {
@@ -436,8 +455,9 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
     if (Buffer.isBuffer(pseudonymKey) || pseudonymKey instanceof Uint8Array) pseudonymKey.fill(0);
   }
 
+  let canonicalPaths;
   try {
-    const canonicalPaths = validateAuditPaths(paths);
+    canonicalPaths = validateAuditPaths(paths);
     ensureAuditPaths(canonicalPaths);
     chmodSync(join(canonicalPaths.privateRaw, '..'), 0o700);
     for (const directory of [
@@ -459,7 +479,7 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
 
   function completePending(event, now) {
     const header = validatePendingEvent(event, subjectKey);
-    const recordPath = join(paths.privateRaw, `${header.opaqueRef}.json`);
+    const recordPath = join(canonicalPaths.privateRaw, `${header.opaqueRef}.json`);
     let removed = false;
     if (existsSync(recordPath)) {
       const record = readRawRecord(recordPath);
@@ -469,14 +489,107 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
       }
       unlinkCiphertext(recordPath);
       removed = true;
-      invokeHook(hooks, 'afterUnlink');
+      invokeVaultTestSeam('afterUnlink');
     }
     const completed = expiryEvent(header, event.expiredAt ?? now, subjectKey, 'completed');
-    writeImmutableEvent(paths, completed);
+    writeImmutableEvent(canonicalPaths, completed);
     return { removed, eventId: completed.eventId };
   }
 
   return Object.freeze({
+    beginPrivateSourceCollection({ state, runManifest } = {}) {
+      assertOpen();
+      if (
+        !(state instanceof AuditState)
+        || !runManifest
+        || typeof runManifest !== 'object'
+        || Array.isArray(runManifest)
+        || Object.getPrototypeOf(runManifest) !== Object.prototype
+        || typeof runManifest.runId !== 'string'
+        || runManifest.runId.length === 0
+        || state.paths.stateDb !== canonicalPaths.stateDb
+      ) throw codedError('PRIVATE_SOURCE_AUTHORITY_INVALID', TypeError);
+      const manifestHash = sha256(runManifest);
+      const collected = new Map();
+      let finalized = false;
+      return Object.freeze({
+        add(source) {
+          assertOpen();
+          if (finalized) throw codedError('PRIVATE_SOURCE_COLLECTION_FINALIZED');
+          const entries = derivePrivateSourceEntries([source]);
+          if (collected.has(source.sourceId)) {
+            throw codedError('PRIVATE_SOURCE_INVENTORY_INVALID', TypeError);
+          }
+          const snapshot = JSON.parse(canonicalJson(source));
+          collected.set(source.sourceId, Object.freeze({
+            source: Object.freeze(snapshot),
+            entries,
+          }));
+          return Object.freeze({ sourceId: source.sourceId, kind: source.kind });
+        },
+        finalize(options) {
+          assertOpen();
+          if (finalized) throw codedError('PRIVATE_SOURCE_COLLECTION_FINALIZED');
+          if (options !== undefined) {
+            throw codedError('PRIVATE_SOURCE_AUTHORITY_INVALID', TypeError);
+          }
+          if (collected.size === 0) {
+            throw codedError('PRIVATE_SOURCE_INVENTORY_REQUIRED', TypeError);
+          }
+          const collectedRecords = [...collected.values()]
+            .sort((left, right) => (
+              left.source.sourceId < right.source.sourceId
+                ? -1
+                : left.source.sourceId > right.source.sourceId ? 1 : 0
+            ));
+          const sources = collectedRecords.map(({ source }) => source);
+          const inventory = sources.map(({ sourceId, kind }) => ({ sourceId, kind }));
+          const entries = Object.freeze(collectedRecords.flatMap((record) => record.entries));
+          const sourceInventoryHash = sha256(inventory);
+          const sourceBundleHash = sha256({ schemaVersion: '1.0.0', sources });
+          const inventoryMetadata = {
+            schemaVersion: '1.0.0',
+            manifestHash,
+            sourceInventoryHash,
+            sourceBundleHash,
+            sourceRecordCount: sources.length,
+            sourceValueCount: entries.length,
+            sourceIds: inventory.map(({ sourceId }) => sourceId),
+          };
+          const inventorySignature = createHmac('sha256', subjectKey)
+            .update(canonicalJson(inventoryMetadata))
+            .digest('hex');
+          const checkpointPayload = {
+            ...inventoryMetadata,
+            inventorySignature,
+          };
+          state.saveCheckpoint({
+            runId: runManifest.runId,
+            phase: 'private-source-inventory',
+            inputHash: sha256({ manifestHash, sourceInventoryHash }),
+            outputHash: sourceBundleHash,
+            payload: checkpointPayload,
+          });
+          const durable = state.getCheckpoint({
+            runId: runManifest.runId,
+            phase: 'private-source-inventory',
+          });
+          if (
+            !durable
+            || durable.outputHash !== sourceBundleHash
+            || canonicalJson(durable.payload) !== canonicalJson(checkpointPayload)
+          ) throw codedError('PRIVATE_SOURCE_INVENTORY_NOT_DURABLE');
+          const authoritativeBundle = issueAuthoritativePrivateSourceBundle({
+            ...inventoryMetadata,
+            inventorySignature,
+            entries,
+          });
+          finalized = true;
+          return authoritativeBundle;
+        },
+      });
+    },
+
     sealRaw({ source, bytes, expiresAt } = {}) {
       assertOpen();
       if (typeof source !== 'string' || !SAFE_SOURCE.test(source)) {
@@ -513,7 +626,7 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
       ciphertext.fill(0);
       try {
         writeFileSync(
-          join(paths.privateRaw, `${opaqueRef}.json`),
+          join(canonicalPaths.privateRaw, `${opaqueRef}.json`),
           `${canonicalJson(record)}\n`,
           { encoding: 'utf8', flag: 'wx', mode: 0o600 },
         );
@@ -529,14 +642,14 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
       let purged = 0;
       const events = [];
 
-      for (const name of readdirSync(paths.memoryEvents).sort()) {
+      for (const name of readdirSync(canonicalPaths.memoryEvents).sort()) {
         if (!EVENT_FILE.test(name)) continue;
-        const event = readJson(join(paths.memoryEvents, name), 'RAW_EXPIRY_EVENT_INVALID');
+        const event = readJson(join(canonicalPaths.memoryEvents, name), 'RAW_EXPIRY_EVENT_INVALID');
         if (event.phase !== 'pending') continue;
         const header = validatePendingEvent(event, subjectKey);
         const completedId = eventIds(header, subjectKey, event.expiredAt).completedEventId;
-        if (existsSync(eventPath(paths, completedId))) {
-          const completed = readJson(eventPath(paths, completedId), 'RAW_EXPIRY_EVENT_INVALID');
+        if (existsSync(eventPath(canonicalPaths, completedId))) {
+          const completed = readJson(eventPath(canonicalPaths, completedId), 'RAW_EXPIRY_EVENT_INVALID');
           const expected = expiryEvent(header, event.expiredAt, subjectKey, 'completed');
           if (canonicalJson(completed) !== canonicalJson(expected)) {
             throw codedError('RAW_EXPIRY_EVENT_INVALID');
@@ -548,21 +661,21 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
         events.push(recovered.eventId);
       }
 
-      for (const name of readdirSync(paths.privateRaw).sort()) {
+      for (const name of readdirSync(canonicalPaths.privateRaw).sort()) {
         if (!RAW_FILE.test(name)) continue;
-        const recordPath = join(paths.privateRaw, name);
+        const recordPath = join(canonicalPaths.privateRaw, name);
         const record = readRawRecord(recordPath);
         const expectedOpaqueRef = name.slice(0, -'.json'.length);
         const header = verifyRecord(record, expectedOpaqueRef, cipherKey);
         if (Date.parse(header.expiresAt) > Date.parse(now)) continue;
 
         const pending = expiryEvent(header, now, subjectKey, 'pending');
-        writeImmutableEvent(paths, pending);
-        invokeHook(hooks, 'afterPending');
+        writeImmutableEvent(canonicalPaths, pending);
+        invokeVaultTestSeam('afterPending');
         unlinkCiphertext(recordPath);
-        invokeHook(hooks, 'afterUnlink');
+        invokeVaultTestSeam('afterUnlink');
         const completed = expiryEvent(header, now, subjectKey, 'completed');
-        writeImmutableEvent(paths, completed);
+        writeImmutableEvent(canonicalPaths, completed);
         purged += 1;
         events.push(completed.eventId);
       }

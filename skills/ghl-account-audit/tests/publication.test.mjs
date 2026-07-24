@@ -10,6 +10,7 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +22,38 @@ import {
   sanitizeForPublication,
 } from '../lib/artifacts.mjs';
 import { auditPaths } from '../lib/paths.mjs';
+import { openState } from '../lib/state.mjs';
+import { openVault } from '../lib/vault.mjs';
+
+const frozenInputs = Object.freeze({
+  locationId: 'L1',
+  cutoff: 1000,
+  timezone: 'Australia/Sydney',
+  contextHash: 'a',
+  coverageProfileHash: 'b',
+  metricProfileHash: 'metric-1',
+  rulesetHash: 'c',
+  codeHash: 'code-1',
+  auditProfileHash: 'profile-1',
+  providerToolProfileHash: 'provider-1',
+  windowDefinitionsHash: 'windows-1',
+  collectionBudgetHash: 'budget-1',
+  capabilityProofIndexHash: 'proof-index-1',
+  capabilityReceiptHashes: ['receipt-1'],
+  capabilityAttestationHashes: ['attestation-1'],
+  capabilityProofExpiries: [2000],
+  capabilityManifestHashes: ['manifest-1'],
+  target: {
+    targetKind: 'location',
+    operatingProfile: 'client',
+    locationId: 'L1',
+  },
+});
+const DEFAULT_SOURCES = Object.freeze([Object.freeze({
+  sourceId: 'run-source',
+  kind: 'private-content',
+  payload: Object.freeze({ marker: 'authoritative-source-record' }),
+})]);
 
 function withProject(callback) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-publication-'));
@@ -41,18 +74,51 @@ function withProject(callback) {
   }
 }
 
-function sanitizeBundle(raw, sources = []) {
-  const registry = ingestPrivateSourceBundle({
-    runManifest: raw.runManifest,
-    sources,
+function trustedRegistry(runManifest, sources, {
+  paths: suppliedPaths,
+  finalizeOptions,
+  inspectCheckpoint,
+} = {}) {
+  const ownsProject = !suppliedPaths;
+  const projectRoot = ownsProject
+    ? mkdtempSync(join(tmpdir(), 'ghl-audit-authority-'))
+    : suppliedPaths.project;
+  const paths = suppliedPaths ?? auditPaths(projectRoot, 'L1');
+  const state = openState({ projectRoot, locationId: 'L1' });
+  const vault = openVault({
+    paths,
+    encryptionKey: Buffer.alloc(32, 81),
+    pseudonymKey: Buffer.alloc(32, 82),
   });
+  try {
+    state.createRun({ runId: runManifest.runId, frozenInputs, now: 1000 });
+    const collector = vault.beginPrivateSourceCollection({
+      state,
+      runManifest,
+    });
+    for (const source of sources) collector.add(source);
+    const authoritativeBundle = collector.finalize(finalizeOptions);
+    inspectCheckpoint?.(state.getCheckpoint({
+      runId: runManifest.runId,
+      phase: 'private-source-inventory',
+    }));
+    return ingestPrivateSourceBundle(authoritativeBundle);
+  } finally {
+    vault.close();
+    state.close();
+    if (ownsProject) rmSync(projectRoot, { recursive: true, force: true });
+  }
+}
+
+function sanitizeBundle(raw, sources = DEFAULT_SOURCES, paths) {
+  const registry = trustedRegistry(raw.runManifest, sources, { paths });
   return sanitizeForPublication(raw, {
     pseudonymKey: Buffer.alloc(32, 9),
     registry,
   });
 }
 
-function publishFixture(paths, overrides = {}, options = {}) {
+function publishFixture(paths, overrides = {}) {
   const publication = sanitizeBundle({
     runManifest: {
       schemaVersion: '1.0.0',
@@ -72,8 +138,8 @@ function publishFixture(paths, overrides = {}, options = {}) {
       result: 'pass',
     },
     projections: {},
-  });
-  return publishAtomically({ paths, ...publication, ...options });
+  }, DEFAULT_SOURCES, paths);
+  return publishAtomically({ paths, ...publication });
 }
 
 test('manifest root excludes the manifest and verifier to avoid circular hashing', () => withProject(({ paths }) => {
@@ -214,12 +280,20 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
     status: 'complete_partial',
   };
   assert.throws(
+    () => ingestPrivateSourceBundle({ runManifest, sources: [] }),
+    /PRIVATE_SOURCE_AUTHORITY_REQUIRED/u,
+  );
+  assert.throws(
+    () => trustedRegistry(runManifest, []),
+    /PRIVATE_SOURCE_INVENTORY_REQUIRED/u,
+  );
+  assert.throws(
     () => ingestPrivateSourceBundle({
       runManifest,
       sources: [],
       complete: true,
     }),
-    /PRIVATE_SOURCE_BUNDLE_INVALID/u,
+    /PRIVATE_SOURCE_AUTHORITY_REQUIRED/u,
   );
   const fixture = {
     runManifest,
@@ -257,14 +331,25 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
       /PRIVATE_SOURCE_REGISTRY_REQUIRED/u,
     );
   }
-  const incompleteRegistry = ingestPrivateSourceBundle({
-    runManifest,
-    sources: [{
+  const contactOnlySources = [{
       sourceId: 'contact-record-only',
       kind: 'pii',
       payload: { name: uniqueName },
-    }],
-  });
+  }];
+  assert.throws(
+    () => trustedRegistry(runManifest, [
+      ...contactOnlySources,
+      {
+        sourceId: 'conversation-record-required',
+        kind: 'private-content',
+        payload: { message: uniqueTranscript },
+      },
+    ], {
+      finalizeOptions: { sourceIds: ['contact-record-only'] },
+    }),
+    /PRIVATE_SOURCE_AUTHORITY_INVALID/u,
+  );
+  const incompleteRegistry = trustedRegistry(runManifest, contactOnlySources);
   assert.throws(
     () => sanitizeForPublication(fixture, {
       pseudonymKey: Buffer.alloc(32, 9),
@@ -284,9 +369,7 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
     }),
     /PRIVATE_SOURCE_REGISTRY_INCOMPLETE/u,
   );
-  const registry = ingestPrivateSourceBundle({
-    runManifest,
-    sources: [
+  const registry = trustedRegistry(runManifest, [
       {
         sourceId: 'contact-record',
         kind: 'pii',
@@ -297,8 +380,14 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
         kind: 'private-content',
         payload: { message: uniqueTranscript },
       },
-    ],
-  });
+    ], {
+      inspectCheckpoint(checkpoint) {
+        assert.equal(checkpoint.phase, 'private-source-inventory');
+        assert.equal(checkpoint.payload.sourceRecordCount, 2);
+        assert.equal(checkpoint.payload.sourceValueCount, 4);
+        assert.match(checkpoint.payload.inventorySignature, /^[a-f0-9]{64}$/u);
+      },
+    });
   assert.equal(Object.isFrozen(registry), true);
   assert.deepEqual(Reflect.ownKeys(registry), []);
   assert.throws(
@@ -325,10 +414,63 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
   );
   assert.match(sanitized.proposal.changeSet.proposed.copy, /psn_[a-f0-9]{32}/u);
 
-  const mismatched = ingestPrivateSourceBundle({
-    runManifest: { ...runManifest, runId: 'other-run' },
-    sources: [],
+  const normalizedRegistry = trustedRegistry(runManifest, [
+    {
+      sourceId: 'normalized-private-name',
+      kind: 'pii',
+      payload: { name: 'José   Alvarez' },
+    },
+    {
+      sourceId: 'normalized-private-content',
+      kind: 'private-content',
+      payload: { note: 'Résumé   Call Notes' },
+    },
+  ]);
+  for (const variant of [
+    'JOSÉ ALVAREZ',
+    'Jose\u0301 Alvarez',
+    'José\t\nAlvarez',
+    'RÉSUMÉ CALL NOTES',
+    'Re\u0301sume\u0301 Call Notes',
+    'Résumé\t\nCall Notes',
+  ]) {
+    const normalized = sanitizeForPublication({
+      runManifest,
+      finding: { summary: `Follow-up for ${variant}` },
+    }, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry: normalizedRegistry,
+    });
+    assert.equal(JSON.stringify(normalized).includes(variant), false, variant);
+  }
+
+  const shortRegistry = trustedRegistry(runManifest, [{
+      sourceId: 'short-private-value',
+      kind: 'pii',
+      payload: { initial: 'A' },
+  }]);
+  const shortSafe = sanitizeForPublication({
+    runManifest,
+    proposal: { copy: 'A safe proposal stays exactly as written.' },
+  }, {
+    pseudonymKey: Buffer.alloc(32, 9),
+    registry: shortRegistry,
   });
+  assert.equal(shortSafe.proposal.copy, 'A safe proposal stays exactly as written.');
+
+  assert.throws(
+    () => trustedRegistry(runManifest, [{
+        sourceId: 'numeric-phone',
+        kind: 'pii',
+        payload: { phone: 61412345678 },
+    }]),
+    /PRIVATE_SOURCE_NON_STRING_VALUE/u,
+  );
+
+  const mismatched = trustedRegistry(
+    { ...runManifest, runId: 'other-run' },
+    DEFAULT_SOURCES,
+  );
   assert.throws(
     () => sanitizeForPublication(fixture, {
       pseudonymKey: Buffer.alloc(32, 9),
@@ -355,10 +497,7 @@ test('publisher accepts only one non-forgeable sanitized bundle and allowlisted 
   };
   assert.throws(() => publishAtomically({ paths, ...raw }), /PUBLICATION_BOUNDARY_REQUIRED/u);
 
-  const separateRegistry = ingestPrivateSourceBundle({
-    runManifest: raw.runManifest,
-    sources: [],
-  });
+  const separateRegistry = trustedRegistry(raw.runManifest, DEFAULT_SOURCES, { paths });
   const separatelySanitized = {
     runManifest: sanitizeForPublication(raw.runManifest, {
       pseudonymKey: Buffer.alloc(32, 9),
@@ -521,21 +660,51 @@ test('week container is read-only between publications while weekly root remains
   assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
 }));
 
-test('publication detects an inode replacement immediately before rename', () => withProject(({ paths }) => {
-  const weekDirectory = join(paths.weekly, '2026-W30');
-  const displaced = join(paths.weekly, '2026-W30-displaced');
-  assert.throws(
-    () => publishFixture(paths, {}, {
-      hooks: {
-        beforePublicationRename() {
-          renameSync(weekDirectory, displaced);
-          mkdirSync(weekDirectory, { mode: 0o755 });
-        },
-      },
-    }),
-    /PUBLICATION_PATH_REPLACED/u,
-  );
-  assert.equal(existsSync(join(weekDirectory, 'pub-full')), false);
-  assert.equal(statSync(displaced).mode & 0o222, 0);
-  assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
-}));
+for (const replacementPhase of ['during-write', 'during-cleanup']) {
+  test(`publication contains a week replacement ${replacementPhase}`, () => withProject(({ paths }) => {
+    const weekDirectory = join(paths.weekly, '2026-W30');
+    const displaced = join(paths.weekly, `2026-W30-displaced-${replacementPhase}`);
+    const sentinel = join(weekDirectory, 'replacement-sentinel');
+    const seamKey = Symbol.for('grom.audit.publication.fs-seam');
+    let replaced = false;
+    const replaceWeek = () => {
+      if (replaced) return;
+      replaced = true;
+      chmodSync(paths.weekly, 0o755);
+      renameSync(weekDirectory, displaced);
+      mkdirSync(weekDirectory, { mode: 0o711 });
+      writeFileSync(sentinel, 'replacement untouched', { mode: 0o600 });
+    };
+    globalThis[seamKey] = ({ phase }) => {
+      if (replacementPhase === 'during-write' && phase === 'after-artifact-write') {
+        replaceWeek();
+      }
+      if (replacementPhase === 'during-cleanup' && phase === 'after-artifact-write') {
+        throw new Error('test-only write interruption');
+      }
+      if (replacementPhase === 'during-cleanup' && phase === 'before-staging-cleanup') {
+        replaceWeek();
+      }
+    };
+    try {
+      assert.throws(
+        () => publishFixture(paths),
+        replacementPhase === 'during-write'
+          ? /PUBLICATION_PATH_REPLACED/u
+          : /PUBLICATION_FAILED/u,
+      );
+    } finally {
+      delete globalThis[seamKey];
+    }
+    assert.equal(replaced, true);
+    assert.equal(readFileSync(sentinel, 'utf8'), 'replacement untouched');
+    assert.equal(statSync(weekDirectory).mode & 0o777, 0o711);
+    assert.equal(statSync(displaced).mode & 0o222, 0);
+    assert.deepEqual(
+      readdirSync(paths.stateDir).filter((name) => name.startsWith('.publication-staging-')),
+      [],
+    );
+    assert.deepEqual(readdirSync(displaced), []);
+    assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
+  }));
+}

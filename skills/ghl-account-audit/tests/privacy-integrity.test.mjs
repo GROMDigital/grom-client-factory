@@ -22,6 +22,7 @@ import {
   openVault,
   resolveVaultKeys,
 } from '../lib/vault.mjs';
+import { openState } from '../lib/state.mjs';
 import {
   ingestPrivateSourceBundle,
   sanitizeForPublication,
@@ -78,16 +79,61 @@ const PRIVACY_RUN_MANIFEST = Object.freeze({
   week: '2026-W30',
   status: 'complete_partial',
 });
+const PRIVACY_FROZEN_INPUTS = Object.freeze({
+  locationId: 'L1',
+  cutoff: 1000,
+  timezone: 'Australia/Sydney',
+  contextHash: 'a',
+  coverageProfileHash: 'b',
+  metricProfileHash: 'metric-1',
+  rulesetHash: 'c',
+  codeHash: 'code-1',
+  auditProfileHash: 'profile-1',
+  providerToolProfileHash: 'provider-1',
+  windowDefinitionsHash: 'windows-1',
+  collectionBudgetHash: 'budget-1',
+  capabilityProofIndexHash: 'proof-index-1',
+  capabilityReceiptHashes: ['receipt-1'],
+  capabilityAttestationHashes: ['attestation-1'],
+  capabilityProofExpiries: [2000],
+  capabilityManifestHashes: ['manifest-1'],
+  target: {
+    targetKind: 'location',
+    operatingProfile: 'client',
+    locationId: 'L1',
+  },
+});
 
 function privateRegistry() {
-  return ingestPrivateSourceBundle({
-    runManifest: PRIVACY_RUN_MANIFEST,
-    sources: PRIVATE_CANARIES.map((value, index) => ({
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-private-registry-'));
+  const paths = auditPaths(projectRoot, 'L1');
+  const state = openState({ projectRoot, locationId: 'L1' });
+  const vault = openVault({
+    paths,
+    encryptionKey: Buffer.alloc(32, 91),
+    pseudonymKey: Buffer.alloc(32, 92),
+  });
+  try {
+    state.createRun({
+      runId: PRIVACY_RUN_MANIFEST.runId,
+      frozenInputs: PRIVACY_FROZEN_INPUTS,
+      now: 1000,
+    });
+    const collector = vault.beginPrivateSourceCollection({
+      state,
+      runManifest: PRIVACY_RUN_MANIFEST,
+    });
+    for (const source of PRIVATE_CANARIES.map((value, index) => ({
       sourceId: `seeded-private-fixture-${index}`,
       kind: PRIVATE_CANARY_KINDS[index],
       payload: { value },
-    })),
-  });
+    }))) collector.add(source);
+    return ingestPrivateSourceBundle(collector.finalize());
+  } finally {
+    vault.close();
+    state.close();
+    rmSync(projectRoot, { recursive: true, force: true });
+  }
 }
 
 function withProject(callback) {
@@ -276,6 +322,32 @@ test('vault rejects forged canonical paths before any filesystem mutation', () =
     assert.equal(statSync(sentinel).mode & 0o7777, beforeSentinelMode);
     assert.deepEqual(readdirSync(external), ['sentinel']);
     assert.equal(readFileSync(sentinel, 'utf8'), 'unchanged');
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test('vault retains canonical paths when the caller mutates its supplied object', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-vault-path-retention-'));
+  const external = mkdtempSync(join(tmpdir(), 'ghl-audit-vault-path-redirect-'));
+  const mutablePaths = { ...auditPaths(projectRoot, 'L1') };
+  try {
+    const canonicalRaw = mutablePaths.privateRaw;
+    const vault = openVault({
+      paths: mutablePaths,
+      encryptionKey: Buffer.alloc(32, 35),
+      pseudonymKey: Buffer.alloc(32, 36),
+    });
+    mutablePaths.privateRaw = external;
+    const sealed = vault.sealRaw({
+      source: 'public_ghl',
+      bytes: Buffer.from('canonical path retention', 'utf8'),
+      expiresAt: '2026-08-01T00:00:00.000Z',
+    });
+    assert.equal(existsSync(join(canonicalRaw, `${sealed.opaqueRef}.json`)), true);
+    assert.deepEqual(readdirSync(external), []);
+    vault.close();
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
     rmSync(external, { recursive: true, force: true });
@@ -479,14 +551,6 @@ test('pending purge tombstone recovers crashes before and after ciphertext delet
         paths,
         encryptionKey: Buffer.alloc(32, 71),
         pseudonymKey: Buffer.alloc(32, 72),
-        hooks: {
-          [hookName]() {
-            if (!interrupted) {
-              interrupted = true;
-              throw new Error('injected private failure detail');
-            }
-          },
-        },
       });
       const sealed = vault.sealRaw({
         source: 'internal_ghl',
@@ -494,11 +558,22 @@ test('pending purge tombstone recovers crashes before and after ciphertext delet
         expiresAt: '2026-07-01T00:00:00.000Z',
       });
       const recordPath = join(paths.privateRaw, `${sealed.opaqueRef}.json`);
-      assert.throws(
-        () => vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' }),
-        (error) => error.code === 'PURGE_INTERRUPTED'
-          && !String(error.stack).includes('injected private failure detail'),
-      );
+      const seamKey = Symbol.for('grom.audit.vault.fs-seam');
+      globalThis[seamKey] = (phase) => {
+        if (phase === hookName && !interrupted) {
+          interrupted = true;
+          throw new Error('injected private failure detail');
+        }
+      };
+      try {
+        assert.throws(
+          () => vault.purgeExpired({ now: '2026-07-24T00:00:00.000Z' }),
+          (error) => error.code === 'PURGE_INTERRUPTED'
+            && !String(error.stack).includes('injected private failure detail'),
+        );
+      } finally {
+        delete globalThis[seamKey];
+      }
       const eventFiles = readdirSync(paths.memoryEvents);
       assert.equal(eventFiles.length, 1);
       const pending = JSON.parse(readFileSync(join(paths.memoryEvents, eventFiles[0]), 'utf8'));

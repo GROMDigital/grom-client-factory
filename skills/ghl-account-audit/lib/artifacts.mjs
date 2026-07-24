@@ -31,6 +31,7 @@ import {
 } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { ensureAuditPaths, validateAuditPaths } from './paths.mjs';
+import { inspectAuthoritativePrivateSourceBundle } from './vault.mjs';
 
 const CREDENTIAL_KEY = /(?:authorization|cookie|api[_-]?key|secret|password|access[_-]?token|refresh[_-]?token|jwt|bearer)/iu;
 const KEY_REFERENCE_KEY = /(?:key[_-]?ref(?:erence)?|vault[_-]?key|keyReference)/iu;
@@ -57,17 +58,25 @@ const ALLOWED_ROOT_ARTIFACTS = new Set([
   'conversation-sample.json',
   'evidence-manifest.jsonl',
 ]);
-const PRIVATE_KINDS = new Set(['pii', 'credential', 'private-content', 'key-reference']);
 const BOUNDARIES = new WeakMap();
 const PRIVATE_REGISTRIES = new WeakMap();
+const PUBLICATION_TEST_SEAM = Symbol.for('grom.audit.publication.fs-seam');
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 
+function normalizeSensitive(value) {
+  return String(value)
+    .normalize('NFKC')
+    .toLocaleLowerCase('und')
+    .replace(/\s+/gu, ' ')
+    .trim();
+}
+
 function pseudonym(value, key) {
   return `psn_${createHmac('sha256', key)
-    .update(String(value).normalize('NFKC').trim().toLowerCase())
+    .update(normalizeSensitive(value))
     .digest('hex')
     .slice(0, 32)}`;
 }
@@ -79,92 +88,82 @@ function replacementFor(kind, value, key) {
   return '<REDACTED:private-content>';
 }
 
-function collectSourceStrings(value, kind, stack = new WeakSet(), output = []) {
-  if (typeof value === 'string') {
-    if (value.length > 0) output.push({ kind, privateValue: value });
-    return output;
-  }
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') return output;
-  if (
-    !value
-    || typeof value !== 'object'
-    || stack.has(value)
-    || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)
-  ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
-  stack.add(value);
-  try {
-    if (Array.isArray(value)) {
-      for (const entry of value) collectSourceStrings(entry, kind, stack, output);
-    } else {
-      for (const entry of Object.values(value)) collectSourceStrings(entry, kind, stack, output);
-    }
-    return output;
-  } finally {
-    stack.delete(value);
-  }
-}
-
-export function ingestPrivateSourceBundle(bundle = {}) {
-  if (
-    !bundle
-    || typeof bundle !== 'object'
-    || Array.isArray(bundle)
-    || Object.getPrototypeOf(bundle) !== Object.prototype
-    || Object.keys(bundle).length !== 2
-    || Object.keys(bundle).some((key) => !['runManifest', 'sources'].includes(key))
-  ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
-  const { runManifest, sources } = bundle;
-  if (
-    !runManifest
-    || typeof runManifest !== 'object'
-    || Array.isArray(runManifest)
-    || Object.getPrototypeOf(runManifest) !== Object.prototype
-    || !Array.isArray(sources)
-  ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
-  let manifestHash;
-  let sourceBundleHash;
-  try {
-    manifestHash = sha256(runManifest);
-    sourceBundleHash = sha256({ schemaVersion: '1.0.0', sources });
-  } catch {
-    throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
-  }
-  const entries = [];
-  for (const source of sources) {
-    if (
-      !source
-      || typeof source !== 'object'
-      || Array.isArray(source)
-      || Object.getPrototypeOf(source) !== Object.prototype
-      || Object.keys(source).length !== 3
-      || Object.keys(source).some((key) => !['kind', 'payload', 'sourceId'].includes(key))
-      || typeof source.sourceId !== 'string'
-      || !/^[a-z0-9][a-z0-9_.:-]{0,127}$/u.test(source.sourceId)
-      || !PRIVATE_KINDS.has(source.kind)
-    ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
-    const before = entries.length;
-    collectSourceStrings(source.payload, source.kind, new WeakSet(), entries);
-    if (entries.length === before) throw codedError('PRIVATE_SOURCE_BUNDLE_INCOMPLETE', TypeError);
-  }
+export function ingestPrivateSourceBundle(authoritativeBundle) {
+  const metadata = inspectAuthoritativePrivateSourceBundle(authoritativeBundle);
+  if (!metadata) throw codedError('PRIVATE_SOURCE_AUTHORITY_REQUIRED', TypeError);
   const registry = Object.freeze(Object.create(null));
   PRIVATE_REGISTRIES.set(registry, Object.freeze({
-    entries: Object.freeze(entries.map((entry) => Object.freeze({ ...entry }))),
-    manifestHash,
-    sourceBundleHash,
-    sourceRecordCount: sources.length,
-    sourceValueCount: entries.length,
+    entries: metadata.entries,
+    manifestHash: metadata.manifestHash,
+    sourceBundleHash: metadata.sourceBundleHash,
+    sourceRecordCount: metadata.sourceRecordCount,
+    sourceValueCount: metadata.sourceValueCount,
+    sourceInventoryHash: metadata.sourceInventoryHash,
+    inventorySignature: metadata.inventorySignature,
   }));
   return registry;
+}
+
+function isWordCharacter(value) {
+  return value !== undefined && /[\p{L}\p{N}]/u.test(value);
+}
+
+function containsBounded(haystack, needle) {
+  let index = haystack.indexOf(needle);
+  while (index !== -1) {
+    const before = haystack[index - 1];
+    const after = haystack[index + needle.length];
+    const startsWithWord = isWordCharacter(needle[0]);
+    const endsWithWord = isWordCharacter(needle[needle.length - 1]);
+    if (
+      (!startsWithWord || !isWordCharacter(before))
+      && (!endsWithWord || !isWordCharacter(after))
+    ) return true;
+    index = haystack.indexOf(needle, index + 1);
+  }
+  return false;
+}
+
+function replaceBoundedLiteral(value, privateValue, replacement) {
+  if (normalizeSensitive(privateValue).length < 3) return value;
+  let output = '';
+  let cursor = 0;
+  let index = value.indexOf(privateValue);
+  while (index !== -1) {
+    const before = value[index - 1];
+    const after = value[index + privateValue.length];
+    const startsWithWord = isWordCharacter(privateValue[0]);
+    const endsWithWord = isWordCharacter(privateValue[privateValue.length - 1]);
+    if (
+      (!startsWithWord || !isWordCharacter(before))
+      && (!endsWithWord || !isWordCharacter(after))
+    ) {
+      output += value.slice(cursor, index);
+      output += replacement;
+      cursor = index + privateValue.length;
+    }
+    index = value.indexOf(privateValue, index + Math.max(privateValue.length, 1));
+  }
+  return cursor === 0 ? value : output + value.slice(cursor);
 }
 
 function sanitizeString(value, keyName, pseudonymKey, knownPrivateValues) {
   let output = value;
   for (const { privateValue, replacement } of knownPrivateValues) {
-    output = output.split(privateValue).join(replacement);
+    if (normalizeSensitive(output) === normalizeSensitive(privateValue)) return replacement;
+    output = replaceBoundedLiteral(output, privateValue, replacement);
   }
   const changed = output !== value;
-  const containingSource = !changed && value.length >= 3
-    ? knownPrivateValues.find(({ privateValue }) => privateValue.includes(value))
+  const normalizedOutput = normalizeSensitive(output);
+  const containingSource = !changed && normalizedOutput.length >= 3
+    ? knownPrivateValues.find(({ privateValue }) => {
+      const normalizedPrivate = normalizeSensitive(privateValue);
+      return normalizedPrivate.length >= 3
+        && (
+          containsBounded(normalizedOutput, normalizedPrivate)
+          || containsBounded(normalizedPrivate, normalizedOutput)
+        );
+    })
     : undefined;
   if (containingSource) return containingSource.replacement;
   if (
@@ -541,6 +540,12 @@ function isWithin(parent, child) {
     || (!isAbsolute(pathFromParent) && pathFromParent !== '..' && !pathFromParent.startsWith(`..${sep}`));
 }
 
+function invokePublicationTestSeam(phase, details) {
+  if (!process.env.NODE_TEST_CONTEXT) return;
+  const seam = globalThis[PUBLICATION_TEST_SEAM];
+  if (typeof seam === 'function') seam(Object.freeze({ phase, ...details }));
+}
+
 function openWeekGuard(paths, week) {
   ensureAuditPaths(paths);
   chmodSync(join(paths.privateRaw, '..'), 0o700);
@@ -552,28 +557,47 @@ function openWeekGuard(paths, week) {
   ]) chmodSync(directory, 0o700);
 
   const weekDirectory = join(paths.weekly, week);
+  let weeklyDescriptor;
+  let weekDescriptor;
   let metadata;
   try {
+    weeklyDescriptor = openSync(
+      paths.weekly,
+      constants.O_RDONLY
+        | (constants.O_DIRECTORY ?? 0)
+        | (constants.O_NOFOLLOW ?? 0),
+    );
     metadata = lstatSync(weekDirectory);
   } catch (error) {
-    if (error?.code !== 'ENOENT') throw codedError('PUBLICATION_PATH_INVALID');
+    if (error?.code !== 'ENOENT') {
+      if (weeklyDescriptor !== undefined) closeSync(weeklyDescriptor);
+      weeklyDescriptor = undefined;
+      throw codedError('PUBLICATION_PATH_INVALID');
+    }
   }
-  if (metadata) {
-    if (metadata.isSymbolicLink()) throw codedError('PUBLICATION_PATH_SYMLINK');
-    if (!metadata.isDirectory()) throw codedError('PUBLICATION_PATH_INVALID');
-  } else {
-    mkdirSync(weekDirectory, { mode: 0o555 });
-  }
-  const weeklyReal = realpathSync(paths.weekly);
-  let descriptor;
   try {
-    descriptor = openSync(
+    if (metadata) {
+      if (metadata.isSymbolicLink()) throw codedError('PUBLICATION_PATH_SYMLINK');
+      if (!metadata.isDirectory()) throw codedError('PUBLICATION_PATH_INVALID');
+    } else {
+      mkdirSync(weekDirectory, { mode: 0o555 });
+    }
+  } catch (error) {
+    if (weeklyDescriptor !== undefined) closeSync(weeklyDescriptor);
+    weeklyDescriptor = undefined;
+    throw error?.code ? error : codedError('PUBLICATION_PATH_INVALID');
+  }
+  try {
+    const weeklyReal = realpathSync(paths.weekly);
+    const weeklyOpened = fstatSync(weeklyDescriptor);
+    const weeklyIdentity = { dev: weeklyOpened.dev, ino: weeklyOpened.ino };
+    weekDescriptor = openSync(
       weekDirectory,
       constants.O_RDONLY
         | (constants.O_DIRECTORY ?? 0)
         | (constants.O_NOFOLLOW ?? 0),
     );
-    const opened = fstatSync(descriptor);
+    const opened = fstatSync(weekDescriptor);
     if (!opened.isDirectory()) throw codedError('PUBLICATION_PATH_INVALID');
     if (!isWithin(weeklyReal, realpathSync(weekDirectory))) {
       throw codedError('PUBLICATION_PATH_ESCAPE');
@@ -581,44 +605,95 @@ function openWeekGuard(paths, week) {
     const identity = { dev: opened.dev, ino: opened.ino };
     const assertSame = () => {
       let current;
+      let currentWeekly;
       try {
         current = lstatSync(weekDirectory);
+        currentWeekly = lstatSync(paths.weekly);
       } catch {
         throw codedError('PUBLICATION_PATH_REPLACED');
       }
       if (
-        current.isSymbolicLink()
+        currentWeekly.isSymbolicLink()
+        || !currentWeekly.isDirectory()
+        || currentWeekly.dev !== weeklyIdentity.dev
+        || currentWeekly.ino !== weeklyIdentity.ino
+        || current.isSymbolicLink()
         || !current.isDirectory()
         || current.dev !== identity.dev
         || current.ino !== identity.ino
         || !isWithin(weeklyReal, realpathSync(weekDirectory))
       ) throw codedError('PUBLICATION_PATH_REPLACED');
-      const openMetadata = fstatSync(descriptor);
+      const openWeeklyMetadata = fstatSync(weeklyDescriptor);
+      const openMetadata = fstatSync(weekDescriptor);
+      if (
+        openWeeklyMetadata.dev !== weeklyIdentity.dev
+        || openWeeklyMetadata.ino !== weeklyIdentity.ino
+      ) throw codedError('PUBLICATION_PATH_REPLACED');
       if (openMetadata.dev !== identity.dev || openMetadata.ino !== identity.ino) {
         throw codedError('PUBLICATION_PATH_REPLACED');
       }
     };
-    fchmodSync(descriptor, 0o755);
+    fchmodSync(weeklyDescriptor, 0o555);
+    fchmodSync(weekDescriptor, 0o755);
     assertSame();
     return Object.freeze({
       directory: weekDirectory,
       assertSame,
+      lockParent() {
+        fchmodSync(weeklyDescriptor, 0o555);
+        const openWeeklyMetadata = fstatSync(weeklyDescriptor);
+        if (
+          openWeeklyMetadata.dev !== weeklyIdentity.dev
+          || openWeeklyMetadata.ino !== weeklyIdentity.ino
+        ) throw codedError('PUBLICATION_PATH_REPLACED');
+      },
+      resolveAlias() {
+        const candidates = [weekDirectory];
+        for (const name of readdirSync(paths.weekly)) candidates.push(join(paths.weekly, name));
+        for (const candidate of candidates) {
+          try {
+            const candidateMetadata = lstatSync(candidate);
+            if (
+              !candidateMetadata.isSymbolicLink()
+              && candidateMetadata.isDirectory()
+              && candidateMetadata.dev === identity.dev
+              && candidateMetadata.ino === identity.ino
+            ) return candidate;
+          } catch {
+            // A racing entry is ignored; only the already-open inode is eligible.
+          }
+        }
+        return undefined;
+      },
       close() {
-        if (descriptor === undefined) return;
+        if (weekDescriptor === undefined && weeklyDescriptor === undefined) return;
         try {
-          fchmodSync(descriptor, 0o555);
+          if (weekDescriptor !== undefined) fchmodSync(weekDescriptor, 0o555);
         } finally {
-          closeSync(descriptor);
-          descriptor = undefined;
+          if (weekDescriptor !== undefined) closeSync(weekDescriptor);
+          weekDescriptor = undefined;
+          try {
+            if (weeklyDescriptor !== undefined) fchmodSync(weeklyDescriptor, 0o755);
+          } finally {
+            if (weeklyDescriptor !== undefined) closeSync(weeklyDescriptor);
+            weeklyDescriptor = undefined;
+          }
         }
       },
     });
   } catch (error) {
-    if (descriptor !== undefined) {
+    if (weekDescriptor !== undefined) {
       try {
-        fchmodSync(descriptor, 0o555);
+        fchmodSync(weekDescriptor, 0o555);
       } finally {
-        closeSync(descriptor);
+        closeSync(weekDescriptor);
+      }
+    }
+    if (weeklyDescriptor !== undefined) {
+      try {
+        fchmodSync(weeklyDescriptor, 0o755);
+      } finally {
+        closeSync(weeklyDescriptor);
       }
     }
     throw error?.code ? error : codedError('PUBLICATION_PATH_INVALID');
@@ -678,7 +753,6 @@ export function publishAtomically({
   payloadArtifacts,
   verifierAttestation,
   projections = {},
-  hooks,
 } = {}) {
   if (
     !runManifest || typeof runManifest !== 'object' || Array.isArray(runManifest)
@@ -750,12 +824,26 @@ export function publishAtomically({
       weekGuard.assertSame();
       recovered = true;
     } else {
-      const staging = join(weekGuard.directory, `.staging-${randomUUID()}`);
+      const stagingName = `.publication-staging-${randomUUID()}`;
+      const staging = join(weekGuard.directory, stagingName);
+      let stagingIdentity;
       weekGuard.assertSame();
       mkdirSync(staging, { mode: 0o700 });
+      {
+        const stagingMetadata = lstatSync(staging);
+        stagingIdentity = { dev: stagingMetadata.dev, ino: stagingMetadata.ino };
+      }
       weekGuard.assertSame();
       try {
-        for (const [name] of artifactEntries) writeArtifact(staging, name, serialized.get(name));
+        for (const [name] of artifactEntries) {
+          writeArtifact(staging, name, serialized.get(name));
+          invokePublicationTestSeam('after-artifact-write', {
+            staging,
+            weekDirectory: weekGuard.directory,
+            weeklyDirectory: paths.weekly,
+          });
+          weekGuard.assertSame();
+        }
         writeArtifact(staging, 'run-manifest.json', Buffer.from(`${canonicalJson(manifest)}\n`, 'utf8'));
         writeArtifact(
           staging,
@@ -764,14 +852,40 @@ export function publishAtomically({
         );
         makeImmutable(staging);
         weekGuard.assertSame();
-        hooks?.beforePublicationRename?.();
+        invokePublicationTestSeam('before-publication-rename', {
+          staging,
+          weekDirectory: weekGuard.directory,
+          weeklyDirectory: paths.weekly,
+        });
         weekGuard.assertSame();
         renameSync(staging, publicationPath);
         weekGuard.assertSame();
       } catch (error) {
-        if (existsSync(staging)) {
-          makeWritable(staging);
-          rmSync(staging, { recursive: true, force: true });
+        invokePublicationTestSeam('before-staging-cleanup', {
+          staging,
+          weekDirectory: weekGuard.directory,
+          weeklyDirectory: paths.weekly,
+        });
+        weekGuard.lockParent();
+        const weekAlias = weekGuard.resolveAlias();
+        if (weekAlias) {
+          const cleanupPath = join(weekAlias, stagingName);
+          let cleanupMetadata;
+          try {
+            cleanupMetadata = lstatSync(cleanupPath);
+          } catch {
+            // Missing staging requires no cleanup.
+          }
+          if (
+            cleanupMetadata
+            && !cleanupMetadata.isSymbolicLink()
+            && cleanupMetadata.isDirectory()
+            && cleanupMetadata.dev === stagingIdentity.dev
+            && cleanupMetadata.ino === stagingIdentity.ino
+          ) {
+            makeWritable(cleanupPath);
+            rmSync(cleanupPath, { recursive: true, force: true });
+          }
         }
         throw error?.code ? error : codedError('PUBLICATION_FAILED');
       }
