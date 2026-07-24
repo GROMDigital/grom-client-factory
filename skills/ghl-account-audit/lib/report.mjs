@@ -20,6 +20,33 @@ function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function comparePacketBindings(left, right) {
+  return compareText(left.packetId, right.packetId)
+    || compareText(left.findingId, right.findingId);
+}
+
+function mechanismReviewOrder(review) {
+  return {
+    requestHash: review.requestHash,
+    requestId: review.requestId,
+    packetIds: review.packetHashes.map(({ packetId }) => packetId).sort(compareText),
+  };
+}
+
+function compareMechanismReviews(left, right) {
+  return compareText(left.order.requestHash, right.order.requestHash)
+    || compareText(left.order.requestId, right.order.requestId)
+    || compareText(canonicalJson(left.order.packetIds), canonicalJson(right.order.packetIds));
+}
+
+function mechanismReviewEnvelopeId(order) {
+  return `review_${sha256(order).slice(0, 32)}`;
+}
+
 function deepFreeze(value, seen = new WeakSet()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return value;
   seen.add(value);
@@ -237,19 +264,25 @@ function sealMechanisms(findings, graph, metrics, mechanismReview) {
   };
   deepFreeze(primary);
   let packets;
-  let validatedReviews;
+  let validatedReviewEnvelopes;
   let reconciled;
   try {
     packets = nominateMechanisms({
       ...primary,
       maxCandidates: mechanismReview.maxCandidates,
     }).map((candidate) => buildMechanismPacket(candidate));
-    validatedReviews = mechanismReview.reviewEnvelopes.map((envelope) => (
-      replayMechanismReview({
+    validatedReviewEnvelopes = mechanismReview.reviewEnvelopes.map((envelope) => {
+      const review = replayMechanismReview({
         requestInputs: envelope.requestInputs,
         response: envelope.response,
-      })
-    ));
+      });
+      return {
+        envelope,
+        review,
+        order: mechanismReviewOrder(review),
+      };
+    }).sort(compareMechanismReviews);
+    const validatedReviews = validatedReviewEnvelopes.map(({ review }) => review);
     const reviewedPacketIds = validatedReviews.flatMap(({ packetHashes }) => (
       packetHashes.map(({ packetId }) => packetId)
     ));
@@ -290,6 +323,9 @@ function sealMechanisms(findings, graph, metrics, mechanismReview) {
       finding.mechanismPacketId !== bindingByFinding.get(finding.findingId)?.packetId
     ))
   ) throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
+  const packetBindings = mechanismReview.packetBindings
+    .map((binding) => structuredClone(binding))
+    .sort(comparePacketBindings);
   const findingFor = (packet) => bindingByPacket.get(packet.packetId)?.findingId;
   const reconciliation = {
     criticalPacketIds: reconciled.criticalIssues.map(({ packetId }) => packetId),
@@ -313,13 +349,13 @@ function sealMechanisms(findings, graph, metrics, mechanismReview) {
     || canonicalJson([...reconciliation.promotedFindingIds].sort()) !== canonicalJson(laneIds('commercial'))
     || canonicalJson([...reconciliation.backlogFindingIds].sort()) !== canonicalJson(laneIds('backlog'))
   ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONCILIATION');
-  const reviewEnvelopes = mechanismReview.reviewEnvelopes.map((envelope, index) => ({
-    envelopeId: `review_${String(index + 1).padStart(4, '0')}`,
+  const reviewEnvelopes = validatedReviewEnvelopes.map(({ envelope, order, review }) => ({
+    envelopeId: mechanismReviewEnvelopeId(order),
     requestInputs: structuredClone(envelope.requestInputs),
     requestInputsHash: sha256(envelope.requestInputs),
     response: structuredClone(envelope.response),
     responseHash: sha256(envelope.response),
-    validationHash: validatedReviews[index].validationHash,
+    validationHash: review.validationHash,
   }));
   const body = {
     schemaVersion: '1.0.0',
@@ -327,7 +363,7 @@ function sealMechanisms(findings, graph, metrics, mechanismReview) {
     maxCandidates: mechanismReview.maxCandidates,
     maxPromoted: mechanismReview.maxPromoted,
     packets,
-    packetBindings: mechanismReview.packetBindings,
+    packetBindings,
     reviewEnvelopes,
     reconciliation,
   };

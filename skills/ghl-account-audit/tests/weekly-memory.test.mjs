@@ -256,7 +256,7 @@ const MECHANISM_FAMILIES = [
 ];
 let mechanismNonce = 0;
 
-function exactTask7MechanismReview(findingId) {
+function exactTask7MechanismReview(findingId, secondFindingId = null) {
   const definitionHash = H;
   const edge = (index, type) => ({
     edgeId: `edge_${String(index).padStart(16, '0')}`,
@@ -356,11 +356,13 @@ function exactTask7MechanismReview(findingId) {
     conflicts: [],
     unresolvedJoins: [],
   });
-  const metricId = 'engagement_to_booking';
+  const metricIds = secondFindingId === null
+    ? ['engagement_to_booking']
+    : ['engagement_to_booking', 'engagement_to_booking_secondary'];
   const metricContracts = deepFreeze({
     profileId: 'client',
     version: '1.0.0',
-    edges: [{
+    edges: metricIds.map((metricId) => ({
       edgeId: metricId,
       journeyId: 'client_sales',
       journeyInstanceId: 'journey_client_sales',
@@ -376,7 +378,7 @@ function exactTask7MechanismReview(findingId) {
       outcomeRule: {},
       required: true,
       nativeMapping: 'MAPPED',
-    }],
+    })),
   });
   const windows = deepFreeze({
     cutoff: '2026-07-20T00:00:00Z',
@@ -400,7 +402,9 @@ function exactTask7MechanismReview(findingId) {
     windows,
   });
   deepFreeze(metrics);
-  if (metrics.metrics.currentClosedWeek[metricId].rankEligible !== true) {
+  if (metricIds.some((metricId) => (
+    metrics.metrics.currentClosedWeek[metricId].rankEligible !== true
+  ))) {
     throw new Error('TASK7_FIXTURE_METRIC_NOT_RANK_ELIGIBLE');
   }
   const coverage = deepFreeze({
@@ -408,7 +412,7 @@ function exactTask7MechanismReview(findingId) {
     comparableSubsets: [],
     capabilityStates: [{ capabilityId: 'workflow_logs', state: 'COMPLETE' }],
     limits: [],
-    edgeScopes: [{
+    edgeScopes: metricIds.map((metricId, index) => ({
       metricId,
       journeyId: 'client_sales',
       journeyInstanceId: 'journey_client_sales',
@@ -416,7 +420,7 @@ function exactTask7MechanismReview(findingId) {
       localizedEdgeIds: graph.edges.map(({ edgeId }) => edgeId),
       comparatorIds: ['node_success_11111111'],
       mechanismClass: 'workflow_configuration_or_execution',
-      affectedObjectRefs: [O1],
+      affectedObjectRefs: [index === 0 ? O1 : O2],
       predictionCode: 'EXECUTION_FAILURE_REPEATS',
       supportingEvidenceRefs: [E1],
       counterEvidenceRefs: [],
@@ -428,7 +432,7 @@ function exactTask7MechanismReview(findingId) {
         reasonCode: 'EXACT_NEGATIVE_CHECK',
       })),
       discriminatingTest: {
-        testId: 'test_1111111111111111',
+        testId: index === 0 ? 'test_1111111111111111' : 'test_2222222222222222',
         strongestAlternativeCode: 'SOURCE_MIX',
         expectedObservationCodes: ['EXACT_RUNTIME_EVENT_PRESENT'],
         decisionRuleCodes: ['PRESENT_SUPPORTS_ABSENT_CHALLENGES'],
@@ -446,103 +450,112 @@ function exactTask7MechanismReview(findingId) {
       dependencyBurden: 'LOW',
       operationalRiskBand: 'LOW',
       supplementalReadAllowlist: [{
-        descriptorId: 'supp_1111111111111111',
+        descriptorId: index === 0
+          ? 'supp_1111111111111111'
+          : 'supp_2222222222222222',
         capabilityId: 'workflow_logs',
-        objectRef: O1,
+        objectRef: index === 0 ? O1 : O2,
       }],
       sealedPath: {
-        pathRef: 'path_1111111111111111',
-        relativePath: 'sealed/mechanism.json',
+        pathRef: index === 0 ? 'path_1111111111111111' : 'path_2222222222222222',
+        relativePath: index === 0
+          ? 'sealed/mechanism.json'
+          : 'sealed/mechanism-secondary.json',
       },
-    }],
+    })),
   });
-  const packet = buildMechanismPacket(nominateMechanisms({
+  const packets = nominateMechanisms({
     graph,
     metrics,
     coverage,
     maxCandidates: 5,
-  })[0]);
-  mechanismNonce += 1;
-  const requestInputs = deepFreeze({
-    run: {
-      runId: 'run_2026_W30',
-      cutoff: '2026-07-13T00:00:00Z',
-      reviewDeadline: '2026-07-14T00:00:00Z',
-      codeHash: H2,
-      nonceRef: `nonce_task8_${String(mechanismNonce).padStart(16, '0')}`,
-    },
-    packets: [packet],
-    rubric: {
-      rubricId: 'mechanism-review',
-      version: '1.0.0',
-      sealedPath: {
-        pathRef: 'path_rubric11111111',
-        relativePath: 'sealed/rubric.md',
+  }).map((candidate) => buildMechanismPacket(candidate));
+  const reviewEnvelopes = packets.map((packet) => {
+    mechanismNonce += 1;
+    const requestInputs = deepFreeze({
+      run: {
+        runId: 'run_2026_W30',
+        cutoff: '2026-07-13T00:00:00Z',
+        reviewDeadline: '2026-07-14T00:00:00Z',
+        codeHash: H2,
+        nonceRef: `nonce_task8_${String(mechanismNonce).padStart(16, '0')}`,
       },
-      content: 'Use only the sealed evidence.',
-    },
-    prompt: {
-      promptId: 'mechanism-prompt-v1',
-      content: 'Review the sealed mechanism packet.',
-    },
-    modelPolicy: {
-      policyId: 'mechanism-model-v1',
-      provider: 'fixture',
-      model: 'hermetic-reviewer',
-      maxOutputTokens: 1000,
-      allowedTools: [],
-    },
+      packets: [packet],
+      rubric: {
+        rubricId: 'mechanism-review',
+        version: '1.0.0',
+        sealedPath: {
+          pathRef: 'path_rubric11111111',
+          relativePath: 'sealed/rubric.md',
+        },
+        content: 'Use only the sealed evidence.',
+      },
+      prompt: {
+        promptId: 'mechanism-prompt-v1',
+        content: 'Review the sealed mechanism packet.',
+      },
+      modelPolicy: {
+        policyId: 'mechanism-model-v1',
+        provider: 'fixture',
+        model: 'hermetic-reviewer',
+        maxOutputTokens: 1000,
+        allowedTools: [],
+      },
+    });
+    const request = createMechanismReviewRequest(requestInputs);
+    const response = deepFreeze({
+      schemaVersion: '1.0.0',
+      requestId: request.requestId,
+      requestHash: request.requestHash,
+      nonceRef: request.nonceRef,
+      runId: request.runId,
+      codeHash: request.codeHash,
+      packetSetHash: request.packetSetHash,
+      packetHashes: request.packets.map(({ packetId, packetHash }) => ({ packetId, packetHash })),
+      rubricHash: request.rubric.hash,
+      promptHash: request.promptHash,
+      modelPolicyHash: request.modelPolicyHash,
+      evidenceSetHash: request.evidenceSetHash,
+      reviewedAt: '2026-07-13T12:00:00Z',
+      reviewer: {
+        kind: 'model',
+        provider: 'fixture',
+        model: 'hermetic-reviewer',
+        reviewerRef: ACTOR,
+      },
+      usage: { outputTokens: 100 },
+      reviews: [{
+        packetId: packet.packetId,
+        verdict: 'SUPPORTS',
+        reasoningCodes: ['EVIDENCE_SUPPORTS_PREDICTION'],
+        supportingEvidenceRefs: [E1],
+        counterEvidenceRefs: [],
+        competingExplanationCodes: [],
+        uncertainty: 'LOW',
+        safetyFlags: [],
+        supplementalReadDescriptorIds: [],
+      }],
+    });
+    return { requestInputs, response };
   });
-  const request = createMechanismReviewRequest(requestInputs);
-  const response = deepFreeze({
-    schemaVersion: '1.0.0',
-    requestId: request.requestId,
-    requestHash: request.requestHash,
-    nonceRef: request.nonceRef,
-    runId: request.runId,
-    codeHash: request.codeHash,
-    packetSetHash: request.packetSetHash,
-    packetHashes: request.packets.map(({ packetId, packetHash }) => ({ packetId, packetHash })),
-    rubricHash: request.rubric.hash,
-    promptHash: request.promptHash,
-    modelPolicyHash: request.modelPolicyHash,
-    evidenceSetHash: request.evidenceSetHash,
-    reviewedAt: '2026-07-13T12:00:00Z',
-    reviewer: {
-      kind: 'model',
-      provider: 'fixture',
-      model: 'hermetic-reviewer',
-      reviewerRef: ACTOR,
-    },
-    usage: { outputTokens: 100 },
-    reviews: [{
-      packetId: packet.packetId,
-      verdict: 'SUPPORTS',
-      reasoningCodes: ['EVIDENCE_SUPPORTS_PREDICTION'],
-      supportingEvidenceRefs: [E1],
-      counterEvidenceRefs: [],
-      competingExplanationCodes: [],
-      uncertainty: 'LOW',
-      safetyFlags: [],
-      supplementalReadDescriptorIds: [],
-    }],
-  });
+  const findingIds = [findingId, secondFindingId].filter(Boolean);
   return {
     graph,
     metrics,
     metricContracts,
     windows,
-    packet,
+    packet: packets[0],
+    packets,
     mechanismReview: deepFreeze({
       coverage,
       maxCandidates: 5,
       maxPromoted: 3,
-      packetBindings: [{
+      packetBindings: packets.map((packet, index) => ({
         packetId: packet.packetId,
         packetHash: packet.packetHash,
-        findingId,
-      }],
-      reviewEnvelopes: [{ requestInputs, response }],
+        findingId: findingIds[index],
+      })),
+      reviewEnvelopes,
     }),
   };
 }
@@ -707,6 +720,60 @@ function rehashStaging(root) {
   const next = { ...manifest, payloadArtifacts, publicationRoot: sha256(hashes) };
   writeFileSync(manifestPath, `${canonicalJson(next)}\n`);
   return next;
+}
+
+function task7OrderPublication() {
+  const findingIds = [
+    'finding_order_1111111111111111',
+    'finding_order_2222222222222222',
+  ];
+  const task7 = exactTask7MechanismReview(...findingIds);
+  const promoted = task7.packets.map((packet, index) => deepFreeze({
+    findingId: findingIds[index],
+    fingerprint: `fingerprint_order_${String(index + 1).repeat(16)}`,
+    title: `Promoted workflow defect ${index + 1}`,
+    summary: 'Exact runtime evidence supports the promoted workflow defect.',
+    journeyId: 'lead_to_booking',
+    severity: 'high',
+    evidenceRefs: [E1],
+    claims: [{
+      claimId: `claim_order_${String(index + 1).repeat(16)}`,
+      text: 'Exact runtime evidence supports the promoted workflow defect.',
+      evidenceRefs: [E1],
+      causalBasis: 'DETERMINISTIC',
+    }],
+    verdicts: {
+      configuration: 'FAIL',
+      execution: 'FAIL',
+      experience: 'WATCH',
+      outcome: 'WATCH',
+    },
+    coverageScope: 'account_wide',
+    priorityInputs: {
+      lane: 'COMMERCIAL',
+      promotionEligibility: 'ELIGIBLE',
+      coverageScope: 'account_wide',
+    },
+    promotionEligible: true,
+    mechanismConfidence: packet.mechanismConfidence,
+    critical: false,
+    mechanismPacketId: packet.packetId,
+  }));
+  return {
+    task7,
+    input: basePublication({
+      graph: task7.graph,
+      metricContracts: task7.metricContracts,
+      windows: task7.windows,
+      metrics: task7.metrics,
+      mechanismReview: task7.mechanismReview,
+      findings: deepFreeze({
+        criticalIssues: [],
+        promoted,
+        backlog: [],
+      }),
+    }),
+  };
 }
 
 test('healthy full publication has traceable claims and zero proposals', () => {
@@ -1199,6 +1266,45 @@ test('memory events are immutable idempotent and projections reconstruct', () =>
       writable(project);
       rmSync(project, { recursive: true, force: true });
     }
+  }
+});
+
+test('Task 7 publication compilation is invariant to valid artifact input order', () => {
+  const { input, task7 } = task7OrderPublication();
+  const reordered = {
+    ...task7.mechanismReview,
+    packetBindings: [...task7.mechanismReview.packetBindings].reverse(),
+    reviewEnvelopes: [...task7.mechanismReview.reviewEnvelopes].reverse(),
+  };
+  const first = compilePublicationArtifacts(input);
+  const second = compilePublicationArtifacts({
+    ...input,
+    mechanismReview: deepFreeze(reordered),
+  });
+  assert.equal(canonicalJson(first.payloadArtifacts), canonicalJson(second.payloadArtifacts));
+  assert.equal(canonicalJson(first.manifestInput), canonicalJson(second.manifestInput));
+});
+
+test('verifier rejects coherently rehashed noncanonical Task 7 artifact order', () => {
+  const { input } = task7OrderPublication();
+  const compiled = compilePublicationArtifacts(input);
+  const staging = writeStaging(compiled, ({ root }) => {
+    const path = join(root, 'evidence/sanitized/mechanism-verification.json');
+    const value = JSON.parse(readFileSync(path, 'utf8'));
+    value.packetBindings.reverse();
+    value.reviewEnvelopes.reverse();
+    const { commitment: _commitment, ...body } = value;
+    value.commitment = sha256(body);
+    writeFileSync(path, `${canonicalJson(value)}\n`);
+    rehashStaging(root);
+  });
+  try {
+    assert.throws(
+      () => verifyPublication({ publicationDir: staging }),
+      (error) => error.code === 'VERIFIER_INPUT_NONCANONICAL_MECHANISM_ORDER',
+    );
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
 });
 

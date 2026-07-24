@@ -35,6 +35,66 @@ function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function comparePacketBindings(left, right) {
+  return compareText(left.packetId, right.packetId)
+    || compareText(left.findingId, right.findingId);
+}
+
+function mechanismReviewOrder(envelope) {
+  const response = envelope?.response;
+  if (
+    typeof response?.requestHash !== 'string'
+    || typeof response?.requestId !== 'string'
+    || !Array.isArray(response.packetHashes)
+    || !response.packetHashes.every((packet) => typeof packet?.packetId === 'string')
+  ) return null;
+  return {
+    requestHash: response.requestHash,
+    requestId: response.requestId,
+    packetIds: response.packetHashes.map(({ packetId }) => packetId).sort(compareText),
+  };
+}
+
+function compareMechanismReviewEnvelopes(left, right) {
+  return compareText(left.order.requestHash, right.order.requestHash)
+    || compareText(left.order.requestId, right.order.requestId)
+    || compareText(canonicalJson(left.order.packetIds), canonicalJson(right.order.packetIds));
+}
+
+function mechanismReviewEnvelopeId(order) {
+  return `review_${sha256(order).slice(0, 32)}`;
+}
+
+function assertCanonicalMechanismOrder(sealed) {
+  if (sealed.packetBindings.every((binding) => (
+    typeof binding?.packetId === 'string'
+    && typeof binding?.findingId === 'string'
+  ))) {
+    const canonicalBindings = [...sealed.packetBindings].sort(comparePacketBindings);
+    if (canonicalJson(sealed.packetBindings) !== canonicalJson(canonicalBindings)) {
+      throw codedError('VERIFIER_INPUT_NONCANONICAL_MECHANISM_ORDER');
+    }
+  }
+  const reviewEntries = sealed.reviewEnvelopes.map((envelope) => ({
+    envelope,
+    order: mechanismReviewOrder(envelope),
+  }));
+  if (reviewEntries.every(({ order }) => order !== null)) {
+    const canonicalReviews = [...reviewEntries].sort(compareMechanismReviewEnvelopes);
+    if (
+      canonicalJson(sealed.reviewEnvelopes)
+      !== canonicalJson(canonicalReviews.map(({ envelope }) => envelope))
+    ) throw codedError('VERIFIER_INPUT_NONCANONICAL_MECHANISM_ORDER');
+    if (reviewEntries.some(({ envelope, order }) => (
+      envelope.envelopeId !== mechanismReviewEnvelopeId(order)
+    ))) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_REVIEWS');
+  }
+}
+
 function deepFreeze(value, seen = new WeakSet()) {
   if (!value || typeof value !== 'object' || seen.has(value)) return value;
   seen.add(value);
@@ -291,6 +351,7 @@ function rebuildMechanisms(sealed, machine) {
   if (commitment !== sha256(body)) {
     throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
   }
+  assertCanonicalMechanismOrder(sealed);
   const primary = deepFreeze(sealed.primary);
   if (
     canonicalJson(primary.graph) !== canonicalJson(machine.sealedInputs?.graph)

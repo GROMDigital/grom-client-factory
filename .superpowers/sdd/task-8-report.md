@@ -176,3 +176,40 @@ Second-pass GREEN:
 - Focused publication and weekly-memory tests: 47/47 passed
 - Full runtime suite: 198/198 passed
 - Build: passed
+
+## Final canonical-order hardening pass
+
+Base: `ff964a0d3475d1e387c9e9fc71763a4385682d7e`.
+
+RED command:
+`node --test --test-name-pattern='Task 7 publication compilation is invariant|verifier rejects coherently rehashed noncanonical Task 7 artifact order' skills/ghl-account-audit/tests/weekly-memory.test.mjs`
+
+- Node: `v24.13.0`
+- Exit code: `1`
+- Tests: 2
+- Passed: 0
+- Failed: 2
+- The expected failures proved that valid `packetBindings` and
+  `reviewEnvelopes` input reordering changed compiled publication bytes, and
+  that the verifier accepted the reordered artifact after both its inner
+  commitment and outer payload manifest were coherently rehashed.
+
+Final-pass changes:
+
+- The compiler validates binding uniqueness and conflicts, then emits
+  `packetBindings` in stable `packetId`, `findingId` order.
+- Validated review envelopes are emitted in stable `requestHash`, `requestId`,
+  canonical packet-ID order. Envelope IDs are derived from that stable order
+  key before envelope and commitment hashes are created.
+- The verifier compares the supplied artifact arrays to their exact canonical
+  order and fails closed with
+  `VERIFIER_INPUT_NONCANONICAL_MECHANISM_ORDER`; it does not sort attacker
+  input into an accepted form.
+
+Final-pass GREEN:
+
+- Canonical-order regression tests: 2/2 passed
+- Weekly-memory tests: 26/26 passed
+- Focused publication and weekly-memory tests: 49/49 passed
+- Full runtime suite: 200/200 passed
+- Build: passed
