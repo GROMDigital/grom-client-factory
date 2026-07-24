@@ -29,6 +29,15 @@ for repo in GROMDigital/grom-client-factory GROMDigital/client-lp-tracking uxiee
   fi
 done
 
+# The weekly GHL auditor is a scoped Node 24 runtime. This only validates the
+# local prerequisite; it does not start a diagnostic or contact GHL.
+audit_node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+if [ "$audit_node_major" -ge 24 ]; then
+  say audit-runtime PASS "Node $(node --version) supports the GHL audit runtime"
+else
+  say audit-runtime FAIL "Node 24+ required for the GHL audit runtime"
+fi
+
 # check_clone <config_key> <check_id> <fail_hint>
 # Applies the shared freshness/dirty/author_of rules for a single git-clone
 # dependency and emits one `say` line under <check_id>. <fail_hint> is used

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "profileId": {
+      "type": "string",
+      "enum": [
+        "client",
+        "grom_internal"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "targetKind": {
+      "type": "string",
+      "const": "location"
+    },
+    "excludedCapabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "journeys": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "journeyId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entryRule": {
+            "type": "string",
+            "minLength": 1
+          },
+          "denominator": {
+            "type": "string",
+            "minLength": 1
+          },
+          "outcomes": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "journeyId",
+          "entryRule",
+          "denominator",
+          "outcomes"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "profileId",
+    "version",
+    "targetKind",
+    "excludedCapabilities",
+    "journeys"
+  ],
+  "additionalProperties": false
+}

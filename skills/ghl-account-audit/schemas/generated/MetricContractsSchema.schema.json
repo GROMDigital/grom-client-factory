@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "profileId": {
+      "type": "string",
+      "enum": [
+        "client",
+        "grom_internal"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "edges": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "edgeId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "journeyId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fromStage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "toStage": {
+            "type": "string",
+            "minLength": 1
+          },
+          "eligibilityRule": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "fromEventFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "toEventFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedLag": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number",
+                "minimum": 0
+              },
+              "unit": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "amount",
+              "unit"
+            ],
+            "additionalProperties": false
+          },
+          "maturityRule": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "dispositions": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "reentryRule": {
+            "type": "string",
+            "enum": [
+              "new_journey_instance",
+              "same_journey_instance"
+            ]
+          },
+          "outcomeRule": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "nativeMapping": {
+            "type": "string",
+            "enum": [
+              "MAPPED",
+              "UNKNOWN"
+            ]
+          }
+        },
+        "required": [
+          "edgeId",
+          "journeyId",
+          "fromStage",
+          "toStage",
+          "eligibilityRule",
+          "fromEventFields",
+          "toEventFields",
+          "allowedLag",
+          "maturityRule",
+          "dispositions",
+          "reentryRule",
+          "outcomeRule",
+          "required",
+          "nativeMapping"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "profileId",
+    "version",
+    "edges"
+  ],
+  "additionalProperties": false
+}

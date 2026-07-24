@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "targetKind": {
+      "type": "string",
+      "const": "location"
+    },
+    "operatingProfile": {
+      "type": "string",
+      "enum": [
+        "client",
+        "grom_internal"
+      ]
+    },
+    "locationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "companyId": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "targetKind",
+    "operatingProfile",
+    "locationId"
+  ],
+  "additionalProperties": false
+}

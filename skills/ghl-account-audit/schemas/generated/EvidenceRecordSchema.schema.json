@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "evidenceRef": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source": {
+      "type": "string",
+      "enum": [
+        "context",
+        "public_ghl",
+        "internal_ghl",
+        "onboarding_portal"
+      ]
+    },
+    "capturedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payloadHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "OBSERVED",
+        "UNKNOWN",
+        "NOT_APPLICABLE"
+      ]
+    },
+    "objectRefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "objectType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "objectId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "objectType",
+          "objectId"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "evidenceRef",
+    "source",
+    "capturedAt",
+    "payloadHash",
+    "classification",
+    "objectRefs"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,488 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "const": "PROPOSAL_ONLY"
+    },
+    "executable": {
+      "type": "boolean",
+      "const": false
+    },
+    "approvalRequired": {
+      "type": "boolean",
+      "const": true
+    },
+    "solutionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "packHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "objectRefs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "objectType": {
+            "type": "string",
+            "minLength": 1
+          },
+          "objectId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "capturedVersion": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capturedHash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        },
+        "required": [
+          "objectType",
+          "objectId",
+          "capturedVersion",
+          "capturedHash"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "changeSet": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "proposed": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "solutionType": {
+              "type": "string",
+              "const": "workflow_logic"
+            },
+            "workflowId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "triggers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "branches": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exits": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "existingEnrollmentPlan": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "current",
+            "proposed",
+            "solutionType",
+            "workflowId",
+            "triggers",
+            "branches",
+            "exits",
+            "existingEnrollmentPlan"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "proposed": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "solutionType": {
+              "type": "string",
+              "const": "copy"
+            },
+            "channel": {
+              "type": "string",
+              "minLength": 1
+            },
+            "audience": {
+              "type": "string",
+              "minLength": 1
+            },
+            "locale": {
+              "type": "string",
+              "minLength": 1
+            },
+            "finalText": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mergeFields": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "fallbacks": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "stopConditions": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "current",
+            "proposed",
+            "solutionType",
+            "channel",
+            "audience",
+            "locale",
+            "finalText",
+            "mergeFields",
+            "fallbacks",
+            "stopConditions"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "proposed": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "solutionType": {
+              "type": "string",
+              "const": "wait_timing"
+            },
+            "anchorEvent": {
+              "type": "string",
+              "minLength": 1
+            },
+            "duration": {
+              "type": "number",
+              "minimum": 0
+            },
+            "unit": {
+              "type": "string",
+              "minLength": 1
+            },
+            "timezone": {
+              "type": "string",
+              "minLength": 1
+            },
+            "exitConditions": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "current",
+            "proposed",
+            "solutionType",
+            "anchorEvent",
+            "duration",
+            "unit",
+            "timezone",
+            "exitConditions"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "proposed": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "solutionType": {
+              "type": "string",
+              "enum": [
+                "conversation_ai",
+                "voice_ai"
+              ]
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "prompt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "allowedTools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "guardrails": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "escalationRules": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "evaluationCases": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "current",
+            "proposed",
+            "solutionType",
+            "agentId",
+            "prompt",
+            "allowedTools",
+            "guardrails",
+            "escalationRules",
+            "evaluationCases"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "current": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "proposed": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "solutionType": {
+              "type": "string",
+              "const": "operating_process"
+            },
+            "owner": {
+              "type": "string",
+              "minLength": 1
+            },
+            "raci": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "sla": {
+              "type": "string",
+              "minLength": 1
+            },
+            "trigger": {
+              "type": "string",
+              "minLength": 1
+            },
+            "completionEvidence": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "escalation": {
+              "minItems": 1,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "current",
+            "proposed",
+            "solutionType",
+            "owner",
+            "raci",
+            "sla",
+            "trigger",
+            "completionEvidence",
+            "escalation"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "blastRadius": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1
+    },
+    "monitoring": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollout": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "rollback": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "guardrails": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "evidenceRefs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "required": [
+    "mode",
+    "executable",
+    "approvalRequired",
+    "solutionId",
+    "packHash",
+    "objectRefs",
+    "changeSet",
+    "preconditions",
+    "dependencies",
+    "blastRadius",
+    "owner",
+    "monitoring",
+    "rollout",
+    "rollback",
+    "guardrails",
+    "tests",
+    "evidenceRefs"
+  ],
+  "additionalProperties": false
+}

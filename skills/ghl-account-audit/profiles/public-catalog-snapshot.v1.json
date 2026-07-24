@@ -1,0 +1,47 @@
+{
+  "schemaVersion": "1.0.0",
+  "catalogRevision": "2026-07-24-public-read-review-1",
+  "capturedAt": "2026-07-24T00:00:00.000Z",
+  "sourceServer": {
+    "name": "ghl-public-mcp",
+    "identity": "reviewed-public-catalog",
+    "version": "1"
+  },
+  "candidates": [
+    {
+      "actionId": "contacts.search",
+      "method": "POST",
+      "normalizedPath": "/contacts/search",
+      "category": "contacts",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "reviewed search_actions catalog entry",
+        "reviewedAt": "2026-07-24T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "opportunities.list",
+      "method": "GET",
+      "normalizedPath": "/opportunities/search",
+      "category": "opportunities",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "reviewed search_actions catalog entry",
+        "reviewedAt": "2026-07-24T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "contacts.create",
+      "method": "POST",
+      "normalizedPath": "/contacts/",
+      "category": "contacts",
+      "risk": "write",
+      "approvedSemanticRead": false
+    }
+  ],
+  "canonicalSha256": "705a9658e5cf405dc7b4b5e1fc59e20304d57bf80c661181e5642cf981f32052"
+}

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "receiptId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "proposalHash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "approvedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approvedBy": {
+      "type": "string",
+      "minLength": 1
+    },
+    "approvalScope": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "executable": {
+      "type": "boolean",
+      "const": false
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "receiptId",
+    "proposalHash",
+    "approvedAt",
+    "approvedBy",
+    "approvalScope",
+    "executable"
+  ],
+  "additionalProperties": false
+}

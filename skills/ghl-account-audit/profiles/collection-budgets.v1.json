@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "exhaustionPolicy": "checkpoint_scope_incomplete",
+  "capabilities": {
+    "contacts": { "maximumPages": 100, "maximumRecords": 10000, "maximumResponseBytes": 10485760, "requestTimeoutMs": 30000, "retryCount": 3, "maximumTotalRetryDelayMs": 15000, "wallClockMs": 300000 },
+    "conversations": { "maximumPages": 100, "maximumRecords": 5000, "maximumResponseBytes": 20971520, "requestTimeoutMs": 30000, "retryCount": 3, "maximumTotalRetryDelayMs": 15000, "wallClockMs": 300000 },
+    "appointments": { "maximumPages": 100, "maximumRecords": 10000, "maximumResponseBytes": 10485760, "requestTimeoutMs": 30000, "retryCount": 3, "maximumTotalRetryDelayMs": 15000, "wallClockMs": 300000 },
+    "opportunities": { "maximumPages": 100, "maximumRecords": 10000, "maximumResponseBytes": 10485760, "requestTimeoutMs": 30000, "retryCount": 3, "maximumTotalRetryDelayMs": 15000, "wallClockMs": 300000 },
+    "payments": { "maximumPages": 100, "maximumRecords": 10000, "maximumResponseBytes": 10485760, "requestTimeoutMs": 30000, "retryCount": 3, "maximumTotalRetryDelayMs": 15000, "wallClockMs": 300000 }
+  }
+}

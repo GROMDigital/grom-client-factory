@@ -1,0 +1,30 @@
+{
+  "profileId": "grom_internal",
+  "version": "1.0.0",
+  "targetKind": "location",
+  "excludedCapabilities": [
+    "courses",
+    "lessons",
+    "course_offers",
+    "course_progress",
+    "memberships",
+    "communities",
+    "assessments",
+    "certificates",
+    "course_credentials"
+  ],
+  "journeys": [
+    {
+      "journeyId": "agency_new_business",
+      "entryRule": "enquiry_created",
+      "denominator": "enquiry_created",
+      "outcomes": ["won", "lost", "collected_revenue"]
+    },
+    {
+      "journeyId": "client_onboarding",
+      "entryRule": "won_or_paid_handoff",
+      "denominator": "won_or_paid_handoff",
+      "outcomes": ["launch", "first_value"]
+    }
+  ]
+}

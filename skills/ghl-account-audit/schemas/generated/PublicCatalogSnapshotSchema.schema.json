@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "const": "1.0.0"
+    },
+    "catalogRevision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capturedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sourceServer": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name",
+        "identity",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "actionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "method": {
+            "type": "string",
+            "minLength": 1
+          },
+          "normalizedPath": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "risk": {
+            "type": "string",
+            "minLength": 1
+          },
+          "approvedSemanticRead": {
+            "type": "boolean"
+          },
+          "approval": {
+            "type": "object",
+            "properties": {
+              "provenance": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reviewedAt": {
+                "type": "string",
+                "minLength": 1
+              },
+              "reviewedBy": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "provenance",
+              "reviewedAt",
+              "reviewedBy"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "actionId",
+          "method",
+          "normalizedPath",
+          "category",
+          "risk",
+          "approvedSemanticRead"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "canonicalSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "catalogRevision",
+    "capturedAt",
+    "sourceServer",
+    "candidates",
+    "canonicalSha256"
+  ],
+  "additionalProperties": false
+}

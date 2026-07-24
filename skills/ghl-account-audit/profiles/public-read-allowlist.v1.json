@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceCatalogRevision": "2026-07-24-public-read-review-1",
+  "sourceSnapshotHash": "705a9658e5cf405dc7b4b5e1fc59e20304d57bf80c661181e5642cf981f32052",
+  "sourceServerIdentity": "reviewed-public-catalog",
+  "actions": [
+    {
+      "actionId": "contacts.search",
+      "method": "POST",
+      "normalizedPath": "/contacts/search",
+      "category": "contacts",
+      "risk": "read"
+    },
+    {
+      "actionId": "opportunities.list",
+      "method": "GET",
+      "normalizedPath": "/opportunities/search",
+      "category": "opportunities",
+      "risk": "read"
+    }
+  ]
+}

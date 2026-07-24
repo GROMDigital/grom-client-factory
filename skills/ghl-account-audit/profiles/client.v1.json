@@ -1,0 +1,24 @@
+{
+  "profileId": "client",
+  "version": "1.0.0",
+  "targetKind": "location",
+  "excludedCapabilities": [
+    "courses",
+    "lessons",
+    "course_offers",
+    "course_progress",
+    "memberships",
+    "communities",
+    "assessments",
+    "certificates",
+    "course_credentials"
+  ],
+  "journeys": [
+    {
+      "journeyId": "client_sales",
+      "entryRule": "account_declared_lead_creation",
+      "denominator": "lead_created",
+      "outcomes": ["won", "lost", "collected_revenue", "reactivated"]
+    }
+  ]
+}
