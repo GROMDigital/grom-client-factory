@@ -1,0 +1,55 @@
+{
+  "context": {
+    "locationId": "L1"
+  },
+  "profileId": "client",
+  "collections": [
+    {
+      "source": "public_ghl",
+      "operationId": "contacts-weekly",
+      "boundLocationId": "L1",
+      "requestedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "appliedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "capturedAt": "2026-07-20T01:00:00.000Z",
+      "items": [
+        {
+          "recordType": "contact",
+          "nativeId": "contact-a",
+          "normalizedEmail": "duplicate@example.test",
+          "eventTime": "2026-07-13T01:00:00.000Z",
+          "evidenceRef": "ev_1111111111111111"
+        },
+        {
+          "recordType": "contact",
+          "nativeId": "contact-b",
+          "normalizedEmail": "duplicate@example.test",
+          "eventTime": "2026-07-13T01:01:00.000Z",
+          "evidenceRef": "ev_2222222222222222"
+        },
+        {
+          "recordType": "journey_event",
+          "stage": "first_engagement",
+          "normalizedEmail": "duplicate@example.test",
+          "journeyId": "client_sales",
+          "journeyInstanceId": "journey_client_sales",
+          "eventTime": "2026-07-13T01:02:00.000Z",
+          "evidenceRef": "ev_3333333333333333"
+        }
+      ],
+      "page": {
+        "cursor": null,
+        "nextCursor": null,
+        "reportedCount": 3,
+        "collectedCount": 3,
+        "complete": true,
+        "truncated": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "context": {
+    "locationId": "GROM"
+  },
+  "profileId": "grom_internal",
+  "collections": [
+    {
+      "source": "internal_ghl",
+      "operationId": "journey-weekly",
+      "boundLocationId": "GROM",
+      "requestedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "appliedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "capturedAt": "2026-07-20T01:00:00.000Z",
+      "items": [
+        {
+          "recordType": "contact",
+          "nativeId": "contact-1",
+          "organizationNativeId": "org-1",
+          "eventTime": "2026-07-13T01:00:00.000Z",
+          "evidenceRef": "ev_4444444444444444"
+        },
+        {
+          "recordType": "journey_event",
+          "nativeId": "event-enquiry",
+          "subjectNativeId": "contact-1",
+          "stage": "enquiry",
+          "journeyId": "agency_new_business",
+          "journeyInstanceId": "journey_agency_new_business",
+          "eventTime": "2026-07-13T02:00:00.000Z",
+          "evidenceRef": "ev_5555555555555555"
+        },
+        {
+          "recordType": "journey_event",
+          "nativeId": "event-won",
+          "subjectNativeId": "contact-1",
+          "stage": "won",
+          "journeyId": "agency_new_business",
+          "journeyInstanceId": "journey_agency_new_business",
+          "eventTime": "2026-07-14T02:00:00.000Z",
+          "evidenceRef": "ev_6666666666666666"
+        },
+        {
+          "recordType": "handoff",
+          "nativeId": "handoff-1",
+          "subjectNativeId": "contact-1",
+          "organizationNativeId": "org-1",
+          "opportunityNativeId": "opp-1",
+          "fromJourneyId": "agency_new_business",
+          "toJourneyId": "client_onboarding",
+          "eventTime": "2026-07-14T02:01:00.000Z",
+          "evidenceRef": "ev_7777777777777777"
+        },
+        {
+          "recordType": "journey_event",
+          "nativeId": "event-onboarding",
+          "subjectNativeId": "contact-1",
+          "organizationNativeId": "org-1",
+          "opportunityNativeId": "opp-1",
+          "stage": "onboarding_started",
+          "journeyId": "client_onboarding",
+          "journeyInstanceId": "journey_client_onboarding",
+          "eventTime": "2026-07-14T02:02:00.000Z",
+          "evidenceRef": "ev_8888888888888888"
+        },
+        {
+          "recordType": "workflow_definition",
+          "nativeId": "workflow-1",
+          "definitionHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "eventTime": "2026-07-13T00:00:00.000Z",
+          "evidenceRef": "ev_9999999999999999"
+        },
+        {
+          "recordType": "workflow_execution",
+          "nativeId": "execution-1",
+          "subjectNativeId": "contact-1",
+          "workflowNativeId": "workflow-1",
+          "effectiveDefinitionHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "journeyId": "agency_new_business",
+          "journeyInstanceId": "journey_agency_new_business",
+          "eventTime": "2026-07-13T02:01:00.000Z",
+          "evidenceRef": "ev_aaaaaaaaaaaaaaaa"
+        }
+      ],
+      "page": {
+        "cursor": null,
+        "nextCursor": null,
+        "reportedCount": 7,
+        "collectedCount": 7,
+        "complete": true,
+        "truncated": false
+      }
+    },
+    {
+      "source": "onboarding_portal",
+      "operationId": "portal-weekly",
+      "boundLocationId": "GROM",
+      "requestedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "appliedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "capturedAt": "2026-07-20T01:05:00.000Z",
+      "items": [
+        {
+          "recordType": "portal_milestone",
+          "nativeId": "portal-event-1",
+          "organizationNativeId": "org-1",
+          "opportunityNativeId": "opp-1",
+          "milestone": "assets_confirmed",
+          "journeyId": "client_onboarding",
+          "journeyInstanceId": "journey_client_onboarding",
+          "eventTime": "2026-07-15T02:00:00.000Z",
+          "evidenceRef": "ev_bbbbbbbbbbbbbbbb"
+        }
+      ],
+      "page": {
+        "cursor": null,
+        "nextCursor": null,
+        "reportedCount": 1,
+        "collectedCount": 1,
+        "complete": true,
+        "truncated": false
+      }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "context": {
+    "locationId": "GROM"
+  },
+  "profileId": "grom_internal",
+  "collections": [
+    {
+      "source": "onboarding_portal",
+      "operationId": "portal-weekly",
+      "boundLocationId": "GROM",
+      "requestedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "appliedWindow": {
+        "from": "2026-07-13T00:00:00.000Z",
+        "to": "2026-07-20T00:00:00.000Z"
+      },
+      "capturedAt": "2026-07-20T01:00:00.000Z",
+      "items": [],
+      "page": {
+        "cursor": null,
+        "nextCursor": null,
+        "reportedCount": 0,
+        "collectedCount": 0,
+        "complete": false,
+        "truncated": false
+      },
+      "incompleteReason": "PORTAL_UNAVAILABLE"
+    }
+  ]
+}
