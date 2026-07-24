@@ -27,6 +27,7 @@ import {
   ingestPrivateSourceBundle,
   sanitizeForPublication,
 } from '../lib/artifacts.mjs';
+import { sha256 } from '../lib/canonical.mjs';
 
 const PRIVATE_CANARIES = Object.freeze([
   'Bearer private-authorization-canary',
@@ -50,6 +51,20 @@ const PRIVATE_CANARY_KINDS = Object.freeze([
   'credential',
   'key-reference',
 ]);
+const PRIVATE_SOURCES = Object.freeze(PRIVATE_CANARIES.map((value, index) => Object.freeze({
+  sourceId: `seeded-private-fixture-${index}`,
+  kind: PRIVATE_CANARY_KINDS[index],
+  payload: Object.freeze({ value }),
+})));
+const PRIVATE_SOURCE_INVENTORY = Object.freeze(PRIVATE_SOURCES
+  .map((source) => Object.freeze({
+    sourceId: source.sourceId,
+    kind: source.kind,
+    sourceHash: sha256({ schemaVersion: '1.0.0', source }),
+  }))
+  .sort((left, right) => (
+    left.sourceId < right.sourceId ? -1 : left.sourceId > right.sourceId ? 1 : 0
+  )));
 
 const privateFixture = {
   headers: {
@@ -97,6 +112,8 @@ const PRIVACY_FROZEN_INPUTS = Object.freeze({
   capabilityAttestationHashes: ['attestation-1'],
   capabilityProofExpiries: [2000],
   capabilityManifestHashes: ['manifest-1'],
+  privateSourceInventory: PRIVATE_SOURCE_INVENTORY,
+  privateSourceInventoryHash: sha256(PRIVATE_SOURCE_INVENTORY),
   target: {
     targetKind: 'location',
     operatingProfile: 'client',
@@ -123,11 +140,7 @@ function privateRegistry() {
       state,
       runManifest: PRIVACY_RUN_MANIFEST,
     });
-    for (const source of PRIVATE_CANARIES.map((value, index) => ({
-      sourceId: `seeded-private-fixture-${index}`,
-      kind: PRIVATE_CANARY_KINDS[index],
-      payload: { value },
-    }))) collector.add(source);
+    for (const source of PRIVATE_SOURCES) collector.add(source);
     return ingestPrivateSourceBundle(collector.finalize());
   } finally {
     vault.close();

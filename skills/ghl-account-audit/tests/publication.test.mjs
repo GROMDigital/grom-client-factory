@@ -78,6 +78,7 @@ function trustedRegistry(runManifest, sources, {
   paths: suppliedPaths,
   finalizeOptions,
   inspectCheckpoint,
+  expectedSources = sources,
 } = {}) {
   const ownsProject = !suppliedPaths;
   const projectRoot = ownsProject
@@ -91,7 +92,24 @@ function trustedRegistry(runManifest, sources, {
     pseudonymKey: Buffer.alloc(32, 82),
   });
   try {
-    state.createRun({ runId: runManifest.runId, frozenInputs, now: 1000 });
+    const privateSourceInventory = expectedSources
+      .map((source) => ({
+        sourceId: source.sourceId,
+        kind: source.kind,
+        sourceHash: sha256({ schemaVersion: '1.0.0', source }),
+      }))
+      .sort((left, right) => (
+        left.sourceId < right.sourceId ? -1 : left.sourceId > right.sourceId ? 1 : 0
+      ));
+    state.createRun({
+      runId: runManifest.runId,
+      frozenInputs: {
+        ...frozenInputs,
+        privateSourceInventory,
+        privateSourceInventoryHash: sha256(privateSourceInventory),
+      },
+      now: 1000,
+    });
     const collector = vault.beginPrivateSourceCollection({
       state,
       runManifest,
@@ -285,7 +303,7 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
   );
   assert.throws(
     () => trustedRegistry(runManifest, []),
-    /PRIVATE_SOURCE_INVENTORY_REQUIRED/u,
+    /INVALID_FROZEN_INPUTS/u,
   );
   assert.throws(
     () => ingestPrivateSourceBundle({
@@ -477,6 +495,117 @@ test('trusted source ingestion derives a complete opaque registry and preserves 
       registry: mismatched,
     }),
     /PRIVATE_SOURCE_REGISTRY_MISMATCH/u,
+  );
+});
+
+test('durable expected source inventory rejects a selectively omitted transcript', () => {
+  const runManifest = {
+    runId: 'selective-omission-run',
+    publicationId: 'selective-omission-publication',
+    week: '2026-W30',
+    status: 'complete_partial',
+  };
+  const benign = {
+    sourceId: 'benign-source',
+    kind: 'private-content',
+    payload: { marker: 'benign marker' },
+  };
+  const transcript = {
+    sourceId: 'required-transcript',
+    kind: 'private-content',
+    payload: { transcript: 'OMITTED PRIVATE TRANSCRIPT CANARY' },
+  };
+  let mintedRegistry;
+  assert.throws(
+    () => {
+      mintedRegistry = trustedRegistry(runManifest, [benign], {
+      expectedSources: [benign, transcript],
+      });
+    },
+    /PRIVATE_SOURCE_INVENTORY_INCOMPLETE/u,
+  );
+  assert.equal(mintedRegistry, undefined);
+});
+
+test('sanitizer rescans mixed exact and normalized private variants', () => {
+  const runManifest = {
+    runId: 'mixed-variant-run',
+    publicationId: 'mixed-variant-publication',
+    week: '2026-W30',
+    status: 'complete_partial',
+  };
+  const privateName = 'José Alvarez';
+  const registry = trustedRegistry(runManifest, [{
+    sourceId: 'private-name',
+    kind: 'pii',
+    payload: { name: privateName },
+  }]);
+  for (const mixed of [
+    `${privateName} and JOSÉ ALVAREZ`,
+    `${privateName} and Jose\u0301 Alvarez`,
+    `${privateName} and José\t\nAlvarez`,
+  ]) {
+    const sanitized = sanitizeForPublication({
+      runManifest,
+      finding: { summary: mixed },
+    }, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry,
+    });
+    const text = JSON.stringify(sanitized);
+    assert.equal(text.includes('JOSÉ ALVAREZ'), false);
+    assert.equal(text.includes('Jose\u0301 Alvarez'), false);
+    assert.equal(text.includes('José\t\nAlvarez'), false);
+  }
+});
+
+test('sanitizer removes private object keys and rejects sanitized collisions', () => {
+  const runManifest = {
+    runId: 'private-key-run',
+    publicationId: 'private-key-publication',
+    week: '2026-W30',
+    status: 'complete_partial',
+  };
+  const privateKey = 'José Alvarez';
+  const registry = trustedRegistry(runManifest, [{
+    sourceId: 'private-object-key',
+    kind: 'pii',
+    payload: { name: privateKey },
+  }]);
+  const sanitized = sanitizeForPublication({
+    runManifest,
+    findingsByActor: {
+      'JOSÉ ALVAREZ': { status: 'open' },
+    },
+  }, {
+    pseudonymKey: Buffer.alloc(32, 9),
+    registry,
+  });
+  assert.equal(Object.keys(sanitized.findingsByActor).includes('JOSÉ ALVAREZ'), false);
+  assert.match(Object.keys(sanitized.findingsByActor)[0], /^psn_[a-f0-9]{32}$/u);
+
+  assert.throws(
+    () => sanitizeForPublication({
+      runManifest,
+      findingsByActor: {
+        'José Alvarez': { status: 'open' },
+        'JOSÉ ALVAREZ': { status: 'closed' },
+      },
+    }, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry,
+    }),
+    /PUBLICATION_KEY_COLLISION/u,
+  );
+  assert.throws(
+    () => sanitizeForPublication({
+      runManifest,
+      findingsByActor: JSON.parse('{"__proto__":{"polluted":true}}'),
+    }, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry,
+    }),
+    /PUBLICATION_KEY_FORBIDDEN/u,
   );
 });
 

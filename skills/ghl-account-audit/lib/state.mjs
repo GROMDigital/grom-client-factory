@@ -64,6 +64,14 @@ const FROZEN_INPUT_FIELDS = Object.freeze([
   'capabilityReceiptHashes',
   'capabilityAttestationHashes',
   'capabilityProofExpiries',
+  // Task 4 adapter contract: after terminal pagination, sort every authoritative
+  // source by sourceId and provide {sourceId, kind, sourceHash}, where sourceHash
+  // is sha256({schemaVersion:'1.0.0', source:<canonical source envelope>}).
+  // The orchestrator hashes that complete array into privateSourceInventoryHash
+  // before createRun. Task 3 collectors may satisfy it but cannot create,
+  // expand, substitute, or narrow it.
+  'privateSourceInventory',
+  'privateSourceInventoryHash',
 ]);
 
 function isPlainObject(value) {
@@ -95,6 +103,31 @@ function assertFrozenHashArray(value) {
 
 function assertFrozenExpiryArray(value) {
   if (!Array.isArray(value) || value.some((item) => !Number.isSafeInteger(item) || item < 0)) {
+    invalidFrozenInputs();
+  }
+}
+
+function validatePrivateSourceInventory(inventory, expectedHash) {
+  if (!Array.isArray(inventory) || inventory.length === 0) invalidFrozenInputs();
+  const sourceIds = new Set();
+  let previousSourceId;
+  for (const source of inventory) {
+    if (
+      !isPlainObject(source)
+      || Object.keys(source).length !== 3
+      || Object.keys(source).some((key) => !['kind', 'sourceHash', 'sourceId'].includes(key))
+      || typeof source.sourceId !== 'string'
+      || !/^[a-z0-9][a-z0-9_.:-]{0,127}$/u.test(source.sourceId)
+      || sourceIds.has(source.sourceId)
+      || (previousSourceId !== undefined && source.sourceId <= previousSourceId)
+      || !['pii', 'credential', 'private-content', 'key-reference'].includes(source.kind)
+      || typeof source.sourceHash !== 'string'
+      || !/^[a-f0-9]{64}$/u.test(source.sourceHash)
+    ) invalidFrozenInputs();
+    sourceIds.add(source.sourceId);
+    previousSourceId = source.sourceId;
+  }
+  if (typeof expectedHash !== 'string' || sha256(inventory) !== expectedHash) {
     invalidFrozenInputs();
   }
 }
@@ -145,6 +178,10 @@ function validateFrozenInputs(frozenInputs) {
     'capabilityAttestationHashes',
   ]) assertFrozenHashArray(frozenInputs[field]);
   assertFrozenExpiryArray(frozenInputs.capabilityProofExpiries);
+  validatePrivateSourceInventory(
+    frozenInputs.privateSourceInventory,
+    frozenInputs.privateSourceInventoryHash,
+  );
 }
 
 export class AuditState {
@@ -303,6 +340,28 @@ export class AuditState {
       SELECT run_id, phase, input_hash, output_hash, payload_json
       FROM checkpoints WHERE run_id = ? ORDER BY phase ASC
     `).all(runId).map((checkpoint) => this.#checkpointRecord(checkpoint));
+  }
+
+  getAuthorizedPrivateSourceInventory(runId) {
+    assertNonEmptyString(runId, 'INVALID_RUN_ID');
+    const run = this.db.prepare(
+      'SELECT location_id, frozen_inputs_json, frozen_inputs_hash FROM runs WHERE run_id = ?',
+    ).get(runId);
+    if (!run) throw codedError('RUN_NOT_FOUND');
+    if (run.location_id !== this.locationId) throw codedError('LOCATION_MISMATCH');
+    const frozenInputs = JSON.parse(run.frozen_inputs_json);
+    validatePrivateSourceInventory(
+      frozenInputs.privateSourceInventory,
+      frozenInputs.privateSourceInventoryHash,
+    );
+    return Object.freeze({
+      runId,
+      frozenInputsHash: run.frozen_inputs_hash,
+      sourceInventoryHash: frozenInputs.privateSourceInventoryHash,
+      sourceInventory: Object.freeze(frozenInputs.privateSourceInventory.map((source) => (
+        Object.freeze({ ...source })
+      ))),
+    });
   }
 
   #runRecord(row) {

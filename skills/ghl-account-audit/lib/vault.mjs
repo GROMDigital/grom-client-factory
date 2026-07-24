@@ -510,6 +510,10 @@ export function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
         || state.paths.stateDb !== canonicalPaths.stateDb
       ) throw codedError('PRIVATE_SOURCE_AUTHORITY_INVALID', TypeError);
       const manifestHash = sha256(runManifest);
+      const authority = state.getAuthorizedPrivateSourceInventory(runManifest.runId);
+      const expectedById = new Map(
+        authority.sourceInventory.map((source) => [source.sourceId, source]),
+      );
       const collected = new Map();
       let finalized = false;
       return Object.freeze({
@@ -517,12 +521,22 @@ export function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
           assertOpen();
           if (finalized) throw codedError('PRIVATE_SOURCE_COLLECTION_FINALIZED');
           const entries = derivePrivateSourceEntries([source]);
+          const snapshot = JSON.parse(canonicalJson(source));
+          const expected = expectedById.get(source.sourceId);
+          const sourceHash = sha256({ schemaVersion: '1.0.0', source: snapshot });
+          if (
+            !expected
+            || expected.kind !== source.kind
+            || expected.sourceHash !== sourceHash
+          ) {
+            throw codedError('PRIVATE_SOURCE_INVENTORY_UNEXPECTED', TypeError);
+          }
           if (collected.has(source.sourceId)) {
             throw codedError('PRIVATE_SOURCE_INVENTORY_INVALID', TypeError);
           }
-          const snapshot = JSON.parse(canonicalJson(source));
           collected.set(source.sourceId, Object.freeze({
             source: Object.freeze(snapshot),
+            sourceHash,
             entries,
           }));
           return Object.freeze({ sourceId: source.sourceId, kind: source.kind });
@@ -543,9 +557,19 @@ export function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
                 : left.source.sourceId > right.source.sourceId ? 1 : 0
             ));
           const sources = collectedRecords.map(({ source }) => source);
-          const inventory = sources.map(({ sourceId, kind }) => ({ sourceId, kind }));
+          const inventory = collectedRecords.map(({ source, sourceHash }) => ({
+            sourceId: source.sourceId,
+            kind: source.kind,
+            sourceHash,
+          }));
+          if (canonicalJson(inventory) !== canonicalJson(authority.sourceInventory)) {
+            throw codedError('PRIVATE_SOURCE_INVENTORY_INCOMPLETE');
+          }
           const entries = Object.freeze(collectedRecords.flatMap((record) => record.entries));
           const sourceInventoryHash = sha256(inventory);
+          if (sourceInventoryHash !== authority.sourceInventoryHash) {
+            throw codedError('PRIVATE_SOURCE_INVENTORY_INCOMPLETE');
+          }
           const sourceBundleHash = sha256({ schemaVersion: '1.0.0', sources });
           const inventoryMetadata = {
             schemaVersion: '1.0.0',
@@ -555,6 +579,7 @@ export function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
             sourceRecordCount: sources.length,
             sourceValueCount: entries.length,
             sourceIds: inventory.map(({ sourceId }) => sourceId),
+            frozenInputsHash: authority.frozenInputsHash,
           };
           const inventorySignature = createHmac('sha256', subjectKey)
             .update(canonicalJson(inventoryMetadata))

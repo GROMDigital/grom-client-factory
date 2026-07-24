@@ -14,6 +14,16 @@ import { canonicalJson, sha256 } from '../lib/canonical.mjs';
 import { auditPaths } from '../lib/paths.mjs';
 import { openState } from '../lib/state.mjs';
 
+const expectedPrivateSource = Object.freeze({
+  sourceId: 'expected-source',
+  kind: 'private-content',
+  payload: Object.freeze({ marker: 'expected-source-marker' }),
+});
+const privateSourceInventory = Object.freeze([Object.freeze({
+  sourceId: expectedPrivateSource.sourceId,
+  kind: expectedPrivateSource.kind,
+  sourceHash: sha256({ schemaVersion: '1.0.0', source: expectedPrivateSource }),
+})]);
 const frozenInputs = Object.freeze({
   locationId: 'L1',
   cutoff: 1000,
@@ -32,6 +42,8 @@ const frozenInputs = Object.freeze({
   capabilityAttestationHashes: ['attestation-1'],
   capabilityProofExpiries: [2000],
   capabilityManifestHashes: ['manifest-1'],
+  privateSourceInventory,
+  privateSourceInventoryHash: sha256(privateSourceInventory),
   target: {
     targetKind: 'location',
     operatingProfile: 'client',
@@ -177,6 +189,49 @@ test('createRun rejects omitted, unknown, and invalid frozen-input fields', () =
     }),
     /INVALID_FROZEN_INPUTS/,
   );
+}));
+
+test('run state durably authorizes one exact terminal private-source inventory', () => withFixture(({ state }) => {
+  state.createRun({ runId: 'inventory-run', frozenInputs, now: 1000 });
+  const authority = state.getAuthorizedPrivateSourceInventory('inventory-run');
+  assert.equal(authority.sourceInventoryHash, sha256(privateSourceInventory));
+  assert.deepEqual(authority.sourceInventory, privateSourceInventory);
+  assert.equal(Object.isFrozen(authority.sourceInventory), true);
+  assert.throws(() => {
+    authority.sourceInventory[0].sourceId = 'narrowed-source';
+  }, TypeError);
+
+  const invalidInventories = [
+    {
+      ...frozenInputs,
+      privateSourceInventory: [],
+      privateSourceInventoryHash: sha256([]),
+    },
+    {
+      ...frozenInputs,
+      privateSourceInventoryHash: '0'.repeat(64),
+    },
+    {
+      ...frozenInputs,
+      privateSourceInventory: [
+        { ...privateSourceInventory[0], sourceId: 'z-source' },
+        { ...privateSourceInventory[0], sourceId: 'a-source' },
+      ],
+      privateSourceInventoryHash: sha256([
+        { ...privateSourceInventory[0], sourceId: 'z-source' },
+        { ...privateSourceInventory[0], sourceId: 'a-source' },
+      ]),
+    },
+  ];
+  for (const [index, invalid] of invalidInventories.entries()) {
+    assert.throws(
+      () => state.createRun({
+        runId: `invalid-inventory-${index}`,
+        frozenInputs: invalid,
+      }),
+      /INVALID_FROZEN_INPUTS/u,
+    );
+  }
 }));
 
 test('run state survives closing and reopening the location database', () => withFixture(({ state, projectRoot }) => {

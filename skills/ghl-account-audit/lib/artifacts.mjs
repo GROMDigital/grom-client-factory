@@ -58,6 +58,7 @@ const ALLOWED_ROOT_ARTIFACTS = new Set([
   'conversation-sample.json',
   'evidence-manifest.jsonl',
 ]);
+const PROTOTYPE_RISK_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const BOUNDARIES = new WeakMap();
 const PRIVATE_REGISTRIES = new WeakMap();
 const PUBLICATION_TEST_SEAM = Symbol.for('grom.audit.publication.fs-seam');
@@ -155,7 +156,7 @@ function sanitizeString(value, keyName, pseudonymKey, knownPrivateValues) {
   }
   const changed = output !== value;
   const normalizedOutput = normalizeSensitive(output);
-  const containingSource = !changed && normalizedOutput.length >= 3
+  const containingSource = normalizedOutput.length >= 3
     ? knownPrivateValues.find(({ privateValue }) => {
       const normalizedPrivate = normalizeSensitive(privateValue);
       return normalizedPrivate.length >= 3
@@ -212,10 +213,22 @@ function sanitizeNode(value, keyName, pseudonymKey, knownPrivateValues, stack) {
     if (Object.getPrototypeOf(value) !== Object.prototype) {
       throw codedError('PUBLICATION_VALUE_UNSUPPORTED', TypeError);
     }
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [
-      key,
-      sanitizeNode(entry, key, pseudonymKey, knownPrivateValues, stack),
-    ]));
+    const entries = [];
+    const sanitizedKeys = new Set();
+    for (const [key, entry] of Object.entries(value)) {
+      if (PROTOTYPE_RISK_KEYS.has(key)) throw codedError('PUBLICATION_KEY_FORBIDDEN');
+      const sanitizedKey = sanitizeString(key, '', pseudonymKey, knownPrivateValues);
+      if (
+        PROTOTYPE_RISK_KEYS.has(sanitizedKey)
+        || sanitizedKeys.has(sanitizedKey)
+      ) throw codedError('PUBLICATION_KEY_COLLISION');
+      sanitizedKeys.add(sanitizedKey);
+      entries.push([
+        sanitizedKey,
+        sanitizeNode(entry, sanitizedKey, pseudonymKey, knownPrivateValues, stack),
+      ]);
+    }
+    return Object.fromEntries(entries);
   } finally {
     stack.delete(value);
   }
