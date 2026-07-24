@@ -1,8 +1,13 @@
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   realpathSync,
@@ -17,7 +22,6 @@ import {
   randomUUID,
 } from 'node:crypto';
 import {
-  basename,
   dirname,
   isAbsolute,
   join,
@@ -26,7 +30,7 @@ import {
   sep,
 } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
-import { auditPaths, ensureAuditPaths } from './paths.mjs';
+import { ensureAuditPaths, validateAuditPaths } from './paths.mjs';
 
 const CREDENTIAL_KEY = /(?:authorization|cookie|api[_-]?key|secret|password|access[_-]?token|refresh[_-]?token|jwt|bearer)/iu;
 const KEY_REFERENCE_KEY = /(?:key[_-]?ref(?:erence)?|vault[_-]?key|keyReference)/iu;
@@ -55,6 +59,7 @@ const ALLOWED_ROOT_ARTIFACTS = new Set([
 ]);
 const PRIVATE_KINDS = new Set(['pii', 'credential', 'private-content', 'key-reference']);
 const BOUNDARIES = new WeakMap();
+const PRIVATE_REGISTRIES = new WeakMap();
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -74,59 +79,24 @@ function replacementFor(kind, value, key) {
   return '<REDACTED:private-content>';
 }
 
-function validatePrivateRegistry(privateValues, pseudonymKey) {
-  if (!Array.isArray(privateValues)) {
-    throw codedError('PRIVATE_VALUE_REGISTRY_REQUIRED', TypeError);
-  }
-  return privateValues.map((entry) => {
-    if (
-      !entry
-      || typeof entry !== 'object'
-      || Array.isArray(entry)
-      || Object.getPrototypeOf(entry) !== Object.prototype
-      || Object.keys(entry).some((key) => !['source', 'kind', 'value'].includes(key))
-      || typeof entry.source !== 'string'
-      || !/^[a-z][a-z0-9_.:-]{0,127}$/u.test(entry.source)
-      || !PRIVATE_KINDS.has(entry.kind)
-      || typeof entry.value !== 'string'
-      || entry.value.length < 3
-    ) throw codedError('PRIVATE_VALUE_REGISTRY_INVALID', TypeError);
-    return {
-      privateValue: entry.value,
-      replacement: replacementFor(entry.kind, entry.value, pseudonymKey),
-    };
-  });
-}
-
-function collectKnownPrivateValues(value, pseudonymKey, stack = new WeakSet(), keyName = '', output = []) {
+function collectSourceStrings(value, kind, stack = new WeakSet(), output = []) {
   if (typeof value === 'string') {
-    if (value.length < 3) return output;
-    let kind;
-    if (PII_KEY.test(keyName)) kind = 'pii';
-    else if (KEY_REFERENCE_KEY.test(keyName)) kind = 'key-reference';
-    else if (CREDENTIAL_KEY.test(keyName)) kind = 'credential';
-    else if (PRIVATE_CONTENT_KEY.test(keyName) || MESSAGE_CONTAINER_KEY.test(keyName)) {
-      kind = 'private-content';
-    }
-    if (kind) {
-      output.push({
-        privateValue: value,
-        replacement: replacementFor(kind, value, pseudonymKey),
-      });
-    }
+    if (value.length > 0) output.push({ kind, privateValue: value });
     return output;
   }
-  if (!value || typeof value !== 'object' || stack.has(value)) return output;
+  if (value === null || typeof value === 'boolean' || typeof value === 'number') return output;
+  if (
+    !value
+    || typeof value !== 'object'
+    || stack.has(value)
+    || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)
+  ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
   stack.add(value);
   try {
     if (Array.isArray(value)) {
-      for (const entry of value) {
-        collectKnownPrivateValues(entry, pseudonymKey, stack, keyName, output);
-      }
+      for (const entry of value) collectSourceStrings(entry, kind, stack, output);
     } else {
-      for (const [key, entry] of Object.entries(value)) {
-        collectKnownPrivateValues(entry, pseudonymKey, stack, key, output);
-      }
+      for (const entry of Object.values(value)) collectSourceStrings(entry, kind, stack, output);
     }
     return output;
   } finally {
@@ -134,32 +104,90 @@ function collectKnownPrivateValues(value, pseudonymKey, stack = new WeakSet(), k
   }
 }
 
-function replacePattern(value, pattern, replacement) {
-  pattern.lastIndex = 0;
-  return value.replace(pattern, replacement);
+export function ingestPrivateSourceBundle(bundle = {}) {
+  if (
+    !bundle
+    || typeof bundle !== 'object'
+    || Array.isArray(bundle)
+    || Object.getPrototypeOf(bundle) !== Object.prototype
+    || Object.keys(bundle).length !== 2
+    || Object.keys(bundle).some((key) => !['runManifest', 'sources'].includes(key))
+  ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
+  const { runManifest, sources } = bundle;
+  if (
+    !runManifest
+    || typeof runManifest !== 'object'
+    || Array.isArray(runManifest)
+    || Object.getPrototypeOf(runManifest) !== Object.prototype
+    || !Array.isArray(sources)
+  ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
+  let manifestHash;
+  let sourceBundleHash;
+  try {
+    manifestHash = sha256(runManifest);
+    sourceBundleHash = sha256({ schemaVersion: '1.0.0', sources });
+  } catch {
+    throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
+  }
+  const entries = [];
+  for (const source of sources) {
+    if (
+      !source
+      || typeof source !== 'object'
+      || Array.isArray(source)
+      || Object.getPrototypeOf(source) !== Object.prototype
+      || Object.keys(source).length !== 3
+      || Object.keys(source).some((key) => !['kind', 'payload', 'sourceId'].includes(key))
+      || typeof source.sourceId !== 'string'
+      || !/^[a-z0-9][a-z0-9_.:-]{0,127}$/u.test(source.sourceId)
+      || !PRIVATE_KINDS.has(source.kind)
+    ) throw codedError('PRIVATE_SOURCE_BUNDLE_INVALID', TypeError);
+    const before = entries.length;
+    collectSourceStrings(source.payload, source.kind, new WeakSet(), entries);
+    if (entries.length === before) throw codedError('PRIVATE_SOURCE_BUNDLE_INCOMPLETE', TypeError);
+  }
+  const registry = Object.freeze(Object.create(null));
+  PRIVATE_REGISTRIES.set(registry, Object.freeze({
+    entries: Object.freeze(entries.map((entry) => Object.freeze({ ...entry }))),
+    manifestHash,
+    sourceBundleHash,
+    sourceRecordCount: sources.length,
+    sourceValueCount: entries.length,
+  }));
+  return registry;
 }
 
 function sanitizeString(value, keyName, pseudonymKey, knownPrivateValues) {
-  if (SAFE_REDACTION.test(value) || SAFE_PSEUDONYM.test(value) || APPROVED_EVIDENCE_ID.test(value)) {
-    return value;
-  }
-  if (KEY_REFERENCE_KEY.test(keyName)) return '<REDACTED:key-reference>';
-  if (CREDENTIAL_KEY.test(keyName)) return '<REDACTED:credential>';
-  if (PRIVATE_CONTENT_KEY.test(keyName) || MESSAGE_CONTAINER_KEY.test(keyName)) {
-    return '<REDACTED:private-content>';
-  }
-  if (PII_KEY.test(keyName)) return pseudonym(value, pseudonymKey);
-
   let output = value;
   for (const { privateValue, replacement } of knownPrivateValues) {
     output = output.split(privateValue).join(replacement);
   }
-  output = replacePattern(output, BEARER, '<REDACTED:credential>');
-  output = replacePattern(output, JWT, '<REDACTED:credential>');
-  output = replacePattern(output, META_TOKEN, '<REDACTED:credential>');
-  output = replacePattern(output, MAGIC_LINK, '<REDACTED:magic-link>');
-  output = replacePattern(output, EMAIL, (match) => pseudonym(match, pseudonymKey));
-  output = replacePattern(output, PHONE, (match) => pseudonym(match, pseudonymKey));
+  const changed = output !== value;
+  const containingSource = !changed && value.length >= 3
+    ? knownPrivateValues.find(({ privateValue }) => privateValue.includes(value))
+    : undefined;
+  if (containingSource) return containingSource.replacement;
+  if (
+    SAFE_REDACTION.test(output)
+    || SAFE_PSEUDONYM.test(output)
+    || APPROVED_EVIDENCE_ID.test(output)
+  ) {
+    return output;
+  }
+  if (
+    KEY_REFERENCE_KEY.test(keyName)
+    || CREDENTIAL_KEY.test(keyName)
+    || PRIVATE_CONTENT_KEY.test(keyName)
+    || MESSAGE_CONTAINER_KEY.test(keyName)
+    || PII_KEY.test(keyName)
+  ) {
+    if (changed) return output;
+    throw codedError('PRIVATE_SOURCE_REGISTRY_INCOMPLETE');
+  }
+  for (const pattern of [BEARER, JWT, META_TOKEN, MAGIC_LINK, EMAIL, PHONE]) {
+    pattern.lastIndex = 0;
+    if (pattern.test(output)) throw codedError('PRIVATE_SOURCE_REGISTRY_INCOMPLETE');
+  }
   return output;
 }
 
@@ -168,7 +196,6 @@ function sanitizeNode(value, keyName, pseudonymKey, knownPrivateValues, stack) {
     return sanitizeString(value, keyName, pseudonymKey, knownPrivateValues);
   }
   if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
-  if (MESSAGE_CONTAINER_KEY.test(keyName)) return '<REDACTED:private-content>';
   if (!value || typeof value !== 'object' || stack.has(value)) {
     throw codedError('PUBLICATION_VALUE_UNSUPPORTED', TypeError);
   }
@@ -205,7 +232,18 @@ function markBoundary(value, boundary, stack = new WeakSet()) {
   Object.freeze(value);
 }
 
-export function sanitizeForPublication(value, { pseudonymKey, privateValues } = {}) {
+export function sanitizeForPublication(value, options = {}) {
+  if (
+    !options
+    || typeof options !== 'object'
+    || Array.isArray(options)
+    || Object.keys(options).some((key) => !['pseudonymKey', 'registry', 'runManifest'].includes(key))
+  ) throw codedError('PRIVATE_SOURCE_REGISTRY_REQUIRED', TypeError);
+  const {
+    pseudonymKey,
+    registry,
+    runManifest: explicitRunManifest,
+  } = options;
   if (!Buffer.isBuffer(pseudonymKey) && !(pseudonymKey instanceof Uint8Array)) {
     throw codedError('PSEUDONYM_KEY_INVALID', TypeError);
   }
@@ -215,12 +253,51 @@ export function sanitizeForPublication(value, { pseudonymKey, privateValues } = 
     throw codedError('PSEUDONYM_KEY_INVALID', TypeError);
   }
   try {
-    const knownPrivateValues = [
-      ...validatePrivateRegistry(privateValues, key),
-      ...collectKnownPrivateValues(value, key),
-    ].sort((left, right) => right.privateValue.length - left.privateValue.length);
+    const registryMetadata = PRIVATE_REGISTRIES.get(registry);
+    if (!registryMetadata) throw codedError('PRIVATE_SOURCE_REGISTRY_REQUIRED', TypeError);
+    const embeddedRunManifest = value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && Object.getPrototypeOf(value) === Object.prototype
+      && value.runManifest
+      && typeof value.runManifest === 'object'
+      && !Array.isArray(value.runManifest)
+      ? value.runManifest
+      : undefined;
+    const runManifest = embeddedRunManifest ?? explicitRunManifest;
+    if (!runManifest) throw codedError('PRIVATE_SOURCE_REGISTRY_MISMATCH');
+    let runManifestHash;
+    try {
+      runManifestHash = sha256(runManifest);
+      if (
+        embeddedRunManifest
+        && explicitRunManifest
+        && sha256(explicitRunManifest) !== runManifestHash
+      ) throw codedError('PRIVATE_SOURCE_REGISTRY_MISMATCH');
+    } catch (error) {
+      if (error?.code === 'PRIVATE_SOURCE_REGISTRY_MISMATCH') throw error;
+      throw codedError('PRIVATE_SOURCE_REGISTRY_MISMATCH');
+    }
+    if (runManifestHash !== registryMetadata.manifestHash) {
+      throw codedError('PRIVATE_SOURCE_REGISTRY_MISMATCH');
+    }
+    const knownPrivateValues = registryMetadata.entries
+      .map(({ kind, privateValue }) => ({
+        privateValue,
+        replacement: replacementFor(kind, privateValue, key),
+      }))
+      .sort((left, right) => right.privateValue.length - left.privateValue.length);
     const sanitized = sanitizeNode(value, '', key, knownPrivateValues, new WeakSet());
-    const boundary = Object.freeze({});
+    if (
+      embeddedRunManifest
+      && sha256(sanitized.runManifest) !== registryMetadata.manifestHash
+    ) throw codedError('PRIVATE_SOURCE_REGISTRY_MISMATCH');
+    const boundary = Object.freeze({
+      manifestHash: registryMetadata.manifestHash,
+      sourceBundleHash: registryMetadata.sourceBundleHash,
+      sourceRecordCount: registryMetadata.sourceRecordCount,
+      sourceValueCount: registryMetadata.sourceValueCount,
+    });
     markBoundary(sanitized, boundary);
     return sanitized;
   } finally {
@@ -272,21 +349,36 @@ function containsPrivateValue(value, keyName = '', stack = new WeakSet()) {
   }
 }
 
+function normalizedReferenceKey(keyName) {
+  return String(keyName)
+    .replace(/([a-z0-9])([A-Z])/gu, '$1_$2')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '_')
+    .replace(/^_+|_+$/gu, '');
+}
+
+function isForbiddenRawReferenceKey(keyName) {
+  const tokens = normalizedReferenceKey(keyName).split('_');
+  return tokens.includes('raw')
+    && (
+      tokens.includes('hash')
+      || tokens.includes('ref')
+      || tokens.includes('reference')
+      || tokens.includes('vault')
+    );
+}
+
 function containsRawReference(value, keyName = '', stack = new WeakSet()) {
   if (typeof value === 'string') {
     return RAW_REFERENCE.test(value)
-      || (/^rawHash$/iu.test(keyName))
-      || (/^rawRef$/iu.test(keyName) && !APPROVED_EVIDENCE_ID.test(value));
+      || isForbiddenRawReferenceKey(keyName);
   }
   if (!value || typeof value !== 'object' || stack.has(value)) return false;
   stack.add(value);
   try {
     if (Array.isArray(value)) return value.some((entry) => containsRawReference(entry, keyName, stack));
     return Object.entries(value).some(([key, entry]) => {
-      if (/^rawHash$/iu.test(key)) return true;
-      if (/^rawRef$/iu.test(key)) {
-        return typeof entry !== 'string' || !APPROVED_EVIDENCE_ID.test(entry);
-      }
+      if (isForbiddenRawReferenceKey(key)) return true;
       return containsRawReference(entry, key, stack);
     });
   } finally {
@@ -299,6 +391,9 @@ function assertPublicationBoundary(runManifest, payloadArtifacts, verifierAttest
   const boundary = BOUNDARIES.get(roots[0]);
   if (!boundary || roots.some((root) => BOUNDARIES.get(root) !== boundary)) {
     throw codedError('PUBLICATION_BOUNDARY_REQUIRED');
+  }
+  if (boundary.manifestHash !== sha256(runManifest)) {
+    throw codedError('PRIVATE_SOURCE_REGISTRY_MISMATCH');
   }
   for (const value of roots) {
     if (containsRawReference(value)) throw codedError('RAW_REFERENCE_FORBIDDEN');
@@ -446,18 +541,7 @@ function isWithin(parent, child) {
     || (!isAbsolute(pathFromParent) && pathFromParent !== '..' && !pathFromParent.startsWith(`..${sep}`));
 }
 
-function validateCanonicalPaths(paths) {
-  if (!paths || typeof paths !== 'object' || typeof paths.root !== 'string') {
-    throw codedError('PUBLICATION_PATHS_INVALID', TypeError);
-  }
-  const expected = auditPaths(paths.project, basename(paths.root));
-  for (const [key, value] of Object.entries(expected)) {
-    if (paths[key] !== value) throw codedError('PUBLICATION_PATHS_INVALID');
-  }
-  return expected;
-}
-
-function ensureWeekDirectory(paths, week) {
+function openWeekGuard(paths, week) {
   ensureAuditPaths(paths);
   chmodSync(join(paths.privateRaw, '..'), 0o700);
   for (const directory of [
@@ -478,12 +562,67 @@ function ensureWeekDirectory(paths, week) {
     if (metadata.isSymbolicLink()) throw codedError('PUBLICATION_PATH_SYMLINK');
     if (!metadata.isDirectory()) throw codedError('PUBLICATION_PATH_INVALID');
   } else {
-    mkdirSync(weekDirectory, { mode: 0o755 });
+    mkdirSync(weekDirectory, { mode: 0o555 });
   }
   const weeklyReal = realpathSync(paths.weekly);
-  const weekReal = realpathSync(weekDirectory);
-  if (!isWithin(weeklyReal, weekReal)) throw codedError('PUBLICATION_PATH_ESCAPE');
-  return weekDirectory;
+  let descriptor;
+  try {
+    descriptor = openSync(
+      weekDirectory,
+      constants.O_RDONLY
+        | (constants.O_DIRECTORY ?? 0)
+        | (constants.O_NOFOLLOW ?? 0),
+    );
+    const opened = fstatSync(descriptor);
+    if (!opened.isDirectory()) throw codedError('PUBLICATION_PATH_INVALID');
+    if (!isWithin(weeklyReal, realpathSync(weekDirectory))) {
+      throw codedError('PUBLICATION_PATH_ESCAPE');
+    }
+    const identity = { dev: opened.dev, ino: opened.ino };
+    const assertSame = () => {
+      let current;
+      try {
+        current = lstatSync(weekDirectory);
+      } catch {
+        throw codedError('PUBLICATION_PATH_REPLACED');
+      }
+      if (
+        current.isSymbolicLink()
+        || !current.isDirectory()
+        || current.dev !== identity.dev
+        || current.ino !== identity.ino
+        || !isWithin(weeklyReal, realpathSync(weekDirectory))
+      ) throw codedError('PUBLICATION_PATH_REPLACED');
+      const openMetadata = fstatSync(descriptor);
+      if (openMetadata.dev !== identity.dev || openMetadata.ino !== identity.ino) {
+        throw codedError('PUBLICATION_PATH_REPLACED');
+      }
+    };
+    fchmodSync(descriptor, 0o755);
+    assertSame();
+    return Object.freeze({
+      directory: weekDirectory,
+      assertSame,
+      close() {
+        if (descriptor === undefined) return;
+        try {
+          fchmodSync(descriptor, 0o555);
+        } finally {
+          closeSync(descriptor);
+          descriptor = undefined;
+        }
+      },
+    });
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        fchmodSync(descriptor, 0o555);
+      } finally {
+        closeSync(descriptor);
+      }
+    }
+    throw error?.code ? error : codedError('PUBLICATION_PATH_INVALID');
+  }
 }
 
 function verifyExistingPublication(publicationPath, manifest, attestation, payloadHashes) {
@@ -539,6 +678,7 @@ export function publishAtomically({
   payloadArtifacts,
   verifierAttestation,
   projections = {},
+  hooks,
 } = {}) {
   if (
     !runManifest || typeof runManifest !== 'object' || Array.isArray(runManifest)
@@ -547,7 +687,7 @@ export function publishAtomically({
     || !projections || typeof projections !== 'object' || Array.isArray(projections)
   ) throw codedError('PUBLICATION_INPUT_INVALID', TypeError);
   assertPublicationBoundary(runManifest, payloadArtifacts, verifierAttestation, projections);
-  const paths = validateCanonicalPaths(suppliedPaths);
+  const paths = validateAuditPaths(suppliedPaths);
   if (!['complete_full', 'complete_partial'].includes(runManifest.status)) {
     throw codedError('PUBLICATION_STATUS_INVALID', TypeError);
   }
@@ -599,56 +739,69 @@ export function publishAtomically({
     throw codedError('PUBLICATION_NOT_SANITIZED');
   }
 
-  const weekDirectory = ensureWeekDirectory(paths, week);
-  const publicationPath = join(weekDirectory, publicationId);
+  const weekGuard = openWeekGuard(paths, week);
+  const publicationPath = join(weekGuard.directory, publicationId);
   let recovered = false;
-  if (existsSync(publicationPath)) {
-    verifyExistingPublication(publicationPath, manifest, attestation, payloadHashes);
-    recovered = true;
-  } else {
-    const staging = join(weekDirectory, `.staging-${randomUUID()}`);
-    mkdirSync(staging, { mode: 0o700 });
-    try {
-      for (const [name] of artifactEntries) writeArtifact(staging, name, serialized.get(name));
-      writeArtifact(staging, 'run-manifest.json', Buffer.from(`${canonicalJson(manifest)}\n`, 'utf8'));
-      writeArtifact(
-        staging,
-        'verifier-attestation.json',
-        Buffer.from(`${canonicalJson(attestation)}\n`, 'utf8'),
-      );
-      makeImmutable(staging);
-      renameSync(staging, publicationPath);
-    } catch (error) {
-      if (existsSync(staging)) {
-        makeWritable(staging);
-        rmSync(staging, { recursive: true, force: true });
+  try {
+    weekGuard.assertSame();
+    if (existsSync(publicationPath)) {
+      weekGuard.assertSame();
+      verifyExistingPublication(publicationPath, manifest, attestation, payloadHashes);
+      weekGuard.assertSame();
+      recovered = true;
+    } else {
+      const staging = join(weekGuard.directory, `.staging-${randomUUID()}`);
+      weekGuard.assertSame();
+      mkdirSync(staging, { mode: 0o700 });
+      weekGuard.assertSame();
+      try {
+        for (const [name] of artifactEntries) writeArtifact(staging, name, serialized.get(name));
+        writeArtifact(staging, 'run-manifest.json', Buffer.from(`${canonicalJson(manifest)}\n`, 'utf8'));
+        writeArtifact(
+          staging,
+          'verifier-attestation.json',
+          Buffer.from(`${canonicalJson(attestation)}\n`, 'utf8'),
+        );
+        makeImmutable(staging);
+        weekGuard.assertSame();
+        hooks?.beforePublicationRename?.();
+        weekGuard.assertSame();
+        renameSync(staging, publicationPath);
+        weekGuard.assertSame();
+      } catch (error) {
+        if (existsSync(staging)) {
+          makeWritable(staging);
+          rmSync(staging, { recursive: true, force: true });
+        }
+        throw error?.code ? error : codedError('PUBLICATION_FAILED');
       }
-      throw error?.code ? error : codedError('PUBLICATION_FAILED');
     }
-  }
 
-  const relativeReport = relative(paths.root, join(publicationPath, 'REPORT.md')).split(sep).join('/');
-  const current = `# Current GHL audit\n\n[Open the latest publication](${relativeReport})\n`;
-  const indexPath = join(paths.root, 'index.json');
-  const pointer = {
-    publicationId,
-    week,
-    status: manifest.status,
-    path: relative(paths.root, publicationPath).split(sep).join('/'),
-    publicationRoot,
-  };
-  const nextIndex = nextIndexValue(readIndex(indexPath), pointer, manifest.status);
-  atomicProjection(join(paths.root, 'CURRENT.md'), Buffer.from(current, 'utf8'));
-  atomicProjection(indexPath, Buffer.from(`${canonicalJson(nextIndex)}\n`, 'utf8'));
-  for (const [name, bytes] of projectionBytes) {
-    atomicProjection(join(paths.root, 'memory', name), bytes);
-  }
+    const relativeReport = relative(paths.root, join(publicationPath, 'REPORT.md')).split(sep).join('/');
+    const current = `# Current GHL audit\n\n[Open the latest publication](${relativeReport})\n`;
+    const indexPath = join(paths.root, 'index.json');
+    const pointer = {
+      publicationId,
+      week,
+      status: manifest.status,
+      path: relative(paths.root, publicationPath).split(sep).join('/'),
+      publicationRoot,
+    };
+    const nextIndex = nextIndexValue(readIndex(indexPath), pointer, manifest.status);
+    atomicProjection(join(paths.root, 'CURRENT.md'), Buffer.from(current, 'utf8'));
+    atomicProjection(indexPath, Buffer.from(`${canonicalJson(nextIndex)}\n`, 'utf8'));
+    for (const [name, bytes] of projectionBytes) {
+      atomicProjection(join(paths.root, 'memory', name), bytes);
+    }
 
-  return Object.freeze({
-    path: publicationPath,
-    rootMembers: artifactEntries.map(([name]) => name),
-    manifest: Object.freeze(manifest),
-    attestation: Object.freeze(attestation),
-    recovered,
-  });
+    return Object.freeze({
+      path: publicationPath,
+      rootMembers: artifactEntries.map(([name]) => name),
+      manifest: Object.freeze(manifest),
+      attestation: Object.freeze(attestation),
+      recovered,
+    });
+  } finally {
+    weekGuard.close();
+  }
 }

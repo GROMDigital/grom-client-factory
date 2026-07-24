@@ -22,7 +22,7 @@ import {
 } from 'node:crypto';
 import { isAbsolute, join } from 'node:path';
 import { canonicalJson } from './canonical.mjs';
-import { ensureAuditPaths } from './paths.mjs';
+import { ensureAuditPaths, validateAuditPaths } from './paths.mjs';
 
 const KEY_BYTES = 32;
 const KEY_FILE_BYTES = KEY_BYTES * 2;
@@ -437,13 +437,14 @@ export function openVault({ paths, encryptionKey, pseudonymKey, hooks } = {}) {
   }
 
   try {
-    ensureAuditPaths(paths);
-    chmodSync(join(paths.privateRaw, '..'), 0o700);
+    const canonicalPaths = validateAuditPaths(paths);
+    ensureAuditPaths(canonicalPaths);
+    chmodSync(join(canonicalPaths.privateRaw, '..'), 0o700);
     for (const directory of [
-      paths.privateRaw,
-      paths.privateLogs,
-      paths.privateCheckpoints,
-      paths.stateDir,
+      canonicalPaths.privateRaw,
+      canonicalPaths.privateLogs,
+      canonicalPaths.privateCheckpoints,
+      canonicalPaths.stateDir,
     ]) chmodSync(directory, 0o700);
   } catch (error) {
     cipherKey.fill(0);

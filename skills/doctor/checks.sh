@@ -36,6 +36,41 @@ SWIFT
   return "$result"
 }
 
+check_protected_key_file_reference() {
+  local key_file_reference="$1"
+  if ! command -v node >/dev/null 2>&1; then return 1; fi
+  # The reference travels through inherited descriptor 9, never argv or env.
+  # One descriptor-relative open/fstat sequence validates the same object.
+  exec 9<<<"$key_file_reference"
+  node 9<&9 >/dev/null 2>&1 <<'NODE'
+const fs = require('node:fs');
+
+let descriptor;
+try {
+  const path = fs.readFileSync(9, 'utf8').replace(/\n$/u, '');
+  descriptor = fs.openSync(
+    path,
+    fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0),
+  );
+  const metadata = fs.fstatSync(descriptor);
+  const ownedByCurrentUser = typeof process.getuid !== 'function'
+    || metadata.uid === process.getuid();
+  process.exitCode = metadata.isFile()
+    && ownedByCurrentUser
+    && (metadata.mode & 0o7777) === 0o600
+    ? 0
+    : 1;
+} catch {
+  process.exitCode = 1;
+} finally {
+  if (descriptor !== undefined) fs.closeSync(descriptor);
+}
+NODE
+  local result=$?
+  exec 9<&-
+  return "$result"
+}
+
 if [ -f "$CONFIG" ] && jq -e . "$CONFIG" >/dev/null 2>&1; then
   say config PASS "$CONFIG parses"
 else
@@ -46,7 +81,7 @@ fi
 # intentionally never reads a protected key file, requests a keychain password,
 # or includes the configured reference in output or a child-process argument.
 check_audit_vault_reference() {
-  local key_ref_json key_ref_type key_file key_mode key_name
+  local key_ref_json key_ref_type key_file key_name
   if ! jq -e '
     ([.. | objects | keys[]?]
       | any(test("^(encryption_?key|pseudonym_?key|key_?bytes|material)$"; "i")))
@@ -94,24 +129,10 @@ check_audit_vault_reference() {
           return
           ;;
       esac
-      if [ ! -f "$key_file" ] || [ -L "$key_file" ]; then
-        say audit-vault-key FAIL "protected vault key file is missing or invalid"
-        return
-      fi
-      if [ ! -O "$key_file" ]; then
-        say audit-vault-key FAIL "protected vault key file is not owned by the current user"
-        return
-      fi
-      if ! exec 9<"$key_file"; then
-        say audit-vault-key FAIL "protected vault key file is unavailable"
-        return
-      fi
-      key_mode=$(node -e 'process.stdout.write((require("node:fs").fstatSync(9).mode & 0o7777).toString(8))' 2>/dev/null || echo invalid)
-      exec 9<&-
-      if [ "$key_mode" = "600" ]; then
+      if check_protected_key_file_reference "$key_file"; then
         say audit-vault-key PASS "protected vault key file reference and permissions are valid"
       else
-        say audit-vault-key FAIL "protected vault key file must use mode 0600"
+        say audit-vault-key FAIL "protected vault key file is missing, invalid, or insecure"
       fi
       ;;
     os-keychain|keychain)

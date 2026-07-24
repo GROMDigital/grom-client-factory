@@ -1,5 +1,11 @@
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  isAbsolute,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 
 function codedError(code) {
   return Object.assign(new Error(code), { code });
@@ -66,6 +72,27 @@ export function auditPaths(projectRoot, locationId) {
     stateDir: resolve(root, '.state'),
     stateDb: resolve(root, '.state', 'auditor.sqlite'),
   });
+}
+
+export function validateAuditPaths(paths) {
+  if (
+    !paths
+    || typeof paths !== 'object'
+    || Array.isArray(paths)
+    || typeof paths.project !== 'string'
+    || typeof paths.root !== 'string'
+  ) throw codedError('AUDIT_PATHS_INVALID');
+  let expected;
+  try {
+    expected = auditPaths(paths.project, basename(paths.root));
+  } catch {
+    throw codedError('AUDIT_PATHS_INVALID');
+  }
+  if (
+    Object.keys(paths).length !== Object.keys(expected).length
+    || Object.entries(expected).some(([key, value]) => paths[key] !== value)
+  ) throw codedError('AUDIT_PATHS_INVALID');
+  return expected;
 }
 
 export function ensureAuditPaths(paths) {

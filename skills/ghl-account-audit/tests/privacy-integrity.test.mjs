@@ -6,8 +6,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -20,7 +22,10 @@ import {
   openVault,
   resolveVaultKeys,
 } from '../lib/vault.mjs';
-import { sanitizeForPublication } from '../lib/artifacts.mjs';
+import {
+  ingestPrivateSourceBundle,
+  sanitizeForPublication,
+} from '../lib/artifacts.mjs';
 
 const PRIVATE_CANARIES = Object.freeze([
   'Bearer private-authorization-canary',
@@ -67,6 +72,23 @@ const privateFixture = {
     summary: `${PRIVATE_CANARIES[4]} missed a follow-up for ${PRIVATE_CANARIES[2]} (${PRIVATE_CANARIES[3]}).`,
   },
 };
+const PRIVACY_RUN_MANIFEST = Object.freeze({
+  runId: 'privacy-fixture-run',
+  publicationId: 'privacy-fixture-publication',
+  week: '2026-W30',
+  status: 'complete_partial',
+});
+
+function privateRegistry() {
+  return ingestPrivateSourceBundle({
+    runManifest: PRIVACY_RUN_MANIFEST,
+    sources: PRIVATE_CANARIES.map((value, index) => ({
+      sourceId: `seeded-private-fixture-${index}`,
+      kind: PRIVATE_CANARY_KINDS[index],
+      payload: { value },
+    })),
+  });
+}
 
 function withProject(callback) {
   const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-vault-'));
@@ -80,22 +102,16 @@ function withProject(callback) {
 test('publishable artifacts contain no seeded private canaries', () => {
   const result = sanitizeForPublication(privateFixture, {
     pseudonymKey: Buffer.alloc(32, 7),
-    privateValues: PRIVATE_CANARIES.map((value, index) => ({
-      source: 'seeded_private_fixture',
-      kind: PRIVATE_CANARY_KINDS[index],
-      value,
-    })),
+    registry: privateRegistry(),
+    runManifest: PRIVACY_RUN_MANIFEST,
   });
   const text = JSON.stringify(result);
   for (const canary of PRIVATE_CANARIES) assert.equal(text.includes(canary), false, canary);
   assert.match(result.contact.email, /^psn_[a-f0-9]{32}$/u);
   assert.equal(result.contact.email, sanitizeForPublication(privateFixture, {
     pseudonymKey: Buffer.alloc(32, 7),
-    privateValues: PRIVATE_CANARIES.map((value, index) => ({
-      source: 'seeded_private_fixture',
-      kind: PRIVATE_CANARY_KINDS[index],
-      value,
-    })),
+    registry: privateRegistry(),
+    runManifest: PRIVACY_RUN_MANIFEST,
   }).contact.email);
   assert.match(result.finding.summary, /psn_[a-f0-9]{32}/u);
   assert.equal(result.finding.summary.includes(PRIVATE_CANARIES[4]), false);
@@ -237,6 +253,35 @@ test('vault encrypts raw evidence under 0700 paths and zeroes handed-off keys', 
   vault.close();
 }));
 
+test('vault rejects forged canonical paths before any filesystem mutation', () => {
+  const projectRoot = mkdtempSync(join(tmpdir(), 'ghl-audit-forged-vault-'));
+  const external = mkdtempSync(join(tmpdir(), 'ghl-audit-forged-private-'));
+  const paths = auditPaths(projectRoot, 'L1');
+  const sentinel = join(external, 'sentinel');
+  try {
+    writeFileSync(sentinel, 'unchanged', { mode: 0o640 });
+    const beforeMode = statSync(external).mode & 0o7777;
+    const beforeSentinelMode = statSync(sentinel).mode & 0o7777;
+    const encryptionKey = Buffer.alloc(32, 33);
+    const pseudonymKey = Buffer.alloc(32, 34);
+    assert.throws(
+      () => openVault({
+        paths: { ...paths, privateRaw: external },
+        encryptionKey,
+        pseudonymKey,
+      }),
+      /AUDIT_PATHS_INVALID/u,
+    );
+    assert.equal(statSync(external).mode & 0o7777, beforeMode);
+    assert.equal(statSync(sentinel).mode & 0o7777, beforeSentinelMode);
+    assert.deepEqual(readdirSync(external), ['sentinel']);
+    assert.equal(readFileSync(sentinel, 'utf8'), 'unchanged');
+  } finally {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
 test('doctor validates protected-file policy without reading or printing keys or references', () => {
   const home = mkdtempSync(join(tmpdir(), 'ghl-audit-doctor-'));
   const fakeBin = join(home, 'bin');
@@ -291,8 +336,32 @@ exit 0
 
     const doctorSource = readFileSync(doctor, 'utf8');
     assert.match(doctorSource, /SecItemCopyMatching/u);
+    assert.match(doctorSource, /O_NOFOLLOW/u);
+    assert.match(doctorSource, /fstatSync/u);
+    assert.equal(doctorSource.includes('[ ! -f "$key_file" ]'), false);
+    assert.equal(doctorSource.includes('[ -L "$key_file" ]'), false);
+    assert.equal(doctorSource.includes('[ ! -O "$key_file" ]'), false);
     assert.equal(doctorSource.includes('dump-keychain'), false);
     assert.equal(doctorSource.includes('kSecReturnData'), false);
+
+    const relocatedKeyPath = join(home, 'relocated-key-reference');
+    renameSync(keyPath, relocatedKeyPath);
+    symlinkSync(relocatedKeyPath, keyPath);
+    const symlinked = spawnSync('bash', [doctor], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: `${fakeBin}:${process.env.PATH}`,
+      },
+    });
+    assert.equal(symlinked.status, 1);
+    assert.match(
+      symlinked.stdout,
+      /audit-vault-key\tFAIL\tprotected vault key file is missing, invalid, or insecure/u,
+    );
+    assert.equal(symlinked.stdout.includes(keyPath), false);
+    assert.equal(symlinked.stdout.includes('RAW-KEY-BYTES-PRIVATE-CANARY'), false);
 
     const invalidConfig = JSON.parse(readFileSync(join(home, '.grom-factory.json'), 'utf8'));
     invalidConfig.audit.vault_key_reference.material = 'forbidden-material-canary';

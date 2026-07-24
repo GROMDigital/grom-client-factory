@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -15,6 +16,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { canonicalJson, sha256 } from '../lib/canonical.mjs';
 import {
+  ingestPrivateSourceBundle,
   publishAtomically,
   sanitizeForPublication,
 } from '../lib/artifacts.mjs';
@@ -39,8 +41,19 @@ function withProject(callback) {
   }
 }
 
-function publishFixture(paths, overrides = {}) {
-  const publication = sanitizeForPublication({
+function sanitizeBundle(raw, sources = []) {
+  const registry = ingestPrivateSourceBundle({
+    runManifest: raw.runManifest,
+    sources,
+  });
+  return sanitizeForPublication(raw, {
+    pseudonymKey: Buffer.alloc(32, 9),
+    registry,
+  });
+}
+
+function publishFixture(paths, overrides = {}, options = {}) {
+  const publication = sanitizeBundle({
     runManifest: {
       schemaVersion: '1.0.0',
       runId: 'run-2026-W30',
@@ -59,11 +72,8 @@ function publishFixture(paths, overrides = {}) {
       result: 'pass',
     },
     projections: {},
-  }, {
-    pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [],
   });
-  return publishAtomically({ paths, ...publication });
+  return publishAtomically({ paths, ...publication, ...options });
 }
 
 test('manifest root excludes the manifest and verifier to avoid circular hashing', () => withProject(({ paths }) => {
@@ -145,7 +155,7 @@ test('publication refuses private values before creating publishable artifacts',
 test('publication rejects unsafe paths and idempotently verifies an immutable publication', () => withProject(({ paths }) => {
   assert.throws(
     () => {
-      const unsafe = sanitizeForPublication({
+      const unsafe = sanitizeBundle({
       runManifest: {
         runId: 'unsafe',
         publicationId: 'unsafe-publication',
@@ -155,9 +165,6 @@ test('publication rejects unsafe paths and idempotently verifies an immutable pu
       payloadArtifacts: { '../escape.json': {} },
       verifierAttestation: { result: 'pass' },
       projections: {},
-      }, {
-        pseudonymKey: Buffer.alloc(32, 9),
-        privateValues: [],
       });
       publishAtomically({ paths, ...unsafe });
     },
@@ -168,7 +175,7 @@ test('publication rejects unsafe paths and idempotently verifies an immutable pu
 }));
 
 test('backlog projections are atomically copied outside the immutable publication', () => withProject(({ paths }) => {
-  const input = sanitizeForPublication({
+  const input = sanitizeBundle({
     runManifest: {
       runId: 'projection-run',
       publicationId: 'projection-publication',
@@ -185,9 +192,6 @@ test('backlog projections are atomically copied outside the immutable publicatio
       'backlog.json': { entries: [] },
       'current-system-flow.mmd': 'flowchart LR\n  A --> B\n',
     },
-  }, {
-    pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [],
   });
   const publication = publishAtomically({ paths, ...input });
   assert.ok(publication.path.endsWith(join('2026-W30', 'projection-publication')));
@@ -197,16 +201,40 @@ test('backlog projections are atomically copied outside the immutable publicatio
   assert.equal(publication.rootMembers.includes('BACKLOG.md'), false);
 }));
 
-test('unique private values only present in finding and proposal free text require a source registry', () => {
+test('trusted source ingestion derives a complete opaque registry and preserves non-private proposal copy', () => {
   const uniqueName = 'Unique Private Person Canary';
-  const uniqueTranscript = 'Unique free-form transcript sentence that appears nowhere else.';
+  const uniqueTranscript = 'Prefix private transcript excerpt appears nowhere else suffix.';
+  const transcriptExcerpt = 'private transcript excerpt appears nowhere else';
+  const safeIdPrivateValue = 'ev_1234567890abcdef';
+  const safePseudonymPrivateValue = `psn_${'a'.repeat(32)}`;
+  const runManifest = {
+    runId: 'registry-run',
+    publicationId: 'registry-publication',
+    week: '2026-W30',
+    status: 'complete_partial',
+  };
+  assert.throws(
+    () => ingestPrivateSourceBundle({
+      runManifest,
+      sources: [],
+      complete: true,
+    }),
+    /PRIVATE_SOURCE_BUNDLE_INVALID/u,
+  );
   const fixture = {
+    runManifest,
     finding: {
-      summary: `${uniqueName} reported: ${uniqueTranscript}`,
+      summary: `${uniqueName} reported a private conversation.`,
+      transcriptExcerpt,
+      actorRef: safeIdPrivateValue,
+      contactRef: safePseudonymPrivateValue,
+    },
+    conversation: {
+      transcript: uniqueTranscript,
     },
     proposal: {
       changeSet: {
-        current: { copy: `Keep exact proposal structure for ${uniqueName}` },
+        current: { copy: 'Keep this exact non-private proposal structure.' },
         proposed: { copy: `Sanitized replacement for ${uniqueName}` },
       },
     },
@@ -215,21 +243,98 @@ test('unique private values only present in finding and proposal free text requi
     () => sanitizeForPublication(fixture, {
       pseudonymKey: Buffer.alloc(32, 9),
     }),
-    /PRIVATE_VALUE_REGISTRY_REQUIRED/u,
+    /PRIVATE_SOURCE_REGISTRY_REQUIRED/u,
+  );
+  for (const registry of [
+    [],
+    [{ source: 'contact_record', kind: 'pii', value: uniqueName }],
+  ]) {
+    assert.throws(
+      () => sanitizeForPublication(fixture, {
+        pseudonymKey: Buffer.alloc(32, 9),
+        registry,
+      }),
+      /PRIVATE_SOURCE_REGISTRY_REQUIRED/u,
+    );
+  }
+  const incompleteRegistry = ingestPrivateSourceBundle({
+    runManifest,
+    sources: [{
+      sourceId: 'contact-record-only',
+      kind: 'pii',
+      payload: { name: uniqueName },
+    }],
+  });
+  assert.throws(
+    () => sanitizeForPublication(fixture, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry: incompleteRegistry,
+    }),
+    /PRIVATE_SOURCE_REGISTRY_INCOMPLETE/u,
+  );
+  assert.throws(
+    () => sanitizeForPublication({
+      runManifest,
+      finding: {
+        summary: `${uniqueName} used omitted.private@example.invalid`,
+      },
+    }, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry: incompleteRegistry,
+    }),
+    /PRIVATE_SOURCE_REGISTRY_INCOMPLETE/u,
+  );
+  const registry = ingestPrivateSourceBundle({
+    runManifest,
+    sources: [
+      {
+        sourceId: 'contact-record',
+        kind: 'pii',
+        payload: { name: uniqueName, opaqueIds: [safeIdPrivateValue, safePseudonymPrivateValue] },
+      },
+      {
+        sourceId: 'conversation-record',
+        kind: 'private-content',
+        payload: { message: uniqueTranscript },
+      },
+    ],
+  });
+  assert.equal(Object.isFrozen(registry), true);
+  assert.deepEqual(Reflect.ownKeys(registry), []);
+  assert.throws(
+    () => sanitizeForPublication(fixture, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry,
+      privateValues: [],
+    }),
+    /PRIVATE_SOURCE_REGISTRY_REQUIRED/u,
   );
   const sanitized = sanitizeForPublication(fixture, {
     pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [
-      { source: 'contact_record', kind: 'pii', value: uniqueName },
-      { source: 'conversation_record', kind: 'private-content', value: uniqueTranscript },
-    ],
+    registry,
   });
   const text = JSON.stringify(sanitized);
   assert.equal(text.includes(uniqueName), false);
   assert.equal(text.includes(uniqueTranscript), false);
-  assert.match(
+  assert.equal(text.includes(transcriptExcerpt), false);
+  assert.notEqual(sanitized.finding.actorRef, safeIdPrivateValue);
+  assert.notEqual(sanitized.finding.contactRef, safePseudonymPrivateValue);
+  assert.equal(
     sanitized.proposal.changeSet.current.copy,
-    /^Keep exact proposal structure for psn_[a-f0-9]{32}$/u,
+    'Keep this exact non-private proposal structure.',
+  );
+  assert.match(sanitized.proposal.changeSet.proposed.copy, /psn_[a-f0-9]{32}/u);
+
+  const mismatched = ingestPrivateSourceBundle({
+    runManifest: { ...runManifest, runId: 'other-run' },
+    sources: [],
+  });
+  assert.throws(
+    () => sanitizeForPublication(fixture, {
+      pseudonymKey: Buffer.alloc(32, 9),
+      registry: mismatched,
+    }),
+    /PRIVATE_SOURCE_REGISTRY_MISMATCH/u,
   );
 });
 
@@ -250,22 +355,30 @@ test('publisher accepts only one non-forgeable sanitized bundle and allowlisted 
   };
   assert.throws(() => publishAtomically({ paths, ...raw }), /PUBLICATION_BOUNDARY_REQUIRED/u);
 
+  const separateRegistry = ingestPrivateSourceBundle({
+    runManifest: raw.runManifest,
+    sources: [],
+  });
   const separatelySanitized = {
     runManifest: sanitizeForPublication(raw.runManifest, {
       pseudonymKey: Buffer.alloc(32, 9),
-      privateValues: [],
+      registry: separateRegistry,
+      runManifest: raw.runManifest,
     }),
     payloadArtifacts: sanitizeForPublication(raw.payloadArtifacts, {
       pseudonymKey: Buffer.alloc(32, 9),
-      privateValues: [],
+      registry: separateRegistry,
+      runManifest: raw.runManifest,
     }),
     verifierAttestation: sanitizeForPublication(raw.verifierAttestation, {
       pseudonymKey: Buffer.alloc(32, 9),
-      privateValues: [],
+      registry: separateRegistry,
+      runManifest: raw.runManifest,
     }),
     projections: sanitizeForPublication({}, {
       pseudonymKey: Buffer.alloc(32, 9),
-      privateValues: [],
+      registry: separateRegistry,
+      runManifest: raw.runManifest,
     }),
   };
   assert.throws(
@@ -273,10 +386,7 @@ test('publisher accepts only one non-forgeable sanitized bundle and allowlisted 
     /PUBLICATION_BOUNDARY_REQUIRED/u,
   );
 
-  const immutableBoundary = sanitizeForPublication(raw, {
-    pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [],
-  });
+  const immutableBoundary = sanitizeBundle(raw);
   assert.throws(
     () => {
       immutableBoundary.payloadArtifacts['REPORT.md'] = 'Unique post-sanitize private mutation';
@@ -284,12 +394,9 @@ test('publisher accepts only one non-forgeable sanitized bundle and allowlisted 
     TypeError,
   );
 
-  const customArtifact = sanitizeForPublication({
+  const customArtifact = sanitizeBundle({
     ...raw,
     payloadArtifacts: { ...raw.payloadArtifacts, 'custom.json': {} },
-  }, {
-    pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [],
   });
   assert.throws(
     () => publishAtomically({ paths, ...customArtifact }),
@@ -297,12 +404,19 @@ test('publisher accepts only one non-forgeable sanitized bundle and allowlisted 
   );
 }));
 
-test('raw hashes and raw vault references are forbidden in publications', () => withProject(({ paths }) => {
+test('normalized raw hash and raw vault reference keys are forbidden in publications', () => withProject(({ paths }) => {
   for (const forbidden of [
     { rawHash: 'a'.repeat(64) },
+    { raw_hash: 'a'.repeat(64) },
+    { 'raw-hash': 'a'.repeat(64) },
+    { rawRef: 'ev_1234567890abcdef' },
+    { raw_ref: 'ev_1234567890abcdef' },
+    { 'raw-reference': 'ev_1234567890abcdef' },
+    { opaque_raw_vault_reference: 'ev_1234567890abcdef' },
+    { opaqueRawVault: 'ev_1234567890abcdef' },
     { opaqueRef: 'raw_1234567890abcdef1234567890abcdef' },
   ]) {
-    const input = sanitizeForPublication({
+    const input = sanitizeBundle({
       runManifest: {
         runId: 'raw-ref-run',
         publicationId: `raw-ref-${Object.keys(forbidden)[0]}`,
@@ -315,9 +429,6 @@ test('raw hashes and raw vault references are forbidden in publications', () => 
       },
       verifierAttestation: { result: 'pass' },
       projections: {},
-    }, {
-      pseudonymKey: Buffer.alloc(32, 9),
-      privateValues: [],
     });
     assert.throws(() => publishAtomically({ paths, ...input }), /RAW_REFERENCE_FORBIDDEN/u);
   }
@@ -334,7 +445,7 @@ test('pre-existing week symlink and non-canonical supplied paths cannot escape',
     assert.deepEqual(readdirSync(external), []);
 
     const forged = { ...paths, weekly: external };
-    assert.throws(() => publishFixture(forged), /PUBLICATION_PATHS_INVALID/u);
+    assert.throws(() => publishFixture(forged), /AUDIT_PATHS_INVALID/u);
     assert.deepEqual(readdirSync(external), []);
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -348,6 +459,7 @@ test('projection failure after rename is recoverable and retry is idempotent', (
   assert.throws(() => publishFixture(paths), /PROJECTION_UPDATE_FAILED/u);
   const publicationPath = join(paths.weekly, '2026-W30', 'pub-full');
   assert.equal(existsSync(join(publicationPath, 'run-manifest.json')), true);
+  assert.equal(statSync(join(paths.weekly, '2026-W30')).mode & 0o222, 0);
   rmSync(join(paths.root, 'CURRENT.md'), { recursive: true });
 
   const recovered = publishFixture(paths);
@@ -356,7 +468,7 @@ test('projection failure after rename is recoverable and retry is idempotent', (
   assert.equal(index.publications.length, 1);
   assert.equal(index.latestFull.publicationId, 'pub-full');
 
-  const conflict = sanitizeForPublication({
+  const conflict = sanitizeBundle({
     runManifest: {
       schemaVersion: '1.0.0',
       runId: 'run-2026-W30',
@@ -371,15 +483,12 @@ test('projection failure after rename is recoverable and retry is idempotent', (
     },
     verifierAttestation: { verifierVersion: '1.0.0', result: 'pass' },
     projections: {},
-  }, {
-    pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [],
   });
   assert.throws(() => publishAtomically({ paths, ...conflict }), /PUBLICATION_CONFLICT/u);
 }));
 
 test('REPORT.md is mandatory before CURRENT.md can be created', () => withProject(({ paths }) => {
-  const input = sanitizeForPublication({
+  const input = sanitizeBundle({
     runManifest: {
       runId: 'no-report-run',
       publicationId: 'no-report-publication',
@@ -391,10 +500,42 @@ test('REPORT.md is mandatory before CURRENT.md can be created', () => withProjec
     },
     verifierAttestation: { result: 'pass' },
     projections: {},
-  }, {
-    pseudonymKey: Buffer.alloc(32, 9),
-    privateValues: [],
   });
   assert.throws(() => publishAtomically({ paths, ...input }), /REPORT_ARTIFACT_REQUIRED/u);
   assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
+}));
+
+test('week container is read-only between publications while weekly root remains usable', () => withProject(({ paths }) => {
+  publishFixture(paths);
+  const weekDirectory = join(paths.weekly, '2026-W30');
+  assert.equal(statSync(weekDirectory).mode & 0o222, 0);
+  assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
+
+  const second = publishFixture(paths, {
+    runId: 'second-run',
+    publicationId: 'second-publication',
+    status: 'complete_partial',
+  });
+  assert.equal(existsSync(second.path), true);
+  assert.equal(statSync(weekDirectory).mode & 0o222, 0);
+  assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
+}));
+
+test('publication detects an inode replacement immediately before rename', () => withProject(({ paths }) => {
+  const weekDirectory = join(paths.weekly, '2026-W30');
+  const displaced = join(paths.weekly, '2026-W30-displaced');
+  assert.throws(
+    () => publishFixture(paths, {}, {
+      hooks: {
+        beforePublicationRename() {
+          renameSync(weekDirectory, displaced);
+          mkdirSync(weekDirectory, { mode: 0o755 });
+        },
+      },
+    }),
+    /PUBLICATION_PATH_REPLACED/u,
+  );
+  assert.equal(existsSync(join(weekDirectory, 'pub-full')), false);
+  assert.equal(statSync(displaced).mode & 0o222, 0);
+  assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
 }));
