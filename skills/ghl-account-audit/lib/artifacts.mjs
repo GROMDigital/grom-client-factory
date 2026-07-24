@@ -765,31 +765,77 @@ function assertVerifiedStaging(staging, manifest, payloadHashes) {
   }
 }
 
-function stagingSnapshot(staging) {
+function noFollowFlags({ directory = false } = {}) {
+  if (
+    typeof constants.O_NOFOLLOW !== 'number'
+    || directory && typeof constants.O_DIRECTORY !== 'number'
+  ) throw codedError('PUBLICATION_FS_UNSUPPORTED');
+  return constants.O_RDONLY
+    | constants.O_NOFOLLOW
+    | (directory ? constants.O_DIRECTORY : 0);
+}
+
+function assertPathIdentity(path, expected, code) {
+  let metadata;
+  try {
+    metadata = lstatSync(path);
+  } catch {
+    throw codedError(code);
+  }
+  if (
+    metadata.isSymbolicLink()
+    || !metadata.isDirectory()
+    || metadata.dev !== expected.dev
+    || metadata.ino !== expected.ino
+  ) throw codedError(code);
+}
+
+function assertNoFollowAncestors(root, name, code) {
+  const parts = name.split('/');
+  let current = root;
+  for (const part of parts.slice(0, -1)) {
+    current = join(current, part);
+    let descriptor;
+    try {
+      descriptor = openSync(current, noFollowFlags({ directory: true }));
+      if (!fstatSync(descriptor).isDirectory()) throw codedError(code);
+    } catch (error) {
+      if (error?.code === code) throw error;
+      throw codedError(code);
+    } finally {
+      if (descriptor !== undefined) closeSync(descriptor);
+    }
+  }
+}
+
+// Node exposes no openat/renameat API. This is a pinned-inode, no-follow
+// pathname traversal: the retained root descriptor binds the staging inode,
+// and the complete tree is re-opened and byte-checked immediately after rename.
+function publicationTreeSnapshot(root, rootDescriptor, code) {
   let directoryDescriptor;
   try {
-    directoryDescriptor = openSync(
-      staging,
-      constants.O_RDONLY
-        | (constants.O_DIRECTORY ?? 0)
-        | (constants.O_NOFOLLOW ?? 0),
-    );
+    directoryDescriptor = openSync(root, noFollowFlags({ directory: true }));
     const directory = fstatSync(directoryDescriptor);
+    const retained = fstatSync(rootDescriptor);
     if (!directory.isDirectory()) {
-      throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED');
+      throw codedError(code);
     }
+    const identity = { dev: retained.dev, ino: retained.ino };
+    if (
+      directory.dev !== identity.dev
+      || directory.ino !== identity.ino
+    ) {
+      throw codedError(code);
+    }
+    assertPathIdentity(root, identity, code);
     const files = [];
-    for (const name of listFiles(staging).sort()) {
+    for (const name of listFiles(root).sort()) {
       let descriptor;
       try {
-        descriptor = openSync(
-          join(staging, name),
-          constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-        );
+        assertNoFollowAncestors(root, name, code);
+        descriptor = openSync(join(root, name), noFollowFlags());
         const metadata = fstatSync(descriptor);
-        if (!metadata.isFile()) {
-          throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED');
-        }
+        if (!metadata.isFile() || metadata.nlink !== 1) throw codedError(code);
         files.push({
           name,
           dev: metadata.dev,
@@ -801,22 +847,28 @@ function stagingSnapshot(staging) {
         if (descriptor !== undefined) closeSync(descriptor);
       }
     }
+    assertPathIdentity(root, identity, code);
+    const finalRetained = fstatSync(rootDescriptor);
+    if (
+      finalRetained.dev !== identity.dev
+      || finalRetained.ino !== identity.ino
+    ) throw codedError(code);
     return {
-      directory: { dev: directory.dev, ino: directory.ino },
+      directory: identity,
       files,
     };
   } catch (error) {
-    if (error?.code === 'VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED') throw error;
-    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED');
+    if (error?.code === code) throw error;
+    throw codedError(code);
   } finally {
     if (directoryDescriptor !== undefined) closeSync(directoryDescriptor);
   }
 }
 
-function assertStagingSnapshot(staging, expected) {
-  const current = stagingSnapshot(staging);
+function assertPublicationTree(root, rootDescriptor, expected, code) {
+  const current = publicationTreeSnapshot(root, rootDescriptor, code);
   if (canonicalJson(current) !== canonicalJson(expected)) {
-    throw codedError('VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED');
+    throw codedError(code);
   }
 }
 
@@ -928,11 +980,19 @@ export function publishAtomically({
       const stagingName = `.publication-staging-${randomUUID()}`;
       const staging = join(weekGuard.directory, stagingName);
       let stagingIdentity;
+      let stagingDescriptor;
+      let finalRenamed = false;
       weekGuard.assertSame();
       mkdirSync(staging, { mode: 0o700 });
       {
-        const stagingMetadata = lstatSync(staging);
+        stagingDescriptor = openSync(staging, noFollowFlags({ directory: true }));
+        const stagingMetadata = fstatSync(stagingDescriptor);
         stagingIdentity = { dev: stagingMetadata.dev, ino: stagingMetadata.ino };
+        assertPathIdentity(
+          staging,
+          stagingIdentity,
+          'VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED',
+        );
       }
       weekGuard.assertSame();
       try {
@@ -973,16 +1033,26 @@ export function publishAtomically({
           Buffer.from(`${canonicalJson(attestation)}\n`, 'utf8'),
         );
         makeImmutable(staging);
-        const verifiedStagingSnapshot = stagingSnapshot(staging);
-        weekGuard.assertSame();
-        invokePublicationTestSeam('before-publication-rename', {
+        const verifiedStagingSnapshot = publicationTreeSnapshot(
           staging,
-          weekDirectory: weekGuard.directory,
-          weeklyDirectory: paths.weekly,
-        });
+          stagingDescriptor,
+          'VERIFIER_ATTESTATION_FAILED_STAGING_REPLACED',
+        );
         weekGuard.assertSame();
-        assertStagingSnapshot(staging, verifiedStagingSnapshot);
+        assertPublicationTree(
+          staging,
+          stagingDescriptor,
+          verifiedStagingSnapshot,
+          'VERIFIER_ATTESTATION_FAILED_STAGING_CHANGED',
+        );
         renameSync(staging, publicationPath);
+        finalRenamed = true;
+        assertPublicationTree(
+          publicationPath,
+          stagingDescriptor,
+          verifiedStagingSnapshot,
+          'VERIFIER_ATTESTATION_FAILED_FINAL_CHANGED',
+        );
         weekGuard.assertSame();
       } catch (error) {
         invokePublicationTestSeam('before-staging-cleanup', {
@@ -991,8 +1061,31 @@ export function publishAtomically({
           weeklyDirectory: paths.weekly,
         });
         weekGuard.lockParent();
+        const integrityFailure = typeof error?.code === 'string'
+          && (
+            error.code.startsWith('VERIFIER_ATTESTATION_FAILED_STAGING_')
+            || error.code.startsWith('VERIFIER_ATTESTATION_FAILED_FINAL_')
+          );
+        if (integrityFailure && stagingDescriptor !== undefined) {
+          try {
+            fchmodSync(stagingDescriptor, 0o000);
+          } catch {
+            // The integrity error remains authoritative.
+          }
+        }
+        if (finalRenamed || integrityFailure && existsSync(publicationPath)) {
+          const quarantine = join(
+            weekGuard.directory,
+            `.publication-quarantine-${randomUUID()}`,
+          );
+          try {
+            renameSync(publicationPath, quarantine);
+          } catch {
+            throw codedError('VERIFIER_ATTESTATION_FAILED_FINAL_QUARANTINE');
+          }
+        }
         const weekAlias = weekGuard.resolveAlias();
-        if (weekAlias) {
+        if (weekAlias && !integrityFailure) {
           const cleanupPath = join(weekAlias, stagingName);
           let cleanupMetadata;
           try {
@@ -1012,6 +1105,11 @@ export function publishAtomically({
           }
         }
         throw error?.code ? error : codedError('PUBLICATION_FAILED');
+      } finally {
+        if (stagingDescriptor !== undefined) {
+          closeSync(stagingDescriptor);
+          stagingDescriptor = undefined;
+        }
       }
     }
 

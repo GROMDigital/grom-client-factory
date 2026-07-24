@@ -18,7 +18,12 @@ import { computeJourneyMetrics } from './metrics.mjs';
 import { compileProposal, renderProposalProjections } from './proposals.mjs';
 import { selectConversationSample } from './sampling.mjs';
 import { assertNoExecutionMaterial } from './publication-safety.mjs';
-import { reconstructSealedMechanisms } from './mechanisms.mjs';
+import {
+  buildMechanismPacket,
+  nominateMechanisms,
+  reconcileExpertReviews,
+  replayMechanismReview,
+} from './mechanisms.mjs';
 
 const PRIVATE_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*|raw_[a-f0-9]{16,64}|https?:\/\/[^\s"'<>]*[?&](?:token|code|signature|key|secret|auth)=)/iu;
 const WRITE_PATTERN = /(?:\b(?:GET|POST|PUT|PATCH|DELETE)\s+[/:]|\braw[_ -]?request\b|\btools?\/call\b|\bconfirm\s*[:=]|\bcurl\b|\bwget\b)/iu;
@@ -271,38 +276,125 @@ function rebuildProposals(directory, fileNames, sealed) {
   }
 }
 
-function rebuildMechanisms(sealed, findings) {
-  if (!sealed || !Array.isArray(sealed.mechanisms) || !Array.isArray(sealed.expertReviews)) {
-    throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+function rebuildMechanisms(sealed, machine) {
+  if (
+    !sealed
+    || !sealed.primary
+    || !Array.isArray(sealed.packets)
+    || !Array.isArray(sealed.packetBindings)
+    || !Array.isArray(sealed.reviewEnvelopes)
+    || !sealed.reconciliation
+  ) {
+    throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
   }
   const { commitment, ...body } = sealed;
   if (commitment !== sha256(body)) {
-    throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+    throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
   }
-  deepFreeze(sealed.mechanisms);
-  deepFreeze(sealed.expertReviews);
-  let rebuilt;
+  const primary = deepFreeze(sealed.primary);
+  if (
+    canonicalJson(primary.graph) !== canonicalJson(machine.sealedInputs?.graph)
+    || canonicalJson(primary.metrics) !== canonicalJson(machine.metrics)
+    || canonicalJson(primary.coverage) !== canonicalJson(
+      machine.sealedInputs?.mechanismCoverage,
+    )
+  ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_PRIMARY_INPUTS');
+  let packets;
+  let reviews;
+  let reconciled;
   try {
-    rebuilt = reconstructSealedMechanisms({
-      mechanisms: sealed.mechanisms,
-      expertReviews: sealed.expertReviews,
+    packets = nominateMechanisms({
+      ...primary,
+      maxCandidates: sealed.maxCandidates,
+    }).map((candidate) => buildMechanismPacket(candidate));
+    if (canonicalJson(packets) !== canonicalJson(sealed.packets)) {
+      throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_PACKETS');
+    }
+    reviews = sealed.reviewEnvelopes.map((envelope) => {
+      if (
+        envelope.requestInputsHash !== sha256(envelope.requestInputs)
+        || envelope.responseHash !== sha256(envelope.response)
+      ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_REVIEWS');
+      deepFreeze(envelope.requestInputs);
+      deepFreeze(envelope.response);
+      const review = replayMechanismReview({
+        requestInputs: envelope.requestInputs,
+        response: envelope.response,
+      });
+      if (review.validationHash !== envelope.validationHash) {
+        throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_REVIEWS');
+      }
+      return review;
+    });
+    const reviewedPacketIds = reviews.flatMap(({ packetHashes }) => (
+      packetHashes.map(({ packetId }) => packetId)
+    ));
+    if (
+      reviewedPacketIds.length > 3
+      || new Set(reviewedPacketIds).size !== reviewedPacketIds.length
+    ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_REVIEWS');
+    reconciled = reconcileExpertReviews({
+      packets,
+      reviews,
       maxPromoted: sealed.maxPromoted,
     });
   } catch {
     throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONSTRUCTION');
   }
-  if (canonicalJson(rebuilt) !== canonicalJson(sealed.reconstruction)) {
+  const packetById = new Map(packets.map((packet) => [packet.packetId, packet]));
+  const bindingByPacket = new Map();
+  const bindingByFinding = new Map();
+  for (const binding of sealed.packetBindings) {
+    if (
+      !binding
+      || typeof binding !== 'object'
+      || Array.isArray(binding)
+      || Object.keys(binding).sort().join('|') !== [
+        'findingId', 'packetHash', 'packetId',
+      ].sort().join('|')
+      || !packetById.has(binding.packetId)
+      || packetById.get(binding.packetId).packetHash !== binding.packetHash
+      || bindingByPacket.has(binding.packetId)
+      || bindingByFinding.has(binding.findingId)
+    ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_BINDINGS');
+    bindingByPacket.set(binding.packetId, binding);
+    bindingByFinding.set(binding.findingId, binding);
+  }
+  if (bindingByPacket.size !== packets.length) {
+    throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_BINDINGS');
+  }
+  const findingFor = (packet) => bindingByPacket.get(packet.packetId)?.findingId;
+  const reconstruction = {
+    criticalPacketIds: reconciled.criticalIssues.map(({ packetId }) => packetId),
+    promotedPacketIds: reconciled.promoted.map(({ packetId }) => packetId),
+    backlogPacketIds: reconciled.backlog.map(({ packetId }) => packetId),
+    criticalFindingIds: reconciled.criticalIssues.map(findingFor),
+    promotedFindingIds: reconciled.promoted.map(findingFor),
+    backlogFindingIds: reconciled.backlog.map(findingFor),
+    priorityFindingIds: [
+      ...reconciled.criticalIssues,
+      ...reconciled.promoted,
+    ].map(findingFor),
+  };
+  if (canonicalJson(reconstruction) !== canonicalJson(sealed.reconciliation)) {
     throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONSTRUCTION');
   }
-  const critical = findings.filter(({ publicationLane }) => publicationLane === 'critical')
-    .map(({ findingId }) => findingId).sort();
-  const promoted = findings.filter(({ publicationLane }) => publicationLane === 'commercial')
-    .map(({ findingId }) => findingId).sort();
+  const findings = machine.findings;
+  if (findings.some((finding) => (
+    bindingByFinding.has(finding.findingId)
+    && finding.mechanismPacketId !== bindingByFinding.get(finding.findingId).packetId
+  ))) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_BINDINGS');
+  const laneIds = (lane) => findings
+    .filter(({ publicationLane }) => publicationLane === lane)
+    .map(({ findingId }) => findingId)
+    .filter((findingId) => bindingByFinding.has(findingId))
+    .sort();
   if (
-    canonicalJson([...rebuilt.criticalIssueIds].sort()) !== canonicalJson(critical)
-    || canonicalJson([...rebuilt.promotedIds].sort()) !== canonicalJson(promoted)
+    canonicalJson([...reconstruction.criticalFindingIds].sort()) !== canonicalJson(laneIds('critical'))
+    || canonicalJson([...reconstruction.promotedFindingIds].sort()) !== canonicalJson(laneIds('commercial'))
+    || canonicalJson([...reconstruction.backlogFindingIds].sort()) !== canonicalJson(laneIds('backlog'))
   ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONCILIATION');
-  return rebuilt;
+  return reconstruction;
 }
 
 function validateClaims(machine, evidence, report, coverage) {
@@ -494,7 +586,7 @@ export function verifyPublication({ publicationDir } = {}) {
   validateSampleStructure(sample);
   rebuildSample(sample, samplingUniverse);
   rebuildProposals(root, declared, proposalVerification);
-  const rebuiltMechanisms = rebuildMechanisms(mechanismVerification, machine.findings);
+  const rebuiltMechanisms = rebuildMechanisms(mechanismVerification, machine);
   validateFindingFormulas(machine.findings);
   validateReview(sample, evidenceRefs);
   const expectedVerification = {
@@ -502,7 +594,7 @@ export function verifyPublication({ publicationDir } = {}) {
     metricHash: sha256(machine.metrics),
     cohortHash: sha256(machine.metrics.cohorts ?? {}),
     sampleHash: recomputeSampleHash(sample),
-    priorityOrder: rebuiltMechanisms.priorityOrder,
+    priorityOrder: rebuiltMechanisms.priorityFindingIds,
     overlapDedupe: [...new Set(machine.findings.map(({ fingerprint, findingId }) => (
       fingerprint ?? findingId
     )))].sort(),

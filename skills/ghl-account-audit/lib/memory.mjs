@@ -282,6 +282,11 @@ function requireEntry(entries, aliases, event) {
 function applyEvent(entries, aliases, event) {
   if (event.type === 'raw_evidence_expired') return;
   if (event.type === 'finding_observed') {
+    const priorFingerprint = aliases.get(event.findingId);
+    if (
+      priorFingerprint !== undefined
+      && priorFingerprint !== event.findingFingerprint
+    ) throw codedError('BACKLOG_EVENT_SEQUENCE_INVALID_ALIAS_BIJECTION');
     const prior = entries.get(event.findingFingerprint);
     if (!prior) {
       entries.set(event.findingFingerprint, newEntry(event));
@@ -338,7 +343,8 @@ function applyEvent(entries, aliases, event) {
       || !['public_ghl', 'internal_ghl', 'onboarding_portal'].includes(receipt.source)
       || !Number.isFinite(Date.parse(receipt.capturedAt))
       || !Number.isFinite(Date.parse(receipt.evidenceCutoff))
-      || Date.parse(receipt.capturedAt) < Date.parse(entry.implementationAt ?? '')
+      || Date.parse(receipt.capturedAt) <= Date.parse(entry.implementationAt ?? '')
+      || Date.parse(receipt.evidenceCutoff) <= Date.parse(entry.implementationAt ?? '')
       || !/^[a-f0-9]{64}$/u.test(receipt.payloadHash ?? '')
       || receipt.proposalHash !== event.proposalHash
       || !Array.isArray(receipt.evidenceRefs)

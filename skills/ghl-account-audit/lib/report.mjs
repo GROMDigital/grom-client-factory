@@ -2,10 +2,16 @@ import { canonicalJson, sha256 } from './canonical.mjs';
 import { selectConversationSample } from './sampling.mjs';
 import { assertNoExecutionMaterial } from './publication-safety.mjs';
 import { compileProposal } from './proposals.mjs';
-import { reconstructSealedMechanisms } from './mechanisms.mjs';
+import {
+  buildMechanismPacket,
+  nominateMechanisms,
+  reconcileExpertReviews,
+  replayMechanismReview,
+} from './mechanisms.mjs';
+import { loadMetricContracts, loadProfile } from '../schemas/v1.mjs';
 
 const VERDICTS = new Set(['PASS', 'WATCH', 'FAIL', 'UNKNOWN']);
-const PRIVATE_OR_EXECUTION = /(?:https?:\/\/|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|raw_[a-f0-9]{16,64}|\b(?:GET|POST|PUT|PATCH|DELETE)\b|raw[_ -]?request|tools?\/call|authorization|credential|cookie)/iu;
+const PRIVATE_OR_EXECUTION = /(?:https?:\/\/|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|raw_[a-f0-9]{16,64}|\b(?:GET|POST|PUT|PATCH|DELETE)\s+(?:\/|https?:\/\/)|raw[_ -]?request|tools?\/call|authorization|credential|cookie)/iu;
 const REVENUE_PROMISE = /(?:guarantee|will produce|will generate)[^\n]{0,80}(?:revenue|sales|\$|£|€)/iu;
 const BROAD_PARTIAL_CLAIM = /(?:account-wide top leak|total account impact|all systems passed|account-wide pass|cleared missing capability)/iu;
 const FORBIDDEN_PUBLIC_KEY = /^(?:transcripts?|messages?|messageBody|raw.*|vault.*|keyRef(?:erence)?|authorization|cookie|credential|email|phone|firstName|lastName|fullName)$/iu;
@@ -210,47 +216,120 @@ function solutionArtifacts(solutionPacks, findings, evidenceRefs) {
   };
 }
 
-function sealMechanisms(findings) {
+function sealMechanisms(findings, graph, metrics, mechanismReview) {
   const eligible = findings.filter(({ publicationLane }) => (
     ['critical', 'commercial'].includes(publicationLane)
   ));
-  const mechanisms = eligible.map((finding) => {
-    if (!finding.mechanismVerification) {
-      throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
-    }
-    return structuredClone(finding.mechanismVerification);
-  });
-  const expertReviews = eligible
-    .filter(({ expertReview }) => expertReview)
-    .map(({ expertReview }) => structuredClone(expertReview));
-  deepFreeze(mechanisms);
-  deepFreeze(expertReviews);
-  let reconstruction;
+  if (
+    !mechanismReview
+    || typeof mechanismReview !== 'object'
+    || Array.isArray(mechanismReview)
+    || !mechanismReview.coverage
+    || !Number.isInteger(mechanismReview.maxCandidates)
+    || !Number.isInteger(mechanismReview.maxPromoted)
+    || !Array.isArray(mechanismReview.packetBindings)
+    || !Array.isArray(mechanismReview.reviewEnvelopes)
+  ) throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
+  const primary = {
+    graph: structuredClone(graph),
+    metrics: structuredClone(metrics),
+    coverage: structuredClone(mechanismReview.coverage),
+  };
+  deepFreeze(primary);
+  let packets;
+  let validatedReviews;
+  let reconciled;
   try {
-    reconstruction = reconstructSealedMechanisms({
-      mechanisms,
-      expertReviews,
-      maxPromoted: 3,
+    packets = nominateMechanisms({
+      ...primary,
+      maxCandidates: mechanismReview.maxCandidates,
+    }).map((candidate) => buildMechanismPacket(candidate));
+    validatedReviews = mechanismReview.reviewEnvelopes.map((envelope) => (
+      replayMechanismReview({
+        requestInputs: envelope.requestInputs,
+        response: envelope.response,
+      })
+    ));
+    const reviewedPacketIds = validatedReviews.flatMap(({ packetHashes }) => (
+      packetHashes.map(({ packetId }) => packetId)
+    ));
+    if (
+      reviewedPacketIds.length > 3
+      || new Set(reviewedPacketIds).size !== reviewedPacketIds.length
+    ) throw codedError('MECHANISM_REVIEW_OVER_BUDGET');
+    reconciled = reconcileExpertReviews({
+      packets,
+      reviews: validatedReviews,
+      maxPromoted: mechanismReview.maxPromoted,
     });
   } catch {
-    throw codedError('VERIFIER_INPUT_INVALID_MECHANISM_RECONSTRUCTION');
+    throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
   }
-  const criticalIds = findings
-    .filter(({ publicationLane }) => publicationLane === 'critical')
-    .map(({ findingId }) => findingId).sort();
-  const promotedIds = findings
-    .filter(({ publicationLane }) => publicationLane === 'commercial')
-    .map(({ findingId }) => findingId).sort();
+  const packetById = new Map(packets.map((packet) => [packet.packetId, packet]));
+  const bindingByPacket = new Map();
+  const bindingByFinding = new Map();
+  for (const binding of mechanismReview.packetBindings) {
+    if (
+      !binding
+      || typeof binding !== 'object'
+      || Array.isArray(binding)
+      || Object.keys(binding).sort().join('|') !== [
+        'findingId', 'packetHash', 'packetId',
+      ].sort().join('|')
+      || !packetById.has(binding.packetId)
+      || packetById.get(binding.packetId).packetHash !== binding.packetHash
+      || bindingByPacket.has(binding.packetId)
+      || bindingByFinding.has(binding.findingId)
+    ) throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
+    bindingByPacket.set(binding.packetId, binding);
+    bindingByFinding.set(binding.findingId, binding);
+  }
   if (
-    canonicalJson([...reconstruction.criticalIssueIds].sort()) !== canonicalJson(criticalIds)
-    || canonicalJson([...reconstruction.promotedIds].sort()) !== canonicalJson(promotedIds)
+    bindingByPacket.size !== packets.length
+    || eligible.some((finding) => (
+      finding.mechanismPacketId !== bindingByFinding.get(finding.findingId)?.packetId
+    ))
+  ) throw codedError('VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS');
+  const findingFor = (packet) => bindingByPacket.get(packet.packetId)?.findingId;
+  const reconciliation = {
+    criticalPacketIds: reconciled.criticalIssues.map(({ packetId }) => packetId),
+    promotedPacketIds: reconciled.promoted.map(({ packetId }) => packetId),
+    backlogPacketIds: reconciled.backlog.map(({ packetId }) => packetId),
+    criticalFindingIds: reconciled.criticalIssues.map(findingFor),
+    promotedFindingIds: reconciled.promoted.map(findingFor),
+    backlogFindingIds: reconciled.backlog.map(findingFor),
+    priorityFindingIds: [
+      ...reconciled.criticalIssues,
+      ...reconciled.promoted,
+    ].map(findingFor),
+  };
+  const laneIds = (lane) => findings
+    .filter(({ publicationLane }) => publicationLane === lane)
+    .map(({ findingId }) => findingId)
+    .filter((findingId) => bindingByFinding.has(findingId))
+    .sort();
+  if (
+    canonicalJson([...reconciliation.criticalFindingIds].sort()) !== canonicalJson(laneIds('critical'))
+    || canonicalJson([...reconciliation.promotedFindingIds].sort()) !== canonicalJson(laneIds('commercial'))
+    || canonicalJson([...reconciliation.backlogFindingIds].sort()) !== canonicalJson(laneIds('backlog'))
   ) throw codedError('VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONCILIATION');
+  const reviewEnvelopes = mechanismReview.reviewEnvelopes.map((envelope, index) => ({
+    envelopeId: `review_${String(index + 1).padStart(4, '0')}`,
+    requestInputs: structuredClone(envelope.requestInputs),
+    requestInputsHash: sha256(envelope.requestInputs),
+    response: structuredClone(envelope.response),
+    responseHash: sha256(envelope.response),
+    validationHash: validatedReviews[index].validationHash,
+  }));
   const body = {
     schemaVersion: '1.0.0',
-    mechanisms,
-    expertReviews,
-    maxPromoted: 3,
-    reconstruction,
+    primary,
+    maxCandidates: mechanismReview.maxCandidates,
+    maxPromoted: mechanismReview.maxPromoted,
+    packets,
+    packetBindings: mechanismReview.packetBindings,
+    reviewEnvelopes,
+    reconciliation,
   };
   return { ...body, commitment: sha256(body) };
 }
@@ -280,49 +359,83 @@ function verdictTable(findings) {
   return lines.join('\n');
 }
 
-function gromScorecards(run, metrics) {
+function gromJourneyCatalog(run) {
+  if (run.target?.operatingProfile !== 'grom_internal') return null;
+  let profile;
+  let contracts;
+  try {
+    profile = loadProfile(run.target.operatingProfile);
+    contracts = loadMetricContracts(run.target.operatingProfile);
+  } catch {
+    throw codedError('REPORT_CLAIM_UNRESOLVED_GROM_PROFILE');
+  }
+  const descriptor = (journeyId, label) => {
+    const journey = profile.journeys.find((item) => item.journeyId === journeyId);
+    if (!journey) throw codedError('REPORT_CLAIM_UNRESOLVED_GROM_PROFILE');
+    return {
+      label,
+      journeyId: journey.journeyId,
+      journeyInstanceId: journey.journeyInstanceId,
+      metricIds: contracts.edges
+        .filter((edge) => edge.journeyId === journey.journeyId)
+        .map(({ edgeId }) => edgeId)
+        .sort(),
+    };
+  };
+  return {
+    acquisition: descriptor('agency_new_business', 'Acquisition / new business'),
+    onboarding: descriptor('client_onboarding', 'Onboarding'),
+  };
+}
+
+function gromScorecards(run, metrics, journeys) {
   if (run.target?.operatingProfile !== 'grom_internal') return '';
-  const current = metrics.metrics?.currentClosedWeek ?? {};
-  const acquisition = Object.values(current).filter(({ journeyInstanceId }) => (
-    journeyInstanceId === 'journey_grom_acquisition_v1'
-  ));
-  const onboarding = Object.values(current).filter(({ journeyInstanceId }) => (
-    journeyInstanceId === 'journey_grom_onboarding_v1'
-  ));
-  const denominator = (values) => values.reduce((sum, item) => sum + (item.denominator ?? 0), 0);
+  const currentCohorts = metrics.cohorts?.currentClosedWeek ?? {};
+  const scorecard = (journey) => [
+    `### ${journey.label} scorecard`,
+    '',
+    `- Journey ID: ${journey.journeyInstanceId}`,
+    `- Denominator: ${currentCohorts[journey.journeyInstanceId] ?? 0}`,
+    `- Clock and KPIs: ${journey.label.toLowerCase()} only`,
+    '',
+  ];
   return [
-    '### Acquisition scorecard',
-    '',
-    '- Journey ID: journey_grom_acquisition_v1',
-    `- Denominator: ${denominator(acquisition)}`,
-    '- Clock and KPIs: acquisition only',
-    '',
-    '### Onboarding scorecard',
-    '',
-    '- Journey ID: journey_grom_onboarding_v1',
-    `- Denominator: ${denominator(onboarding)}`,
-    '- Clock and KPIs: onboarding only',
-    '',
+    ...scorecard(journeys.acquisition),
+    ...scorecard(journeys.onboarding),
   ].join('\n');
 }
 
-function gromJourneyFindings(findings, kind) {
-  return findings.filter(({ journeyId = '' }) => (
-    String(journeyId).toLowerCase().includes(kind)
+function gromJourneyFindings(findings, journey) {
+  return findings.filter((finding) => (
+    finding.journeyId === journey.journeyId
+    || finding.journeyInstanceId === journey.journeyInstanceId
+    || finding.journeyInstanceIds?.includes(journey.journeyInstanceId)
   ));
 }
 
-function splitGrom(label, findings, render) {
-  const acquisition = gromJourneyFindings(findings, 'acquisition');
-  const onboarding = gromJourneyFindings(findings, 'onboarding');
+function assertExactGromFindingPartition(findings, journeys) {
+  const descriptors = [journeys.acquisition, journeys.onboarding];
+  for (const finding of findings) {
+    const matches = descriptors.filter((journey) => (
+      gromJourneyFindings([finding], journey).length === 1
+    ));
+    if (matches.length !== 1) {
+      throw codedError('REPORT_CLAIM_UNRESOLVED_GROM_FINDING_JOURNEY');
+    }
+  }
+}
+
+function splitGrom(label, findings, journeys, render) {
+  const acquisition = gromJourneyFindings(findings, journeys.acquisition);
+  const onboarding = gromJourneyFindings(findings, journeys.onboarding);
   return [
-    `### Acquisition ${label}`,
+    `### ${journeys.acquisition.label} ${label}`,
     '',
-    render(acquisition, 'journey_grom_acquisition_v1'),
+    render(acquisition, journeys.acquisition),
     '',
-    `### Onboarding ${label}`,
+    `### ${journeys.onboarding.label} ${label}`,
     '',
-    render(onboarding, 'journey_grom_onboarding_v1'),
+    render(onboarding, journeys.onboarding),
   ].join('\n');
 }
 
@@ -338,6 +451,8 @@ function renderReport({
 }) {
   const partial = coverage.state === 'complete_partial';
   const grom = run.target?.operatingProfile === 'grom_internal';
+  const gromJourneys = gromJourneyCatalog(run);
+  if (grom) assertExactGromFindingPartition(findings, gromJourneys);
   const critical = findings.filter(({ publicationLane }) => publicationLane === 'critical');
   const commercial = findings
     .filter(({ publicationLane }) => publicationLane === 'commercial')
@@ -357,11 +472,11 @@ function renderReport({
     '',
     systemOverview.summary,
     '',
-    gromScorecards(run, metrics),
+    gromScorecards(run, metrics, gromJourneys),
     '## Critical issues',
     '',
     grom
-      ? splitGrom('critical issues', critical, (items) => (
+      ? splitGrom('critical issues', critical, gromJourneys, (items) => (
         items.length ? items.map(reportFinding).join('\n') : 'No eligible critical issue was found.'
       ))
       : critical.length ? critical.map(reportFinding).join('\n') : 'No eligible critical issue was found.',
@@ -369,10 +484,10 @@ function renderReport({
     '## Commercial movement',
     '',
     grom
-      ? splitGrom('commercial movement', findings, (_items, journeyId) => {
-        const cohort = metrics.cohorts?.currentClosedWeek?.[journeyId] ?? 0;
+      ? splitGrom('commercial movement', findings, gromJourneys, (_items, journey) => {
+        const cohort = metrics.cohorts?.currentClosedWeek?.[journey.journeyInstanceId] ?? 0;
         const kpis = Object.entries(metrics.metrics?.currentClosedWeek ?? {})
-          .filter(([, metric]) => metric.journeyInstanceId === journeyId)
+          .filter(([metricId]) => journey.metricIds.includes(metricId))
           .map(([id, metric]) => `${id}: ${metric.numerator ?? 'unknown'}/${metric.denominator ?? 'unknown'}`)
           .join(', ') || 'No complete KPI';
         return `Entry cohort: ${cohort}\n\nKPIs: ${kpis}`;
@@ -382,7 +497,7 @@ function renderReport({
     '## What is working',
     '',
     grom
-      ? splitGrom('working controls', working, (items) => (
+      ? splitGrom('working controls', working, gromJourneys, (items) => (
         items.length
           ? items.map(({ findingId }) => `- ${findingId}`).join('\n')
           : 'No broad pass is inferred from missing evidence.'
@@ -392,7 +507,7 @@ function renderReport({
     '## Commercial findings',
     '',
     grom
-      ? splitGrom('commercial findings', commercial, (items) => (
+      ? splitGrom('commercial findings', commercial, gromJourneys, (items) => (
         items.length
           ? items.map(reportFinding).join('\n')
           : 'No eligible commercial finding was promoted.'
@@ -407,13 +522,13 @@ function renderReport({
     '## Configuration/execution/experience/outcome matrix',
     '',
     grom
-      ? splitGrom('verdict matrix', findings, (items) => verdictTable(items))
+      ? splitGrom('verdict matrix', findings, gromJourneys, (items) => verdictTable(items))
       : verdictTable(findings),
     '',
     '## Recommended action order',
     '',
     grom
-      ? splitGrom('recommended action order', findings, (items) => (
+      ? splitGrom('recommended action order', findings, gromJourneys, (items) => (
         actionOrder.filter((id) => items.some(({ findingId }) => findingId === id))
           .map((id, index) => `${index + 1}. ${id}`).join('\n')
           || 'No action pack is eligible.'
@@ -423,7 +538,7 @@ function renderReport({
     '## Week-over-week finding movement',
     '',
     grom
-      ? splitGrom('finding movement', findings, (items) => (
+      ? splitGrom('finding movement', findings, gromJourneys, (items) => (
         items.map(({ findingId }) => `- ${findingId}: derived from immutable events`).join('\n')
           || 'No finding movement.'
       ))
@@ -500,6 +615,7 @@ export function compilePublicationArtifacts(input = {}) {
     metrics,
     sample,
     findings,
+    mechanismReview,
     conversationReview,
     evidenceManifest,
     solutionPacks,
@@ -517,7 +633,7 @@ export function compilePublicationArtifacts(input = {}) {
   const eligibleEvidence = validateEvidenceManifest(evidenceManifest);
   const sampling = sealSampling(sample);
   const normalized = normalizeFindings(findings, eligibleEvidence, coverage);
-  const mechanismSeal = sealMechanisms(normalized.findings);
+  const mechanismSeal = sealMechanisms(normalized.findings, graph, metrics, mechanismReview);
   const packs = solutionArtifacts(solutionPacks, normalized.findings, eligibleEvidence);
   const report = renderReport({
     run,
@@ -527,14 +643,14 @@ export function compilePublicationArtifacts(input = {}) {
     findings: normalized.findings,
     conversationReview,
     memoryProjection,
-    actionOrder: mechanismSeal.reconstruction.priorityOrder,
+    actionOrder: mechanismSeal.reconciliation.priorityFindingIds,
   });
   const verification = {
     coverageClass: coverage.state,
     metricHash: sha256(metrics),
     cohortHash: sha256(metrics.cohorts ?? {}),
     sampleHash: sampling.publicSample.sampleHash,
-    priorityOrder: mechanismSeal.reconstruction.priorityOrder,
+    priorityOrder: mechanismSeal.reconciliation.priorityFindingIds,
     overlapDedupe: [...new Set(normalized.findings.map(({ fingerprint, findingId }) => (
       fingerprint ?? findingId
     )))].sort(),
@@ -548,6 +664,7 @@ export function compilePublicationArtifacts(input = {}) {
       graph,
       metricContracts,
       windows,
+      mechanismCoverage: mechanismSeal.primary.coverage,
     },
     metrics,
     findings: normalized.findings,

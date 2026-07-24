@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {
+import fs, {
   chmodSync,
   existsSync,
   mkdirSync,
@@ -12,6 +12,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -841,29 +842,93 @@ test('week container is read-only between publications while weekly root remains
   assert.notEqual(statSync(paths.weekly).mode & 0o200, 0);
 }));
 
-test('staging replacement after verification cannot reach the publication rename', () => withProject(({ paths }) => {
-  const seamKey = Symbol.for('grom.audit.publication.fs-seam');
+test('final rename has no user seam before its immediate verification', () => withProject(({ paths }) => {
+  const boundarySource = readFileSync(
+    new URL('../lib/artifacts.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.equal(boundarySource.includes(`before-publication-${'rename'}`), false);
+  const result = publishFixture(paths);
+  assert.equal(existsSync(result.path), true);
+}));
+
+test('final target replacement after immediate verification fails closed', () => withProject(({ paths }) => {
+  const realRenameSync = fs.renameSync;
   let displaced;
-  globalThis[seamKey] = ({ phase, staging }) => {
-    if (phase !== 'before-publication-rename') return;
-    displaced = `${staging}-verified-displaced`;
-    chmodSync(staging, 0o700);
-    renameSync(staging, displaced);
-    mkdirSync(staging, { mode: 0o700 });
-    writeFileSync(join(staging, 'REPORT.md'), '# unverified replacement\n');
+  fs.renameSync = (source, destination) => {
+    realRenameSync(source, destination);
+    if (destination !== join(paths.weekly, '2026-W30', 'pub-full')) return;
+    displaced = `${destination}-verified-displaced`;
+    chmodSync(destination, 0o700);
+    realRenameSync(destination, displaced);
+    mkdirSync(destination, { mode: 0o700 });
+    writeFileSync(join(destination, 'REPORT.md'), '# unverified replacement\n');
   };
+  syncBuiltinESMExports();
   try {
     assert.throws(
       () => publishFixture(paths),
-      /VERIFIER_ATTESTATION_FAILED_STAGING_(?:REPLACED|CHANGED)/u,
+      /VERIFIER_ATTESTATION_FAILED_FINAL_(?:REPLACED|CHANGED)/u,
     );
   } finally {
-    delete globalThis[seamKey];
+    fs.renameSync = realRenameSync;
+    syncBuiltinESMExports();
   }
   assert.equal(existsSync(join(paths.weekly, '2026-W30', 'pub-full')), false);
   assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
   assert.equal(existsSync(join(paths.root, 'index.json')), false);
   assert.equal(existsSync(displaced), true);
+}));
+
+test('byte-identical staging root replacement at rename is rejected by inode binding', () => withProject(({ paths }) => {
+  const realRenameSync = fs.renameSync;
+  let displaced;
+  fs.renameSync = (source, destination) => {
+    if (destination === join(paths.weekly, '2026-W30', 'pub-full')) {
+      displaced = `${source}-verified-displaced`;
+      realRenameSync(source, displaced);
+      fs.cpSync(displaced, source, { recursive: true, preserveTimestamps: true });
+    }
+    realRenameSync(source, destination);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => publishFixture(paths),
+      /VERIFIER_ATTESTATION_FAILED_FINAL_(?:REPLACED|CHANGED)/u,
+    );
+  } finally {
+    fs.renameSync = realRenameSync;
+    syncBuiltinESMExports();
+  }
+  assert.equal(existsSync(join(paths.weekly, '2026-W30', 'pub-full')), false);
+  assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
+  assert.equal(existsSync(join(paths.root, 'index.json')), false);
+  assert.equal(existsSync(displaced), true);
+}));
+
+test('same-inode final payload mutation is rejected by immediate byte verification', () => withProject(({ paths }) => {
+  const realRenameSync = fs.renameSync;
+  fs.renameSync = (source, destination) => {
+    realRenameSync(source, destination);
+    if (destination !== join(paths.weekly, '2026-W30', 'pub-full')) return;
+    chmodSync(destination, 0o700);
+    chmodSync(join(destination, 'REPORT.md'), 0o600);
+    writeFileSync(join(destination, 'REPORT.md'), '# Full rep0rt\n');
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(
+      () => publishFixture(paths),
+      /VERIFIER_ATTESTATION_FAILED_FINAL_(?:REPLACED|CHANGED)/u,
+    );
+  } finally {
+    fs.renameSync = realRenameSync;
+    syncBuiltinESMExports();
+  }
+  assert.equal(existsSync(join(paths.weekly, '2026-W30', 'pub-full')), false);
+  assert.equal(existsSync(join(paths.root, 'CURRENT.md')), false);
+  assert.equal(existsSync(join(paths.root, 'index.json')), false);
 }));
 
 for (const replacementPhase of ['during-write', 'during-cleanup']) {

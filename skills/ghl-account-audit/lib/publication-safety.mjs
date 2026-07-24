@@ -1,6 +1,8 @@
 const FORBIDDEN_KEY_TOKENS = new Set([
   'api_key',
+  'api',
   'authorization',
+  'command',
   'confirm',
   'cookie',
   'credential',
@@ -10,16 +12,19 @@ const FORBIDDEN_KEY_TOKENS = new Set([
   'headers',
   'http_method',
   'mcp_call',
+  'method',
   'mutation',
   'raw_request',
   'request_body',
   'request_bodies',
   'shell_command',
+  'shell',
   'tool_call',
   'tool_calls',
+  'url',
   'write_tool',
 ]);
-const FORBIDDEN_VALUE = /(?:https?:\/\/|\b(?:GET|POST|PUT|PATCH|DELETE)\b|raw[\s_-]*request|tools?[/.]call|mcp[\s_-]*(?:call|tool)|authorization|credential[\s_-]*value|session[\s_-]*cookie|\bcurl\b|\bwget\b|```(?:sh|bash|zsh|shell|javascript|js|typescript|ts|python|py)|\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.(?:create|update|delete|patch|post|put|execute|mutate)\s*\(|\b(?:npm|node|python|bash|zsh|sh|rm|cp|mv|chmod|export)\s+-?[A-Za-z0-9./])/iu;
+const FORBIDDEN_VALUE = /(?:https?:\/\/|\b(?:GET|POST|PUT|PATCH|DELETE)\s+(?:\/|https?:\/\/)|raw[\s_-]*request|tools?[/.]call|mcp[\s_-]*(?:call|tool)|authorization|credential[\s_-]*value|session[\s_-]*cookie|\bcurl\b|\bwget\b|```|\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\.(?:create|update|delete|patch|post|put|execute|mutate)\s*\(|\b(?:npm|node|python|bash|zsh|sh|rm|cp|mv|chmod|export)\s+-?[A-Za-z0-9./])/iu;
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });

@@ -31,6 +31,13 @@ import { verifyPublication } from '../lib/verifier.mjs';
 import { ProposalSchema } from '../schemas/v1.mjs';
 import { auditPaths } from '../lib/paths.mjs';
 import { selectConversationSample } from '../lib/sampling.mjs';
+import { assertNoExecutionMaterial } from '../lib/publication-safety.mjs';
+import {
+  buildMechanismPacket,
+  createMechanismReviewRequest,
+  nominateMechanisms,
+} from '../lib/mechanisms.mjs';
+import { computeJourneyMetrics } from '../lib/metrics.mjs';
 
 const H = 'a'.repeat(64);
 const H2 = 'b'.repeat(64);
@@ -236,6 +243,310 @@ function evidenceManifest() {
   ]);
 }
 
+const MECHANISM_FAMILIES = [
+  'calendar_capacity_or_timezone',
+  'delivery_failure',
+  'duplicates_tests_or_legacy_imports',
+  'historical_configuration_drift',
+  'offer_or_pricing',
+  'ownership_or_handoff',
+  'source_or_lead_quality_mix',
+  'stage_or_disposition_data_quality',
+  'workflow_configuration_or_execution',
+];
+let mechanismNonce = 0;
+
+function exactTask7MechanismReview(findingId) {
+  const definitionHash = H;
+  const edge = (index, type) => ({
+    edgeId: `edge_${String(index).padStart(16, '0')}`,
+    type,
+    fromNodeId: `node_${String(index).padStart(16, '0')}`,
+    toNodeId: `node_${String(index + 1).padStart(16, '0')}`,
+    eventTime: '2026-07-06T00:00:00Z',
+    capturedAt: '2026-07-07T00:00:00Z',
+    evidenceRefs: [E1],
+    joinMethod: 'native_id',
+    joinConfidence: 'exact',
+    workflowDefinitionHash: definitionHash,
+  });
+  const graph = deepFreeze({
+    nodes: [
+      {
+        nodeId: 'journey_1111111111111111',
+        type: 'journey_instance',
+        journeyId: 'client_sales',
+        journeyInstanceId: 'journey_client_sales',
+        denominator: 'new_leads',
+        evidenceRefs: [],
+      },
+      {
+        nodeId: 'node_success_11111111',
+        type: 'journey_event',
+        journeyId: 'client_sales',
+        journeyInstanceId: 'journey_client_sales',
+        classification: 'OBSERVED',
+        stage: 'converted',
+        eventTime: '2026-07-06T00:00:00Z',
+        capturedAt: '2026-07-07T00:00:00Z',
+        provenance: { completeness: 'COMPLETE' },
+        evidenceRefs: [E1],
+      },
+      {
+        nodeId: 'node_metric_from_11111111',
+        type: 'journey_event',
+        journeyId: 'client_sales',
+        journeyInstanceId: 'journey_client_sales',
+        subjectRef: 'psn_11111111111111111111111111111111',
+        cohortInstanceRef: 'cohort_metric_11111111',
+        classification: 'OBSERVED',
+        stage: 'lead_created',
+        eventTime: '2026-07-07T00:00:00Z',
+        capturedAt: '2026-07-07T01:00:00Z',
+        provenance: { completeness: 'COMPLETE' },
+        evidenceRefs: [E1],
+      },
+      ...Array.from({ length: 4 }, (_, index) => ({
+        nodeId: `node_${String(index + 1).padStart(16, '0')}`,
+        type: 'workflow_execution',
+        journeyId: 'client_sales',
+        journeyInstanceId: 'journey_client_sales',
+        cohortInstanceRef: 'cohort_direct_failure',
+        classification: 'OBSERVED',
+        ...(index === 3 ? { stage: 'execution_failure' } : {}),
+        eventTime: '2026-07-06T00:00:00Z',
+        capturedAt: '2026-07-07T00:00:00Z',
+        provenance: { completeness: 'COMPLETE' },
+        evidenceRefs: [E1],
+      })),
+    ],
+    edges: [
+      edge(1, 'configured_to_trigger'),
+      edge(2, 'enrolled_in'),
+      edge(3, 'execution_emitted'),
+      ...[
+        'node_success_11111111',
+        'node_0000000000000001',
+        'node_0000000000000002',
+        'node_0000000000000003',
+        'node_0000000000000004',
+      ].map((toNodeId, index) => ({
+        edgeId: `edge_identity_${String(index + 1).padStart(8, '0')}`,
+        type: 'identity_exact',
+        fromNodeId: 'journey_1111111111111111',
+        toNodeId,
+        eventTime: '2026-07-07T00:00:00Z',
+        capturedAt: '2026-07-07T01:00:00Z',
+        evidenceRefs: [E1],
+        joinMethod: 'native_id',
+        joinConfidence: 'exact',
+      })),
+      {
+        edgeId: 'edge_metric_1111111111',
+        type: 'identity_exact',
+        fromNodeId: 'journey_1111111111111111',
+        toNodeId: 'node_metric_from_11111111',
+        eventTime: '2026-07-07T00:00:00Z',
+        capturedAt: '2026-07-07T01:00:00Z',
+        evidenceRefs: [E1],
+        joinMethod: 'native_id',
+        joinConfidence: 'exact',
+      },
+    ],
+    conflicts: [],
+    unresolvedJoins: [],
+  });
+  const metricId = 'engagement_to_booking';
+  const metricContracts = deepFreeze({
+    profileId: 'client',
+    version: '1.0.0',
+    edges: [{
+      edgeId: metricId,
+      journeyId: 'client_sales',
+      journeyInstanceId: 'journey_client_sales',
+      fromStage: 'lead_created',
+      toStage: 'booked',
+      eligibilityRule: { minimumSample: 1 },
+      fromEventFields: [],
+      toEventFields: [],
+      allowedLag: { amount: 1, unit: 'days' },
+      maturityRule: {},
+      dispositions: ['booked', 'not_booked', 'unknown'],
+      reentryRule: 'new_journey_instance',
+      outcomeRule: {},
+      required: true,
+      nativeMapping: 'MAPPED',
+    }],
+  });
+  const windows = deepFreeze({
+    cutoff: '2026-07-20T00:00:00Z',
+    matureAsOf: '2026-07-13T00:00:00Z',
+    currentClosedWeek: {
+      start: '2026-07-06T00:00:00+00:00[UTC]',
+      end: '2026-07-13T00:00:00+00:00[UTC]',
+    },
+    previousClosedWeek: {
+      start: '2026-06-29T00:00:00+00:00[UTC]',
+      end: '2026-07-06T00:00:00+00:00[UTC]',
+    },
+    trailing28Days: {
+      start: '2026-06-15T00:00:00+00:00[UTC]',
+      end: '2026-07-13T00:00:00+00:00[UTC]',
+    },
+  });
+  const metrics = computeJourneyMetrics({
+    graph,
+    metricContracts,
+    windows,
+  });
+  deepFreeze(metrics);
+  if (metrics.metrics.currentClosedWeek[metricId].rankEligible !== true) {
+    throw new Error('TASK7_FIXTURE_METRIC_NOT_RANK_ELIGIBLE');
+  }
+  const coverage = deepFreeze({
+    state: 'complete_full',
+    comparableSubsets: [],
+    capabilityStates: [{ capabilityId: 'workflow_logs', state: 'COMPLETE' }],
+    limits: [],
+    edgeScopes: [{
+      metricId,
+      journeyId: 'client_sales',
+      journeyInstanceId: 'journey_client_sales',
+      symptomCode: 'OBSERVED_EDGE_LOSS',
+      localizedEdgeIds: graph.edges.map(({ edgeId }) => edgeId),
+      comparatorIds: ['node_success_11111111'],
+      mechanismClass: 'workflow_configuration_or_execution',
+      affectedObjectRefs: [O1],
+      predictionCode: 'EXECUTION_FAILURE_REPEATS',
+      supportingEvidenceRefs: [E1],
+      counterEvidenceRefs: [],
+      competingExplanations: [{ code: 'SOURCE_MIX', material: true, addressed: true }],
+      falsificationResults: MECHANISM_FAMILIES.map((family) => ({
+        family,
+        state: 'RULED_OUT',
+        evidenceRefs: [E1],
+        reasonCode: 'EXACT_NEGATIVE_CHECK',
+      })),
+      discriminatingTest: {
+        testId: 'test_1111111111111111',
+        strongestAlternativeCode: 'SOURCE_MIX',
+        expectedObservationCodes: ['EXACT_RUNTIME_EVENT_PRESENT'],
+        decisionRuleCodes: ['PRESENT_SUPPORTS_ABSENT_CHALLENGES'],
+      },
+      repeatSegmentIds: [],
+      critical: false,
+      criticalClass: null,
+      severityBand: 'HIGH',
+      commercialValue: { kind: 'BOUNDED', lower: 0, upper: 5 },
+      recoverabilityBand: 'HIGH',
+      recurrenceBand: 'WEEKLY',
+      timeToValueBand: 'SHORT',
+      reversibilityBand: 'HIGH',
+      effortBand: 'LOW',
+      dependencyBurden: 'LOW',
+      operationalRiskBand: 'LOW',
+      supplementalReadAllowlist: [{
+        descriptorId: 'supp_1111111111111111',
+        capabilityId: 'workflow_logs',
+        objectRef: O1,
+      }],
+      sealedPath: {
+        pathRef: 'path_1111111111111111',
+        relativePath: 'sealed/mechanism.json',
+      },
+    }],
+  });
+  const packet = buildMechanismPacket(nominateMechanisms({
+    graph,
+    metrics,
+    coverage,
+    maxCandidates: 5,
+  })[0]);
+  mechanismNonce += 1;
+  const requestInputs = deepFreeze({
+    run: {
+      runId: 'run_2026_W30',
+      cutoff: '2026-07-13T00:00:00Z',
+      reviewDeadline: '2026-07-14T00:00:00Z',
+      codeHash: H2,
+      nonceRef: `nonce_task8_${String(mechanismNonce).padStart(16, '0')}`,
+    },
+    packets: [packet],
+    rubric: {
+      rubricId: 'mechanism-review',
+      version: '1.0.0',
+      sealedPath: {
+        pathRef: 'path_rubric11111111',
+        relativePath: 'sealed/rubric.md',
+      },
+      content: 'Use only the sealed evidence.',
+    },
+    prompt: {
+      promptId: 'mechanism-prompt-v1',
+      content: 'Review the sealed mechanism packet.',
+    },
+    modelPolicy: {
+      policyId: 'mechanism-model-v1',
+      provider: 'fixture',
+      model: 'hermetic-reviewer',
+      maxOutputTokens: 1000,
+      allowedTools: [],
+    },
+  });
+  const request = createMechanismReviewRequest(requestInputs);
+  const response = deepFreeze({
+    schemaVersion: '1.0.0',
+    requestId: request.requestId,
+    requestHash: request.requestHash,
+    nonceRef: request.nonceRef,
+    runId: request.runId,
+    codeHash: request.codeHash,
+    packetSetHash: request.packetSetHash,
+    packetHashes: request.packets.map(({ packetId, packetHash }) => ({ packetId, packetHash })),
+    rubricHash: request.rubric.hash,
+    promptHash: request.promptHash,
+    modelPolicyHash: request.modelPolicyHash,
+    evidenceSetHash: request.evidenceSetHash,
+    reviewedAt: '2026-07-13T12:00:00Z',
+    reviewer: {
+      kind: 'model',
+      provider: 'fixture',
+      model: 'hermetic-reviewer',
+      reviewerRef: ACTOR,
+    },
+    usage: { outputTokens: 100 },
+    reviews: [{
+      packetId: packet.packetId,
+      verdict: 'SUPPORTS',
+      reasoningCodes: ['EVIDENCE_SUPPORTS_PREDICTION'],
+      supportingEvidenceRefs: [E1],
+      counterEvidenceRefs: [],
+      competingExplanationCodes: [],
+      uncertainty: 'LOW',
+      safetyFlags: [],
+      supplementalReadDescriptorIds: [],
+    }],
+  });
+  return {
+    graph,
+    metrics,
+    metricContracts,
+    windows,
+    packet,
+    mechanismReview: deepFreeze({
+      coverage,
+      maxCandidates: 5,
+      maxPromoted: 3,
+      packetBindings: [{
+        packetId: packet.packetId,
+        packetHash: packet.packetHash,
+        findingId,
+      }],
+      reviewEnvelopes: [{ requestInputs, response }],
+    }),
+  };
+}
+
 function basePublication(overrides = {}) {
   const finding = {
     findingId: 'finding_1111111111111111',
@@ -343,6 +654,19 @@ function basePublication(overrides = {}) {
       },
     }),
     findings: deepFreeze({ criticalIssues: [], promoted: [], backlog: [finding] }),
+    mechanismReview: deepFreeze({
+      coverage: {
+        state: 'complete_full',
+        comparableSubsets: [],
+        capabilityStates: [],
+        limits: [],
+        edgeScopes: [],
+      },
+      maxCandidates: 5,
+      maxPromoted: 3,
+      packetBindings: [],
+      reviewEnvelopes: [],
+    }),
     conversationReview: deepFreeze({ availability: 'NOT_REVIEWABLE', judgments: [] }),
     evidenceManifest: evidenceManifest(),
     solutionPacks: deepFreeze([]),
@@ -424,19 +748,70 @@ test('grom acquisition and onboarding render independent scorecards', () => {
     ...input.run,
     target: { operatingProfile: 'grom_internal', locationId: 'L1' },
   });
+  input.metricContracts = deepFreeze({
+    profileId: 'grom_internal',
+    version: '1.0.0',
+    edges: [
+      {
+        edgeId: 'enquiry_to_contacted',
+        journeyId: 'agency_new_business',
+        journeyInstanceId: 'journey_agency_new_business',
+      },
+      {
+        edgeId: 'won_to_internal_handoff',
+        journeyId: 'client_onboarding',
+        journeyInstanceId: 'journey_client_onboarding',
+      },
+    ],
+  });
   input.metrics = deepFreeze({
     metrics: {
       currentClosedWeek: {
-        acquisition_rate: { journeyInstanceId: 'journey_grom_acquisition_v1', denominator: 10, numerator: 4 },
-        onboarding_rate: { journeyInstanceId: 'journey_grom_onboarding_v1', denominator: 3, numerator: 2 },
+        enquiry_to_contacted: { denominator: 10, numerator: 4 },
+        won_to_internal_handoff: { denominator: 3, numerator: 2 },
       },
     },
-    cohorts: { currentClosedWeek: { journey_grom_acquisition_v1: 10, journey_grom_onboarding_v1: 3 } },
+    cohorts: {
+      currentClosedWeek: {
+        journey_agency_new_business: 10,
+        journey_client_onboarding: 3,
+      },
+    },
     currentStock: {},
   });
+  const baseFinding = input.findings.backlog[0];
+  input.findings = deepFreeze({
+    criticalIssues: [],
+    promoted: [],
+    backlog: [
+      {
+        ...baseFinding,
+        findingId: 'finding_agency_new_business',
+        fingerprint: 'fingerprint_agency_new_business',
+        journeyId: 'agency_new_business',
+        claims: [{
+          ...baseFinding.claims[0],
+          claimId: 'claim_agency_new_business',
+        }],
+      },
+      {
+        ...baseFinding,
+        findingId: 'finding_client_onboarding',
+        fingerprint: 'fingerprint_client_onboarding',
+        journeyId: 'client_onboarding',
+        claims: [{
+          ...baseFinding.claims[0],
+          claimId: 'claim_client_onboarding',
+        }],
+      },
+    ],
+  });
   const report = compilePublicationArtifacts(input).payloadArtifacts['REPORT.md'];
-  assert.match(report, /Acquisition scorecard[\s\S]*Denominator: 10/u);
+  assert.match(report, /Acquisition \/ new business scorecard[\s\S]*Denominator: 10/u);
   assert.match(report, /Onboarding scorecard[\s\S]*Denominator: 3/u);
+  assert.match(report, /Journey ID: journey_agency_new_business/u);
+  assert.match(report, /Journey ID: journey_client_onboarding/u);
+  assert.doesNotMatch(report, /journey_grom_(?:acquisition|onboarding)_v1/u);
   for (const label of [
     'commercial movement',
     'commercial findings',
@@ -444,10 +819,91 @@ test('grom acquisition and onboarding render independent scorecards', () => {
     'recommended action order',
     'finding movement',
   ]) {
-    assert.match(report, new RegExp(`Acquisition ${label}`, 'u'));
+    assert.match(report, new RegExp(`Acquisition / new business ${label}`, 'u'));
     assert.match(report, new RegExp(`Onboarding ${label}`, 'u'));
   }
+  assert.match(
+    report,
+    /Acquisition \/ new business verdict matrix[\s\S]*finding_agency_new_business[\s\S]*Onboarding verdict matrix/u,
+  );
+  assert.match(
+    report,
+    /Onboarding verdict matrix[\s\S]*finding_client_onboarding/u,
+  );
   assert.doesNotMatch(report, /Combined funnel/u);
+});
+
+test('grom findings require exactly one canonical catalog journey match', () => {
+  for (const findingIdentity of [
+    {
+      journeyId: 'unknown_journey',
+      journeyInstanceId: 'journey_unknown',
+    },
+    {
+      journeyId: 'agency_new_business',
+      journeyInstanceId: 'journey_client_onboarding',
+    },
+  ]) {
+    const input = basePublication();
+    input.run = deepFreeze({
+      ...input.run,
+      target: { operatingProfile: 'grom_internal', locationId: 'L1' },
+    });
+    input.findings = deepFreeze({
+      criticalIssues: [],
+      promoted: [],
+      backlog: [{
+        ...input.findings.backlog[0],
+        ...findingIdentity,
+      }],
+    });
+    assert.throws(
+      () => compilePublicationArtifacts(input),
+      (error) => error.code === 'REPORT_CLAIM_UNRESOLVED_GROM_FINDING_JOURNEY',
+      canonicalJson(findingIdentity),
+    );
+  }
+});
+
+test('publication rejects reduced self asserted mechanism reconstruction inputs', () => {
+  const input = basePublication();
+  input.mechanismReview = undefined;
+  const finding = deepFreeze({
+    ...input.findings.backlog[0],
+    promotionEligible: true,
+    mechanismConfidence: 'C2',
+    mechanismVerification: {
+      findingId: 'finding_1111111111111111',
+      packetId: 'packet_1111111111111111',
+      rootMechanismFingerprint: 'fingerprint_1111111111111111',
+      critical: false,
+      severityBand: 'HIGH',
+      mechanismConfidence: 'C2',
+      rankEligible: true,
+      coverageScope: 'account_wide',
+      affectedVolume: 10,
+      excessObservedLoss: 5,
+      commercialValue: { kind: 'BOUNDED', lower: 0, upper: 5 },
+      evidenceRefs: [E1],
+    },
+    expertReview: {
+      packetId: 'packet_1111111111111111',
+      verdict: 'SUPPORTS',
+      reviewHash: sha256({
+        packetId: 'packet_1111111111111111',
+        verdict: 'SUPPORTS',
+      }),
+    },
+  });
+  input.findings = deepFreeze({
+    criticalIssues: [],
+    promoted: [finding],
+    backlog: [],
+  });
+  assert.throws(
+    () => compilePublicationArtifacts(input),
+    (error) => error.code === 'VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS',
+  );
 });
 
 test('partial publication stays inside a complete comparable subset', () => {
@@ -858,6 +1314,7 @@ test('verifier independently recomputes all deterministic publication values', (
     currentObjects: proposalCurrentObjects,
     evidenceCutoff: '2026-07-20T00:00:00Z',
   });
+  const task7 = exactTask7MechanismReview(proposalPack.proposal.findingId);
   const promotedFinding = deepFreeze({
     findingId: proposalPack.proposal.findingId,
     fingerprint: proposalPack.proposal.findingFingerprint,
@@ -887,30 +1344,14 @@ test('verifier independently recomputes all deterministic publication values', (
     promotionEligible: true,
     mechanismConfidence: 'C2',
     critical: false,
-    mechanismVerification: {
-      findingId: proposalPack.proposal.findingId,
-      packetId: 'packet_1111111111111111',
-      rootMechanismFingerprint: proposalPack.proposal.findingFingerprint,
-      critical: false,
-      severityBand: 'HIGH',
-      mechanismConfidence: 'C2',
-      rankEligible: true,
-      coverageScope: 'account_wide',
-      affectedVolume: 10,
-      excessObservedLoss: 6,
-      commercialValue: { kind: 'BOUNDED', lower: 0, upper: 5 },
-      evidenceRefs: [E1],
-    },
-    expertReview: {
-      packetId: 'packet_1111111111111111',
-      verdict: 'SUPPORTS',
-      reviewHash: sha256({
-        packetId: 'packet_1111111111111111',
-        verdict: 'SUPPORTS',
-      }),
-    },
+    mechanismPacketId: task7.packet.packetId,
   });
   const proposalPublication = compilePublicationArtifacts(basePublication({
+    graph: task7.graph,
+    metricContracts: task7.metricContracts,
+    windows: task7.windows,
+    metrics: task7.metrics,
+    mechanismReview: task7.mechanismReview,
     findings: deepFreeze({
       criticalIssues: [],
       promoted: [promotedFinding],
@@ -965,16 +1406,27 @@ test('verifier independently recomputes all deterministic publication values', (
   const mechanismTamper = writeStaging(proposalPublication, ({ root }) => {
     const path = join(root, 'evidence/sanitized/mechanism-verification.json');
     const value = JSON.parse(readFileSync(path, 'utf8'));
-    value.reconstruction.priorityOrder = ['finding_tampered'];
-    const { commitment: _old, ...body } = value;
-    value.commitment = sha256(body);
-    writeFileSync(path, `${canonicalJson(value)}\n`);
+    const reduced = {
+      schemaVersion: '1.0.0',
+      mechanisms: [{
+        findingId: proposalPack.proposal.findingId,
+        packetId: value.packets[0].packetId,
+        mechanismConfidence: value.packets[0].mechanismConfidence,
+        priorityInputs: value.packets[0].priorityInputs,
+      }],
+      reconstruction: {
+        promotedIds: [proposalPack.proposal.findingId],
+        priorityOrder: [proposalPack.proposal.findingId],
+      },
+    };
+    reduced.commitment = sha256(reduced);
+    writeFileSync(path, `${canonicalJson(reduced)}\n`);
     rehashStaging(root);
   });
   try {
     assert.throws(
       () => verifyPublication({ publicationDir: mechanismTamper }),
-      (error) => error.code === 'VERIFIER_DETERMINISTIC_MISMATCH_MECHANISM_RECONSTRUCTION',
+      (error) => error.code === 'VERIFIER_INPUT_INVALID_TASK7_MECHANISM_INPUTS',
     );
   } finally {
     rmSync(mechanismTamper, { recursive: true, force: true });
@@ -1177,6 +1629,41 @@ test('normalized execution material is rejected by compiler and verifier', () =>
   }
 });
 
+test('shared execution scanner rejects normalized command surfaces and every code fence', () => {
+  for (const [key, value] of [
+    ['command', 'schedule_followup'],
+    ['method', 'follow_up'],
+    ['api', 'booking'],
+    ['url', 'booking_link'],
+    ['shell', 'plain_text'],
+  ]) {
+    assert.throws(
+      () => assertNoExecutionMaterial({ nested: { [key]: value } }),
+      (error) => error.code === 'PROPOSAL_EXECUTION_MATERIAL_FORBIDDEN_FIELD',
+      key,
+    );
+  }
+  for (const fenced of [
+    '```\nreply BOOK\n```',
+    '```json\n{"message":"reply BOOK"}\n```',
+    '```text\nThis is only copy.\n```',
+  ]) {
+    assert.throws(
+      () => assertNoExecutionMaterial({ notes: fenced }),
+      (error) => error.code === 'PROPOSAL_EXECUTION_MATERIAL_FORBIDDEN_VALUE',
+      fenced,
+    );
+  }
+  assert.equal(assertNoExecutionMaterial({
+    finalText: 'Reply BOOK and we will send the booking link.',
+    promptChanges: 'Ask one qualifying question before offering the calendar.',
+    messageOptions: [
+      'GET started today.',
+      'POST your update in the group.',
+    ],
+  }), true);
+});
+
 test('backlog deduplicates aliases by stable fingerprint', () => {
   const events = deepFreeze([
     {
@@ -1201,6 +1688,33 @@ test('backlog deduplicates aliases by stable fingerprint', () => {
   const projection = projectBacklog({ events });
   assert.equal(projection.json.entries.length, 1);
   assert.deepEqual(projection.json.entries[0].findingAliases, ['finding_old', 'finding_renamed']);
+});
+
+test('backlog rejects one finding id mapped to two fingerprints atomically', () => {
+  const events = deepFreeze([
+    {
+      eventId: 'event_alias_bijection_1',
+      type: 'finding_observed',
+      occurredAt: '2026-07-10T00:00:00Z',
+      findingId: 'finding_stable',
+      findingFingerprint: 'fingerprint_first',
+      evidenceRefs: [E1],
+      proposalHash: null,
+    },
+    {
+      eventId: 'event_alias_bijection_2',
+      type: 'finding_observed',
+      occurredAt: '2026-07-11T00:00:00Z',
+      findingId: 'finding_stable',
+      findingFingerprint: 'fingerprint_second',
+      evidenceRefs: [E2],
+      proposalHash: null,
+    },
+  ]);
+  assert.throws(
+    () => projectBacklog({ events }),
+    (error) => error.code === 'BACKLOG_EVENT_SEQUENCE_INVALID_ALIAS_BIJECTION',
+  );
 });
 
 test('verification boolean alone cannot advance implementation to VERIFIED', () => {
@@ -1239,4 +1753,58 @@ test('verification boolean alone cannot advance implementation to VERIFIED', () 
     () => projectBacklog({ events }),
     (error) => error.code === 'BACKLOG_EVENT_SEQUENCE_INVALID_REREAD_PROVENANCE',
   );
+});
+
+test('reread cutoff and capture must both be strictly after implementation', () => {
+  const base = [
+    {
+      eventId: 'event_reread_time_1',
+      type: 'finding_observed',
+      occurredAt: '2026-07-10T00:00:00Z',
+      findingId: 'finding_1',
+      findingFingerprint: 'fingerprint_1',
+      evidenceRefs: [E1],
+      proposalHash: H,
+    },
+    {
+      eventId: 'event_reread_time_2',
+      type: 'implementation_receipt',
+      occurredAt: '2026-07-11T00:00:00Z',
+      findingId: 'finding_1',
+      solutionId: 'solution_1',
+      proposalHash: H,
+      deviations: [],
+    },
+  ];
+  for (const [index, [capturedAt, evidenceCutoff]] of [
+    ['2026-07-11T00:00:00Z', '2026-07-12T00:00:00Z'],
+    ['2026-07-12T00:00:00Z', '2026-07-11T00:00:00Z'],
+    ['2026-07-12T00:00:00Z', '2026-07-10T23:59:59Z'],
+  ].entries()) {
+    const event = {
+      eventId: `event_reread_time_${index + 3}`,
+      type: 'verification_result',
+      occurredAt: '2026-07-13T00:00:00Z',
+      findingId: 'finding_1',
+      solutionId: 'solution_1',
+      proposalHash: H,
+      result: 'PASS',
+      evidenceRefs: [E2],
+      rereadReceipt: {
+        receiptId: 'reread_strict_time',
+        source: 'internal_ghl',
+        capturedAt,
+        evidenceCutoff,
+        payloadHash: H2,
+        proposalHash: H,
+        evidenceRefs: [E2],
+        independent: true,
+      },
+    };
+    assert.throws(
+      () => projectBacklog({ events: deepFreeze([...base, event]) }),
+      (error) => error.code === 'BACKLOG_EVENT_SEQUENCE_INVALID_REREAD_PROVENANCE',
+      `${capturedAt}/${evidenceCutoff}`,
+    );
+  }
 });

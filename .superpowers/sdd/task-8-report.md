@@ -114,3 +114,65 @@ Hardening GREEN:
 
 - Focused publication and weekly-memory tests: 39/39 passed
 - Full runtime suite: 190/190 passed
+
+## Second independent-review hardening pass
+
+Base: `898e6e05294002735eca4ab02ba606597b292ee6`.
+
+RED command:
+`node --test skills/ghl-account-audit/tests/publication.test.mjs skills/ghl-account-audit/tests/weekly-memory.test.mjs`
+
+- Node: `v24.13.0`
+- Exit code: `1`
+- Tests: 44
+- Passed: 37
+- Failed: 7
+- The expected failures proved invented Grom journey IDs and grouping, the
+  reduced self-asserted mechanism seal, alias reuse across fingerprints,
+  non-strict reread timing, normalized command and code-fence bypasses, the
+  pre-rename user seam, and missing final-target verification.
+
+Second-pass changes:
+
+- Grom reporting now loads the checked-in `grom_internal` profile and metric
+  catalog. It uses `journey_agency_new_business` and
+  `journey_client_onboarding`, maps KPIs by catalog edge ID, and splits the
+  actual new-business and onboarding scorecards, findings, verdicts, action
+  order, and movement. Every Grom finding must resolve to exactly one canonical
+  journey; zero or multiple matches fail closed.
+- The reduced mechanism reconstruction function was deleted. Publication and
+  closed-directory verification now replay Task 7's primary graph, metrics,
+  exact coverage, exact review request inputs and response, packet hashes, and
+  finding bindings through `nominateMechanisms`, `buildMechanismPacket`,
+  `replayMechanismReview`, and `reconcileExpertReviews`.
+- One finding ID cannot be assigned to two fingerprints. Multiple finding IDs
+  can remain aliases of one fingerprint, with immutable history.
+- Independent reread `capturedAt` and `evidenceCutoff` must both be strictly
+  later than the implementation receipt.
+- The shared compiler/verifier scanner recursively rejects normalized
+  `command`, `method`, `api`, `url`, and `shell` fields and every fenced code
+  block while retaining ordinary copy and message content, including ordinary
+  sentences beginning with `GET` or `POST`.
+- The publisher retains the staging root descriptor from creation, binds its
+  device and inode, reopens every path component with no-follow checks, binds
+  exact manifest, attestation, and payload bytes, removes the pre-rename seam,
+  and immediately verifies the final inode and complete bytes after rename.
+  Integrity failures quarantine the exact final entry and write no projection.
+
+Filesystem contract:
+
+- Node 24 exposes pathname `renameSync`, `O_NOFOLLOW`, `O_DIRECTORY`, and
+  descriptor `fstat`/`fchmod`, but not `openat`, `fstatat`, `renameat`, or
+  `renameat2`.
+- On the verification host, both `/dev/fd/<directory-fd>/child` and
+  `/proc/self/fd/<directory-fd>/child` returned `ENOENT`.
+- The implemented contract is therefore accurately described as pinned-inode,
+  no-follow pathname traversal with immediate post-rename verification. It
+  does not claim unavailable descriptor-relative or atomic source-inode rename
+  semantics.
+
+Second-pass GREEN:
+
+- Focused publication and weekly-memory tests: 47/47 passed
+- Full runtime suite: 198/198 passed
+- Build: passed

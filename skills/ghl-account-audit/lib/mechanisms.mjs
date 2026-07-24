@@ -1165,7 +1165,7 @@ function validateSerializedRequest(request) {
   if (sha256(body) !== requestHash) throw codedError('MECHANISM_REVIEW_MISMATCH');
 }
 
-export function createMechanismReviewRequest({
+function buildMechanismReviewRequest({
   run,
   packets,
   rubric,
@@ -1251,10 +1251,7 @@ export function createMechanismReviewRequest({
     modelPolicyHash,
   };
   const request = deepFreeze({ ...body, requestHash: sha256(body) });
-  if (NONCE_STATES.has(request.nonceRef) || REQUEST_STATES.has(request.requestId)) {
-    throw codedError('MECHANISM_REVIEW_REPLAYED');
-  }
-  REQUEST_STATES.set(request.requestId, {
+  const state = {
     requestHash: request.requestHash,
     nonceRef: request.nonceRef,
     consumed: false,
@@ -1267,7 +1264,16 @@ export function createMechanismReviewRequest({
       packet.packetId,
       new Set(packet.supplementalReadDescriptorIds),
     ])),
-  });
+  };
+  return { request, state };
+}
+
+export function createMechanismReviewRequest(inputs) {
+  const { request, state } = buildMechanismReviewRequest(inputs);
+  if (NONCE_STATES.has(request.nonceRef) || REQUEST_STATES.has(request.requestId)) {
+    throw codedError('MECHANISM_REVIEW_REPLAYED');
+  }
+  REQUEST_STATES.set(request.requestId, state);
   NONCE_STATES.set(request.nonceRef, request.requestId);
   return request;
 }
@@ -1333,8 +1339,7 @@ function validateReview(review, request, state) {
   }
 }
 
-export function ingestMechanismReview({ request, response }) {
-  const state = requestState(request);
+function validateMechanismReviewResponse({ request, response, state }) {
   if (state.consumed) throw codedError('MECHANISM_REVIEW_REPLAYED');
   if (!exactKeys(response, RESPONSE_KEYS)) {
     throw codedError('MECHANISM_REVIEW_UNSAFE_OUTPUT');
@@ -1391,6 +1396,26 @@ export function ingestMechanismReview({ request, response }) {
     reviews: sha256(result.reviews),
   });
   return result;
+}
+
+export function ingestMechanismReview({ request, response }) {
+  return validateMechanismReviewResponse({
+    request,
+    response,
+    state: requestState(request),
+  });
+}
+
+export function replayMechanismReview({ requestInputs, response }) {
+  try {
+    assertDeepFrozen(requestInputs, 'MECHANISM_REVIEW_REQUEST_INVALID');
+    assertDeepFrozen(response, 'MECHANISM_REVIEW_UNSAFE_OUTPUT');
+    const { request, state } = buildMechanismReviewRequest(requestInputs);
+    return validateMechanismReviewResponse({ request, response, state });
+  } catch (error) {
+    if (typeof error?.code === 'string' && error.code.startsWith('MECHANISM_')) throw error;
+    throw codedError('MECHANISM_REVIEW_MISMATCH');
+  }
 }
 
 function validatedReviewMap(reviews, packets) {
@@ -1467,102 +1492,5 @@ export function reconcileExpertReviews({
     criticalIssues: [...criticalIssues],
     promoted,
     backlog: backlog.sort(compareCandidates),
-  });
-}
-
-export function reconstructSealedMechanisms({
-  mechanisms,
-  expertReviews,
-  maxPromoted = 3,
-}) {
-  if (
-    !Array.isArray(mechanisms)
-    || !Array.isArray(expertReviews)
-    || !Number.isInteger(maxPromoted)
-    || maxPromoted < 0
-    || maxPromoted > 3
-  ) throw codedError('MECHANISM_INPUT_INVALID', TypeError);
-  assertDeepFrozen(mechanisms);
-  assertDeepFrozen(expertReviews);
-  const byPacket = new Map();
-  for (const mechanism of mechanisms) {
-    const required = [
-      'findingId', 'packetId', 'rootMechanismFingerprint', 'critical',
-      'severityBand', 'mechanismConfidence', 'rankEligible', 'coverageScope',
-      'affectedVolume', 'excessObservedLoss', 'commercialValue', 'evidenceRefs',
-    ];
-    if (
-      !exactKeys(mechanism, required)
-      || byPacket.has(mechanism.packetId)
-      || typeof mechanism.findingId !== 'string'
-      || !OPAQUE.test(mechanism.packetId)
-      || !OPAQUE.test(mechanism.rootMechanismFingerprint)
-      || typeof mechanism.critical !== 'boolean'
-      || !['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].includes(mechanism.severityBand)
-      || !CONFIDENCE.has(mechanism.mechanismConfidence)
-      || typeof mechanism.rankEligible !== 'boolean'
-      || !['account_wide', 'comparable_subset', 'unranked_partial'].includes(mechanism.coverageScope)
-      || !plain(mechanism.commercialValue)
-      || !['MEASURED', 'BOUNDED', 'UNKNOWN'].includes(mechanism.commercialValue.kind)
-    ) throw codedError('MECHANISM_INPUT_INVALID', TypeError);
-    strings(mechanism.evidenceRefs, EVIDENCE);
-    byPacket.set(mechanism.packetId, mechanism);
-  }
-  const reviews = new Map();
-  for (const review of expertReviews) {
-    if (
-      !plain(review)
-      || !Object.hasOwn(review, 'reviewHash')
-      || reviews.has(review.packetId)
-    ) throw codedError('MECHANISM_REVIEW_MISMATCH');
-    const { reviewHash, ...body } = review;
-    if (
-      reviewHash !== sha256(body)
-      || !byPacket.has(review.packetId)
-      || !VERDICTS.has(review.verdict)
-    ) throw codedError('MECHANISM_REVIEW_MISMATCH');
-    reviews.set(review.packetId, review);
-  }
-  const severity = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3, UNKNOWN: 4 };
-  const confidence = { C3: 0, C2: 1, C1: 2, C0: 3 };
-  const ordered = [...mechanisms].sort((left, right) => (
-    Number(right.critical) - Number(left.critical)
-      || severity[left.severityBand] - severity[right.severityBand]
-      || confidence[left.mechanismConfidence] - confidence[right.mechanismConfidence]
-      || numericDescending(left.affectedVolume, right.affectedVolume)
-      || numericDescending(left.excessObservedLoss, right.excessObservedLoss)
-      || left.rootMechanismFingerprint.localeCompare(right.rootMechanismFingerprint)
-      || left.packetId.localeCompare(right.packetId)
-  ));
-  const criticalIssues = ordered.filter((mechanism) => (
-    mechanism.critical
-      && mechanism.mechanismConfidence !== 'C0'
-      && mechanism.evidenceRefs.length > 0
-  ));
-  const roots = new Map();
-  const backlog = [];
-  for (const mechanism of ordered.filter(({ critical }) => !critical)) {
-    const review = reviews.get(mechanism.packetId);
-    const eligible = mechanism.rankEligible
-      && ['C2', 'C3'].includes(mechanism.mechanismConfidence)
-      && mechanism.coverageScope !== 'unranked_partial'
-      && mechanism.evidenceRefs.length > 0
-      && review?.verdict === 'SUPPORTS';
-    if (!eligible || roots.has(mechanism.rootMechanismFingerprint)) {
-      backlog.push(mechanism);
-      continue;
-    }
-    roots.set(mechanism.rootMechanismFingerprint, mechanism);
-  }
-  const promoted = [...roots.values()].slice(0, maxPromoted);
-  const promotedIds = new Set(promoted.map(({ packetId }) => packetId));
-  for (const mechanism of roots.values()) {
-    if (!promotedIds.has(mechanism.packetId)) backlog.push(mechanism);
-  }
-  return deepFreeze({
-    criticalIssueIds: criticalIssues.map(({ findingId }) => findingId),
-    promotedIds: promoted.map(({ findingId }) => findingId),
-    backlogIds: backlog.map(({ findingId }) => findingId),
-    priorityOrder: [...criticalIssues, ...promoted].map(({ findingId }) => findingId),
   });
 }
