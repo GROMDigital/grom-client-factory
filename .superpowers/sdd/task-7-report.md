@@ -121,3 +121,51 @@ Overlapping roots are selected once and no impact values are summed.
 Same-process nonce and validated-review state are intentionally narrow Task 7
 primitives. Task 9 still owns durable checkpoint transitions and atomic
 persisted nonce consumption.
+
+## Independent-review hardening
+
+Independent review identified five proof and promotion gaps. Five adversarial
+tests were added before the fixes.
+
+Hardening RED:
+
+- Command:
+  `node --test skills/ghl-account-audit/tests/mechanism-investigation.test.mjs`
+- Exit code: `1`
+- Tests: `17`
+- Pass: `12`
+- Fail: `5`
+- Each new test failed against exactly one review finding:
+  disconnected or asserted proof, promotion without review, self-rehashed
+  inconsistent packets, caller-only comparator discovery, and contradictory
+  full coverage.
+
+Hardening GREEN:
+
+- Focused tests: `17` passed, `0` failed
+- Full tests: `165` passed, `0` failed
+- Build: pass
+- Mechanism library syntax: pass
+- Review workflow syntax: pass
+- Rubric content and vocabulary gates: pass
+- `git diff --check`: pass
+
+The hardened confidence contract now requires a connected exact
+configuration-to-enrollment-to-execution chain for C3. Supporting evidence
+must bind every chain edge, the metric and runtime evidence must observe the
+predicted loss, effective definition hashes must match, and relevant conflicts
+or unresolved joins cap confidence. C2 now requires repeated exact runtime
+patterns across at least two graph-observed complete segments. Caller-provided
+segment IDs cannot create proof.
+
+Commercial promotion now requires a validated SUPPORTS review. Missing,
+challenging, or inconclusive reviews route the packet to backlog. Packet
+validation reconstructs its strict canonical body and recomputes confidence,
+review eligibility, and promotion eligibility from sealed packet facts. A
+self-rehashed packet with inconsistent deterministic fields is rejected.
+
+Successful comparators are now discovered from complete observed journeys in
+the graph, with caller hints used only for deterministic tie-breaking.
+Contradictory `complete_full` coverage with a missing or partial capability is
+capped to partial scope, cannot claim account-wide value, cannot retain C3,
+and cannot be promoted.

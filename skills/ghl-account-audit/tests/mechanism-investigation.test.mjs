@@ -94,6 +94,49 @@ function graphFor({
   });
 }
 
+function graphForRepeatedSegments() {
+  const graph = structuredClone(graphFor({ completeChain: false }));
+  graph.edges.push({
+    edgeId: 'edge_0000000000000004',
+    type: 'execution_emitted',
+    fromNodeId: 'node_0000000000000004',
+    toNodeId: 'node_0000000000000005',
+    eventTime: '2026-04-01T00:00:00Z',
+    capturedAt: '2026-04-02T00:00:00Z',
+    evidenceRefs: ['ev_0000000000000004'],
+    joinMethod: 'native_id',
+    joinConfidence: 'exact',
+    workflowDefinitionHash: H('a'),
+  });
+  graph.nodes.push(
+    {
+      nodeId: 'node_0000000000000002',
+      type: 'workflow_execution',
+      journeyId: 'journey_client_sales',
+      journeyInstanceId: 'journey_client_sales',
+      cohortInstanceRef: 'cohort_aaaaaaaaaaaaaaaa',
+      classification: 'OBSERVED',
+      eventTime: '2026-04-01T00:00:00Z',
+      capturedAt: '2026-04-02T00:00:00Z',
+      provenance: { completeness: 'COMPLETE' },
+      evidenceRefs: ['ev_0000000000000001'],
+    },
+    {
+      nodeId: 'node_0000000000000005',
+      type: 'workflow_execution',
+      journeyId: 'journey_client_sales',
+      journeyInstanceId: 'journey_client_sales',
+      cohortInstanceRef: 'cohort_bbbbbbbbbbbbbbbb',
+      classification: 'OBSERVED',
+      eventTime: '2026-04-01T00:00:00Z',
+      capturedAt: '2026-04-02T00:00:00Z',
+      provenance: { completeness: 'COMPLETE' },
+      evidenceRefs: ['ev_0000000000000004'],
+    },
+  );
+  return freeze(graph);
+}
+
 function falsification(overrides = {}) {
   return FAMILIES.map((family, index) => ({
     family,
@@ -121,7 +164,11 @@ function edgeScope(metricId, overrides = {}) {
     mechanismClass: overrides.mechanismClass ?? 'workflow_configuration_or_execution',
     affectedObjectRefs: overrides.affectedObjectRefs ?? ['obj_1111111111111111'],
     predictionCode: overrides.predictionCode ?? 'EXECUTION_FAILURE_REPEATS',
-    supportingEvidenceRefs: overrides.supportingEvidenceRefs ?? ['ev_0000000000000003'],
+    supportingEvidenceRefs: overrides.supportingEvidenceRefs ?? [
+      'ev_0000000000000001',
+      'ev_0000000000000002',
+      'ev_0000000000000003',
+    ],
     counterEvidenceRefs: overrides.counterEvidenceRefs ?? [],
     competingExplanations: overrides.competingExplanations ?? [
       { code: 'SOURCE_MIX', material: true, addressed: true },
@@ -288,11 +335,33 @@ function responseFor(request, overrides = {}) {
   };
 }
 
+function validatedReviewSets(packetList) {
+  const reviews = [];
+  for (let index = 0; index < packetList.length; index += 3) {
+    const request = createMechanismReviewRequest(
+      reviewInputs(packetList.slice(index, index + 3)),
+    );
+    reviews.push(ingestMechanismReview({
+      request,
+      response: responseFor(request),
+    }));
+  }
+  return reviews;
+}
+
 test('confidence ladder requires exact historical configuration and runtime proof', () => {
   assert.equal(candidates()[0].mechanismConfidence, 'C3');
   assert.equal(candidates({
-    graph: graphFor({ completeChain: false }),
+    graph: graphForRepeatedSegments(),
     scopes: [edgeScope('edge', {
+      localizedEdgeIds: [
+        'edge_0000000000000001',
+        'edge_0000000000000004',
+      ],
+      supportingEvidenceRefs: [
+        'ev_0000000000000001',
+        'ev_0000000000000004',
+      ],
       repeatSegmentIds: ['segment_aaaaaaaa', 'segment_bbbbbbbb'],
     })],
   })[0].mechanismConfidence, 'C2');
@@ -401,7 +470,7 @@ test('root fingerprint consumes one commercial slot while critical issues bypass
   ));
   const result = reconcileExpertReviews({
     packets: [...sameRoot, ...distinct, ...critical],
-    reviews: [],
+    reviews: validatedReviewSets([...sameRoot, ...distinct]),
     maxPromoted: 3,
   });
   assert.equal(result.promoted.length, 3);
@@ -582,4 +651,99 @@ test('prompt injection remains evidence data', () => {
     reviews: [transition.review],
   });
   assert.deepEqual(reconciled.promoted[0].denominator, packet.denominator);
+});
+
+test('confidence proof is graph connected evidence bound and conflict free', () => {
+  const disconnected = structuredClone(graphFor());
+  disconnected.edges[1].fromNodeId = 'node_disconnected_11111111';
+  freeze(disconnected);
+  assert.notEqual(candidates({ graph: disconnected })[0].mechanismConfidence, 'C3');
+
+  const conflicted = structuredClone(graphFor());
+  conflicted.conflicts.push({
+    conflictId: 'conflict_1111111111111111',
+    type: 'runtime_evidence_conflict',
+    nodeIds: [conflicted.edges[2].toNodeId],
+    evidenceRefs: [...conflicted.edges[2].evidenceRefs],
+  });
+  freeze(conflicted);
+  assert.notEqual(candidates({ graph: conflicted })[0].mechanismConfidence, 'C3');
+
+  const unresolved = structuredClone(graphFor());
+  unresolved.unresolvedJoins.push({
+    unresolvedId: 'unresolved_1111111111111111',
+    reason: 'WORKFLOW_EFFECTIVE_DEFINITION_NOT_CAPTURED',
+    classification: 'UNKNOWN',
+    recordNodeId: unresolved.edges[1].toNodeId,
+    evidenceRefs: [...unresolved.edges[1].evidenceRefs],
+  });
+  freeze(unresolved);
+  assert.notEqual(candidates({ graph: unresolved })[0].mechanismConfidence, 'C3');
+
+  const unbound = candidates({
+    scopes: [edgeScope('unbound_refs', {
+      supportingEvidenceRefs: ['ev_0000000000000108'],
+    })],
+  })[0];
+  assert.notEqual(unbound.mechanismConfidence, 'C3');
+
+  const assertedRepeat = candidates({
+    graph: graphFor({ completeChain: false }),
+    scopes: [edgeScope('asserted_repeat', {
+      repeatSegmentIds: ['segment_aaaaaaaa', 'segment_bbbbbbbb'],
+    })],
+  })[0];
+  assert.notEqual(assertedRepeat.mechanismConfidence, 'C2');
+});
+
+test('commercial promotion requires a validated expert review', () => {
+  const packet = buildMechanismPacket(candidates()[0]);
+  const unresolved = reconcileExpertReviews({ packets: [packet], reviews: [] });
+  assert.equal(unresolved.promoted.length, 0);
+  assert.deepEqual(unresolved.backlog.map(({ packetId }) => packetId), [packet.packetId]);
+
+  const request = createMechanismReviewRequest(reviewInputs([packet]));
+  const validated = ingestMechanismReview({ request, response: responseFor(request) });
+  assert.deepEqual(
+    reconcileExpertReviews({ packets: [packet], reviews: [validated] })
+      .promoted.map(({ packetId }) => packetId),
+    [packet.packetId],
+  );
+});
+
+test('self rehashed forged packets fail deterministic cross field validation', () => {
+  const packet = buildMechanismPacket(candidates()[0]);
+  const forged = structuredClone(packet);
+  forged.mechanismConfidence = 'C0';
+  forged.promotionEligible = true;
+  forged.priorityInputs.mechanismConfidence = 'C0';
+  forged.priorityInputs.promotionEligibility = 'ELIGIBLE';
+  const { packetHash: ignored, ...body } = forged;
+  void ignored;
+  forged.packetHash = sha256(body);
+  freeze(forged);
+  assert.throws(
+    () => reconcileExpertReviews({ packets: [forged], reviews: [] }),
+    /MECHANISM_PACKET_INVALID/,
+  );
+});
+
+test('closest successful comparators are discovered from observed graph evidence', () => {
+  const candidate = candidates({
+    scopes: [edgeScope('discovered_comparator', { comparatorIds: [] })],
+  })[0];
+  assert.deepEqual(candidate.comparatorIds, ['node_success_11111111']);
+});
+
+test('inconsistent full coverage cannot create account wide C3 promotion', () => {
+  const inconsistent = structuredClone(inputs());
+  inconsistent.coverage.capabilityStates = [
+    { capabilityId: 'workflow_logs', state: 'MISSING' },
+  ];
+  freeze(inconsistent);
+  const candidate = nominateMechanisms(inconsistent)[0];
+  assert.notEqual(candidate.coverage.scope, 'account_wide');
+  assert.notEqual(candidate.mechanismConfidence, 'C3');
+  assert.equal(candidate.promotionEligible, false);
+  assert.ok(candidate.limitationCodes.includes('COVERAGE_STATE_INCONSISTENT'));
 });

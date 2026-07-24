@@ -150,6 +150,12 @@ function coverageContract(coverage) {
       || !['COMPLETE', 'PARTIAL', 'MISSING', 'NOT_APPLICABLE'].includes(capability.state)
     ) throw codedError('MECHANISM_INPUT_INVALID', TypeError);
   }
+  const inconsistent = coverage.state === 'complete_full'
+    && coverage.capabilityStates.some(({ state }) => ['PARTIAL', 'MISSING'].includes(state));
+  return {
+    effectiveState: inconsistent ? 'complete_partial' : coverage.state,
+    inconsistent,
+  };
 }
 
 function canonicalFalsification(values, overallCoverage) {
@@ -277,30 +283,148 @@ function exactOperationalEdge(edge) {
     && edge.evidenceRefs.length > 0;
 }
 
-function confidenceFor({
-  metric, scope, graph, falsificationResults, supportingEvidenceRefs,
+function relevantGraphDoubt(graph, edges, scope) {
+  const nodeIds = new Set(edges.flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId]));
+  const evidenceRefs = new Set(edges.flatMap(({ evidenceRefs: refs }) => refs ?? []));
+  const relevant = (item) => (
+    item.journeyInstanceId === scope.journeyInstanceId
+      || item.recordNodeId && nodeIds.has(item.recordNodeId)
+      || Array.isArray(item.nodeIds) && item.nodeIds.some((id) => nodeIds.has(id))
+      || Array.isArray(item.evidenceRefs)
+        && item.evidenceRefs.some((ref) => evidenceRefs.has(ref))
+  );
+  return graph.conflicts.some(relevant) || graph.unresolvedJoins.some(relevant);
+}
+
+function chainProof(edges, supportingRefs) {
+  const configured = edges.filter(({ type }) => type === 'configured_to_trigger');
+  const enrolled = edges.filter(({ type }) => type === 'enrolled_in');
+  const executed = edges.filter(({ type }) => type === 'execution_emitted');
+  for (const configuration of configured) {
+    for (const enrollment of enrolled) {
+      if (configuration.toNodeId !== enrollment.fromNodeId) continue;
+      for (const execution of executed) {
+        if (
+          enrollment.toNodeId !== execution.fromNodeId
+          || ![configuration, enrollment, execution].every(exactOperationalEdge)
+          || new Set([
+            configuration.workflowDefinitionHash,
+            enrollment.workflowDefinitionHash,
+            execution.workflowDefinitionHash,
+          ]).size !== 1
+          || ![configuration, enrollment, execution].every((edge) => (
+            edge.evidenceRefs.some((ref) => supportingRefs.has(ref))
+          ))
+        ) continue;
+        return [configuration, enrollment, execution];
+      }
+    }
+  }
+  return [];
+}
+
+function repeatedSegmentProof(graph, edges, supportingRefs) {
+  const segments = new Map();
+  for (const edge of edges.filter(({ type }) => type === 'execution_emitted')) {
+    if (!exactOperationalEdge(edge) || !edge.evidenceRefs.some((ref) => supportingRefs.has(ref))) {
+      continue;
+    }
+    const node = graph.nodes.find(({ nodeId }) => nodeId === edge.toNodeId);
+    if (
+      node?.classification !== 'OBSERVED'
+      || node.provenance?.completeness !== 'COMPLETE'
+      || !edge.evidenceRefs.some((ref) => (
+        supportingRefs.has(ref) && node.evidenceRefs?.includes(ref)
+      ))
+    ) continue;
+    const rawSegmentId = node.cohortInstanceRef
+      ?? node.opportunityNativeId
+      ?? node.projectNativeId
+      ?? node.subjectNativeId;
+    if (typeof rawSegmentId !== 'string' || rawSegmentId.length === 0) continue;
+    const segmentId = stable('segment', {
+      journeyInstanceId: node.journeyInstanceId,
+      rawSegmentId,
+    });
+    const current = segments.get(segmentId) ?? [];
+    current.push(edge);
+    segments.set(segmentId, current);
+  }
+  return [...segments].sort(([left], [right]) => left.localeCompare(right));
+}
+
+function confidenceProof({
+  metric,
+  scope,
+  graph,
+  falsificationResults,
+  supportingEvidenceRefs,
+  coverageConsistent,
 }) {
-  if (
-    metric.state !== 'OBSERVED'
-    || metric.denominator === null
-    || supportingEvidenceRefs.length === 0
-  ) return 'C0';
-  const unresolvedAlternative = scope.competingExplanations.some(({ material, addressed }) => (
-    material && !addressed
-  )) || falsificationResults.some(({ state }) => state === 'INCONCLUSIVE');
-  if (unresolvedAlternative) return 'C1';
+  const associationObserved = metric.state === 'OBSERVED'
+    && Number.isFinite(metric.denominator)
+    && metric.denominator > 0
+    && supportingEvidenceRefs.length > 0;
   const localized = new Set(scope.localizedEdgeIds);
   const edges = graph.edges.filter(({ edgeId }) => localized.has(edgeId));
-  const required = ['configured_to_trigger', 'enrolled_in', 'execution_emitted'];
-  const definitionHashes = new Set(edges.map(({ workflowDefinitionHash }) => workflowDefinitionHash));
+  const supportingRefs = new Set(supportingEvidenceRefs);
+  const directChain = chainProof(edges, supportingRefs);
+  const repeatedSegments = repeatedSegmentProof(graph, edges, supportingRefs);
+  const graphConflictFree = !relevantGraphDoubt(graph, edges, scope);
+  const predictedFailureObserved = associationObserved
+    && Number.isFinite(metric.numerator)
+    && metric.numerator < metric.denominator
+    && edges.filter(({ type }) => type === 'execution_emitted').some((edge) => (
+      edge.evidenceRefs.some((ref) => supportingRefs.has(ref))
+    ));
+  const supportingEvidenceBound = directChain.length === 3
+    || repeatedSegments.length >= 2;
+  const basis = {
+    version: 'mechanism-confidence-v1',
+    associationObserved,
+    directChainEdgeIds: directChain.map(({ edgeId }) => edgeId).sort(),
+    repeatedSegmentIds: repeatedSegments.map(([segmentId]) => segmentId).sort(),
+    proofEvidenceRefs: [...new Set([
+      ...directChain,
+      ...repeatedSegments.flatMap(([, segmentEdges]) => segmentEdges),
+    ].flatMap(({ evidenceRefs: refs }) => refs)
+      .filter((ref) => supportingRefs.has(ref)))].sort(),
+    predictedFailureObserved,
+    supportingEvidenceBound,
+    graphConflictFree,
+    coverageConsistent,
+  };
+  return {
+    basis,
+    confidence: confidenceFromFacts({
+      basis,
+      falsificationResults,
+      competingExplanations: scope.competingExplanations,
+    }),
+  };
+}
+
+function confidenceFromFacts({ basis, falsificationResults, competingExplanations }) {
+  if (!basis.associationObserved) return 'C0';
+  const unresolvedAlternative = competingExplanations.some(({ material, addressed }) => (
+    material && !addressed
+  )) || falsificationResults.some(({ state }) => state === 'INCONCLUSIVE');
   if (
-    required.every((type) => edges.some((edge) => edge.type === type && exactOperationalEdge(edge)))
-    && definitionHashes.size === 1
-    && !definitionHashes.has(null)
+    unresolvedAlternative
+    || !basis.graphConflictFree
+    || !basis.coverageConsistent
+  ) return 'C1';
+  if (
+    basis.directChainEdgeIds.length === 3
+    && basis.predictedFailureObserved
+    && basis.supportingEvidenceBound
+    && basis.proofEvidenceRefs.length > 0
   ) return 'C3';
   if (
-    new Set(scope.repeatSegmentIds).size >= 2
-    && edges.some(exactOperationalEdge)
+    basis.repeatedSegmentIds.length >= 2
+    && basis.predictedFailureObserved
+    && basis.supportingEvidenceBound
+    && basis.proofEvidenceRefs.length >= 2
   ) return 'C2';
   return 'C1';
 }
@@ -323,13 +447,16 @@ function denominatorFor(graph, scope, metric) {
 function validComparators(graph, scope) {
   const requested = new Set(scope.comparatorIds);
   return graph.nodes.filter((node) => (
-    requested.has(node.nodeId)
-      && node.journeyInstanceId === scope.journeyInstanceId
+    node.journeyInstanceId === scope.journeyInstanceId
       && ['converted', 'completed', 'collected_revenue', 'campaign_launch_ready']
         .includes(node.stage ?? node.milestone)
       && node.classification === 'OBSERVED'
       && node.provenance?.completeness === 'COMPLETE'
-  )).map(({ nodeId }) => nodeId).sort();
+  )).sort((left, right) => (
+    Number(!requested.has(left.nodeId)) - Number(!requested.has(right.nodeId))
+      || (Date.parse(right.eventTime ?? '') || 0) - (Date.parse(left.eventTime ?? '') || 0)
+      || left.nodeId.localeCompare(right.nodeId)
+  )).slice(0, 3).map(({ nodeId }) => nodeId).sort();
 }
 
 function eligibleEvidence(graph) {
@@ -339,8 +466,8 @@ function eligibleEvidence(graph) {
   )).flatMap(({ evidenceRefs }) => evidenceRefs ?? []));
 }
 
-function coverageFor(coverage, scope) {
-  if (coverage.state === 'complete_full') {
+function coverageFor(coverage, scope, effectiveState) {
+  if (effectiveState === 'complete_full') {
     return { state: 'complete_full', scope: 'account_wide', subsetId: null };
   }
   const subset = coverage.comparableSubsets.find((candidate) => (
@@ -481,7 +608,7 @@ export function nominateMechanisms({
   assertDeepFrozen(graph);
   assertDeepFrozen(metrics);
   assertDeepFrozen(coverage);
-  coverageContract(coverage);
+  const coverageState = coverageContract(coverage);
 
   const candidates = [];
   const seenMetricIds = new Set();
@@ -502,7 +629,7 @@ export function nominateMechanisms({
     let rejectedEvidence = false;
     const falsificationResults = canonicalFalsification(
       scope.falsificationResults,
-      coverage.state,
+      coverageState.effectiveState,
     ).map((result) => {
       const evidenceRefs = result.evidenceRefs.filter((ref) => eligibleEvidenceRefs.has(ref));
       if (evidenceRefs.length === result.evidenceRefs.length) return result;
@@ -522,10 +649,20 @@ export function nominateMechanisms({
     const counterEvidenceRefs = declaredCounter.filter((ref) => eligibleEvidenceRefs.has(ref));
     rejectedEvidence ||= supportingEvidenceRefs.length !== declaredSupporting.length
       || counterEvidenceRefs.length !== declaredCounter.length;
-    const mechanismConfidence = confidenceFor({
-      metric, scope, graph, falsificationResults, supportingEvidenceRefs,
+    const confidence = confidenceProof({
+      metric,
+      scope,
+      graph,
+      falsificationResults,
+      supportingEvidenceRefs,
+      coverageConsistent: !coverageState.inconsistent,
     });
-    const candidateCoverage = coverageFor(coverage, scope);
+    const mechanismConfidence = confidence.confidence;
+    const candidateCoverage = coverageFor(
+      coverage,
+      scope,
+      coverageState.effectiveState,
+    );
     const comparators = validComparators(graph, scope);
     const affectedObjectRefs = strings(scope.affectedObjectRefs);
     const targetRef = graph.nodes.find((node) => (
@@ -580,6 +717,7 @@ export function nominateMechanisms({
       scope,
     });
     if (rejectedEvidence) limitation.push('EVIDENCE_INELIGIBLE');
+    if (coverageState.inconsistent) limitation.push('COVERAGE_STATE_INCONSISTENT');
     const candidateMechanism = {
       mechanismClass: scope.mechanismClass,
       affectedObjectRefs,
@@ -614,6 +752,12 @@ export function nominateMechanisms({
       },
       coverage: candidateCoverage,
       mechanismConfidence,
+      confidenceBasis: confidence.basis,
+      eligibility: {
+        rankEligible: metric.rankEligible,
+        threshold: metric.threshold ?? null,
+        eligibleAffectedVolume: metric.eligible ?? null,
+      },
       critical,
       criticalClass: critical ? scope.criticalClass : null,
       priorityInputs,
@@ -635,13 +779,146 @@ function packetBody(candidate) {
     'localizedEdgeIds', 'comparatorIds', 'candidateMechanism', 'prediction',
     'supportingEvidenceRefs', 'counterEvidenceRefs', 'competingExplanations',
     'falsificationResults', 'discriminatingTest', 'coverage',
-    'mechanismConfidence', 'critical', 'criticalClass', 'priorityInputs',
+    'mechanismConfidence', 'confidenceBasis', 'eligibility', 'critical',
+    'criticalClass', 'priorityInputs',
     'reviewEligible', 'promotionEligible', 'limitationCodes',
     'supplementalReadAllowlist', 'sealedPath',
   ];
   if (!exactKeys(candidate, keys) || !CONFIDENCE.has(candidate.mechanismConfidence)) {
     throw codedError('MECHANISM_PACKET_INVALID', TypeError);
   }
+  const basisKeys = [
+    'version', 'associationObserved', 'directChainEdgeIds', 'repeatedSegmentIds',
+    'proofEvidenceRefs', 'predictedFailureObserved', 'supportingEvidenceBound',
+    'graphConflictFree', 'coverageConsistent',
+  ];
+  if (
+    !exactKeys(candidate.confidenceBasis, basisKeys)
+    || candidate.confidenceBasis.version !== 'mechanism-confidence-v1'
+    || ![
+      'associationObserved', 'predictedFailureObserved', 'supportingEvidenceBound',
+      'graphConflictFree', 'coverageConsistent',
+    ].every((key) => typeof candidate.confidenceBasis[key] === 'boolean')
+    || !exactKeys(candidate.eligibility, [
+      'rankEligible', 'threshold', 'eligibleAffectedVolume',
+    ])
+    || typeof candidate.eligibility.rankEligible !== 'boolean'
+    || candidate.eligibility.threshold !== null
+      && (!Number.isInteger(candidate.eligibility.threshold)
+        || candidate.eligibility.threshold < 0)
+    || candidate.eligibility.eligibleAffectedVolume !== null
+      && (!Number.isFinite(candidate.eligibility.eligibleAffectedVolume)
+        || candidate.eligibility.eligibleAffectedVolume < 0)
+    || !exactKeys(candidate.coverage, ['state', 'scope', 'subsetId'])
+    || !['complete_full', 'complete_partial'].includes(candidate.coverage.state)
+    || !['account_wide', 'comparable_subset', 'unranked_partial']
+      .includes(candidate.coverage.scope)
+    || typeof candidate.reviewEligible !== 'boolean'
+    || typeof candidate.promotionEligible !== 'boolean'
+  ) throw codedError('MECHANISM_PACKET_INVALID', TypeError);
+  for (const key of [
+    'directChainEdgeIds', 'repeatedSegmentIds', 'proofEvidenceRefs',
+  ]) {
+    const canonical = strings(
+      candidate.confidenceBasis[key],
+      key === 'proofEvidenceRefs' ? EVIDENCE : OPAQUE,
+    );
+    if (canonicalJson(canonical) !== canonicalJson(candidate.confidenceBasis[key])) {
+      throw codedError('MECHANISM_PACKET_INVALID');
+    }
+  }
+  if (
+    !exactKeys(candidate.denominator, [
+      'kind', 'value', 'numerator', 'rate', 'metricState', 'metricId',
+    ])
+    || typeof candidate.denominator.kind !== 'string'
+    || typeof candidate.denominator.metricId !== 'string'
+    || candidate.symptom?.metricId !== candidate.denominator.metricId
+    || candidate.symptom?.state !== candidate.denominator.metricState
+    || !['OBSERVED', 'UNKNOWN', 'NOT_APPLICABLE'].includes(
+      candidate.denominator.metricState,
+    )
+    || candidate.denominator.metricState === 'OBSERVED' && (
+      !Number.isInteger(candidate.denominator.value)
+        || candidate.denominator.value < 0
+        || !Number.isInteger(candidate.denominator.numerator)
+        || candidate.denominator.numerator < 0
+        || candidate.denominator.numerator > candidate.denominator.value
+        || candidate.denominator.rate !== (
+          candidate.denominator.value === 0
+            ? null
+            : candidate.denominator.numerator / candidate.denominator.value
+        )
+    )
+    || candidate.denominator.metricState !== 'OBSERVED' && (
+      candidate.denominator.value !== null
+        || candidate.denominator.numerator !== null
+        || candidate.denominator.rate !== null
+    )
+  ) throw codedError('MECHANISM_PACKET_INVALID', TypeError);
+  const expectedConfidence = confidenceFromFacts({
+    basis: candidate.confidenceBasis,
+    falsificationResults: candidate.falsificationResults,
+    competingExplanations: candidate.competingExplanations,
+  });
+  const expectedReviewEligible = expectedConfidence !== 'C0'
+    && candidate.coverage.scope !== 'unranked_partial';
+  const expectedPromotionEligible = !candidate.critical
+    && expectedReviewEligible
+    && candidate.eligibility.rankEligible
+    && ['C2', 'C3'].includes(expectedConfidence)
+    && !candidate.falsificationResults.some(({ state }) => state === 'INCONCLUSIVE')
+    && !candidate.competingExplanations.some(({ material, addressed }) => (
+      material && !addressed
+    ));
+  if (
+    candidate.mechanismConfidence !== expectedConfidence
+    || candidate.reviewEligible !== expectedReviewEligible
+    || candidate.promotionEligible !== expectedPromotionEligible
+    || candidate.priorityInputs.mechanismConfidence !== expectedConfidence
+    || candidate.priorityInputs.promotionEligibility !== (
+      expectedPromotionEligible ? 'ELIGIBLE' : 'INELIGIBLE'
+    )
+    || candidate.priorityInputs.candidateId !== candidate.candidateId
+    || candidate.priorityInputs.rootMechanismFingerprint
+      !== candidate.candidateMechanism.rootMechanismFingerprint
+    || candidate.priorityInputs.coverageScope !== candidate.coverage.scope
+    || candidate.priorityInputs.eligibleAffectedVolume
+      !== candidate.eligibility.eligibleAffectedVolume
+    || candidate.eligibility.eligibleAffectedVolume !== (
+      candidate.denominator.metricState === 'OBSERVED'
+        ? candidate.denominator.value
+        : null
+    )
+    || candidate.priorityInputs.excessObservedLoss !== (
+      candidate.denominator.metricState === 'OBSERVED'
+        ? Math.max(0, candidate.denominator.value - candidate.denominator.numerator)
+        : null
+    )
+    || candidate.confidenceBasis.associationObserved !== (
+      candidate.denominator.metricState === 'OBSERVED'
+        && Number.isFinite(candidate.denominator.value)
+        && candidate.denominator.value > 0
+        && candidate.supportingEvidenceRefs.length > 0
+    )
+    || candidate.confidenceBasis.predictedFailureObserved && !(
+      Number.isFinite(candidate.denominator.numerator)
+        && Number.isFinite(candidate.denominator.value)
+        && candidate.denominator.numerator < candidate.denominator.value
+    )
+    || candidate.confidenceBasis.supportingEvidenceBound !== (
+      candidate.confidenceBasis.directChainEdgeIds.length === 3
+        || candidate.confidenceBasis.repeatedSegmentIds.length >= 2
+    )
+    || candidate.confidenceBasis.proofEvidenceRefs.some((ref) => (
+      !candidate.supportingEvidenceRefs.includes(ref)
+    ))
+    || candidate.coverage.scope === 'account_wide'
+      && (!candidate.confidenceBasis.coverageConsistent
+        || candidate.coverage.state !== 'complete_full')
+    || candidate.coverage.scope !== 'account_wide'
+      && candidate.priorityInputs.commercialValue.kind !== 'UNKNOWN'
+  ) throw codedError('MECHANISM_PACKET_INVALID');
   const discriminatingText = canonicalJson(candidate.discriminatingTest);
   if (!safeDescriptorText(discriminatingText)) {
     throw codedError('MECHANISM_PACKET_INVALID');
@@ -678,6 +955,8 @@ function packetBody(candidate) {
     },
     coverage: structuredClone(candidate.coverage),
     mechanismConfidence: candidate.mechanismConfidence,
+    confidenceBasis: structuredClone(candidate.confidenceBasis),
+    eligibility: structuredClone(candidate.eligibility),
     rootMechanismFingerprint: candidate.candidateMechanism.rootMechanismFingerprint,
     critical: candidate.critical,
     criticalClass: candidate.criticalClass,
@@ -706,11 +985,62 @@ export function buildMechanismPacket(candidate) {
 
 function validatePacket(packet) {
   assertDeepFrozen(packet, 'MECHANISM_PACKET_INVALID');
-  if (!plain(packet) || !HASH.test(packet.packetHash ?? '')) {
+  const packetKeys = [
+    'candidateId', 'packetId', 'symptom', 'denominator', 'journeyInstanceIds',
+    'localizedEdgeIds', 'comparatorIds', 'candidateMechanism', 'prediction',
+    'supportingEvidenceRefs', 'counterEvidenceRefs', 'competingExplanations',
+    'falsificationResults', 'discriminatingTest', 'coverage',
+    'mechanismConfidence', 'confidenceBasis', 'eligibility',
+    'rootMechanismFingerprint', 'critical', 'criticalClass', 'priorityInputs',
+    'reviewEligible', 'promotionEligible', 'limitationCodes',
+    'supplementalReadAllowlist', 'sealedPath', 'packetHash',
+  ];
+  if (
+    !exactKeys(packet, packetKeys)
+    || !HASH.test(packet.packetHash ?? '')
+    || packet.rootMechanismFingerprint
+      !== packet.candidateMechanism?.rootMechanismFingerprint
+  ) {
     throw codedError('MECHANISM_PACKET_INVALID', TypeError);
   }
   const { packetHash, ...body } = packet;
   if (sha256(body) !== packetHash) throw codedError('MECHANISM_PACKET_INVALID');
+  const candidate = deepFreeze({
+    candidateId: packet.candidateId,
+    symptom: structuredClone(packet.symptom),
+    denominator: structuredClone(packet.denominator),
+    journeyInstanceIds: structuredClone(packet.journeyInstanceIds),
+    localizedEdgeIds: structuredClone(packet.localizedEdgeIds),
+    comparatorIds: structuredClone(packet.comparatorIds),
+    candidateMechanism: structuredClone(packet.candidateMechanism),
+    prediction: structuredClone(packet.prediction),
+    supportingEvidenceRefs: structuredClone(packet.supportingEvidenceRefs),
+    counterEvidenceRefs: structuredClone(packet.counterEvidenceRefs),
+    competingExplanations: structuredClone(packet.competingExplanations),
+    falsificationResults: structuredClone(packet.falsificationResults),
+    discriminatingTest: structuredClone(packet.discriminatingTest),
+    coverage: structuredClone(packet.coverage),
+    mechanismConfidence: packet.mechanismConfidence,
+    confidenceBasis: structuredClone(packet.confidenceBasis),
+    eligibility: structuredClone(packet.eligibility),
+    critical: packet.critical,
+    criticalClass: packet.criticalClass,
+    priorityInputs: structuredClone(packet.priorityInputs),
+    reviewEligible: packet.reviewEligible,
+    promotionEligible: packet.promotionEligible,
+    limitationCodes: structuredClone(packet.limitationCodes),
+    supplementalReadAllowlist: structuredClone(packet.supplementalReadAllowlist),
+    sealedPath: structuredClone(packet.sealedPath),
+  });
+  let rebuilt;
+  try {
+    rebuilt = packetBody(candidate);
+  } catch {
+    throw codedError('MECHANISM_PACKET_INVALID');
+  }
+  if (canonicalJson(rebuilt) !== canonicalJson(body)) {
+    throw codedError('MECHANISM_PACKET_INVALID');
+  }
   return packet;
 }
 
@@ -1053,8 +1383,7 @@ export function reconcileExpertReviews({
     const review = reviewByPacket.get(packet.packetId);
     if (
       !packet.promotionEligible
-      || review?.verdict === 'CHALLENGES'
-      || review?.verdict === 'INCONCLUSIVE'
+      || review?.verdict !== 'SUPPORTS'
     ) {
       backlog.push(packet);
       continue;
