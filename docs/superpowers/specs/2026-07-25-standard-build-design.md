@@ -207,6 +207,36 @@ here rather than on the contact.
 
 Lost reason is GHL-native; do not add a field for it.
 
+### Opportunity value = the product price
+
+Every card carries a monetary value: the price of what that person is in for.
+This is per-cycle by nature, which is another reason the cycle unit is the card.
+
+- Prices come from the client's declared price list, which lives in the build
+  registry once. Product names are already registry-canonical because payment
+  workflows filter on the exact name; prices join them there, and every doc
+  references the registry spelling rather than restating a number.
+- At card creation the treatment is often not known yet, so the value is set to
+  the campaign's advertised offer price, then corrected once
+  `treatment_interest` is known. Creating at zero is wrong: it makes the
+  pipeline look empty and makes early-stage drop-off look costless.
+- When a card reaches Done and flips to status Won, its value is that cycle's
+  revenue. It is the value of one cycle, not lifetime value.
+
+**Build rule, this has already caused a live bug:** `monetaryValue` must be
+written as a NUMBER, never a string. Written as a string GHL accepts it, but the
+builder renders Opportunity Value empty and the figure is silently lost.
+
+What this unlocks, none of which works if the value is missing or zero:
+
+- `{{opportunity.lead_value}}` in copy and internal alerts, so a team alert can
+  say what the lead is worth.
+- Value filtering on the stale-opportunity trigger, so 10 - Stale Opportunity
+  Recovery can chase high-value cards harder than low-value ones.
+- Pipeline value and revenue-at-risk per stage in the portal. "You have £14k
+  sitting in Booking Started" is a materially stronger client report than a
+  count of cards.
+
 ### Card naming
 
 Cards are named `<Treatment> - <Full Name>`, for example `Botox - Jane Smith`.
