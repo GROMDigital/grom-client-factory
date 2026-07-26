@@ -1,0 +1,158 @@
+{
+  "note": "Public-rail Task-4 collection envelopes and coverage policy for tests 10-14. ANTI-ORACLE RULE: every `page.reportedCount`, `declaredItemCount` and `skewMs` below is an INDEPENDENT literal typed by hand. Nothing here is derived from the `items` array it travels with, so `liar-complete-count-mismatch` genuinely lies while still claiming `complete:true`. The public rail's own `collectedCount` is what `lib/adapters/collection.mjs` would stamp (items.length) — the DECLARED total is the untrusted number.",
+
+  "coveragePolicy": {
+    "maxSnapshotSkewMs": 900000,
+    "analyticalCutoff": "2026-07-20T00:00:00.000Z",
+    "freshnessFloor": "2026-07-19T23:00:00.000Z"
+  },
+
+  "requestedWindow": { "from": "2026-07-13T00:00:00.000Z", "to": "2026-07-20T00:00:00.000Z" },
+
+  "publicItems": {
+    "baseline": [
+      { "kind": "workflow", "nativeId": "WF1", "name": "01 Meta Lead Intake", "status": "draft" },
+      { "kind": "workflow", "nativeId": "WF2", "name": "02 Nurture", "status": "published" },
+      { "kind": "workflow", "nativeId": null, "name": "02 Nurture", "status": "published", "observedAt": "2026-07-20T00:05:00.000Z" },
+      { "kind": "contact", "nativeId": "CT1", "outcome": "booked", "appointmentId": "AP1", "opportunityId": "OP1" },
+      { "kind": "appointment", "nativeId": "AP1", "state": "showed" },
+      { "kind": "opportunity", "nativeId": "OP1", "stage": "won" },
+      { "kind": "message", "nativeId": "MSG1", "direction": "inbound", "channel": "sms" }
+    ]
+  },
+
+  "envelopes": {
+    "note": "capturedAt is the trusted capture timestamp the skew calculation reads. declaredReportedCount is independent of publicItems.baseline.length on purpose.",
+    "baseline": {
+      "expect": "complete",
+      "capturedAt": "2026-07-20T00:05:00.000Z",
+      "declaredReportedCount": 7,
+      "complete": true
+    },
+    "skew-within-policy": {
+      "expect": "complete",
+      "note": "Captured 10 minutes before the internal snapshot; policy allows 15.",
+      "capturedAt": "2026-07-19T23:55:00.000Z",
+      "declaredReportedCount": 7,
+      "complete": true
+    },
+    "skew-above-policy": {
+      "expect": "refresh-required",
+      "note": "Captured 65 minutes before the internal snapshot; policy allows 15.",
+      "capturedAt": "2026-07-19T23:00:00.000Z",
+      "declaredReportedCount": 7,
+      "complete": true
+    },
+    "liar-complete-count-mismatch": {
+      "expect": "incomplete",
+      "note": "ANTI-ORACLE. Declares reportedCount 9 over 7 served rows while still claiming complete:true.",
+      "capturedAt": "2026-07-20T00:05:00.000Z",
+      "declaredReportedCount": 9,
+      "complete": true
+    }
+  },
+
+  "refreshes": {
+    "complete": {
+      "expect": "merged",
+      "capturedAt": "2026-07-20T00:05:30.000Z",
+      "declaredReportedCount": 7,
+      "complete": true,
+      "boundLocationId": "L1"
+    },
+    "incomplete": {
+      "expect": "partial",
+      "capturedAt": "2026-07-20T00:05:30.000Z",
+      "declaredReportedCount": 7,
+      "complete": false,
+      "incompleteReason": "PAGE_BUDGET_EXHAUSTED",
+      "boundLocationId": "L1"
+    },
+    "rate-limited": {
+      "expect": "partial",
+      "capturedAt": "2026-07-20T00:05:30.000Z",
+      "declaredReportedCount": 7,
+      "complete": false,
+      "incompleteReason": "RATE_LIMITED",
+      "boundLocationId": "L1"
+    },
+    "wrong-location": {
+      "expect": "partial",
+      "capturedAt": "2026-07-20T00:05:30.000Z",
+      "declaredReportedCount": 7,
+      "complete": true,
+      "boundLocationId": "L2"
+    },
+    "stale": {
+      "expect": "partial",
+      "note": "Refresh succeeded but came back with a capture time still older than the policy floor, so the skew is unchanged.",
+      "capturedAt": "2026-07-19T22:30:00.000Z",
+      "declaredReportedCount": 7,
+      "complete": true,
+      "boundLocationId": "L1"
+    }
+  },
+
+  "internalRuntimeEvents": {
+    "note": "Runtime events carrying an internal claim about a PUBLIC-owned domain (a contact outcome). The merge must record the disagreement as a conflict and must never let the internal value win.",
+    "contradicting-contact-outcome": [
+      {
+        "id": "E1",
+        "timestamp": 1784019600000,
+        "timestampField": "startedExecutionAt",
+        "unreadableTimestampFields": [],
+        "event": { "_id": "E1", "stepId": "S1", "contactId": "CT1", "outcome": "no_show" }
+      }
+    ]
+  },
+
+  "claimSupport": {
+    "note": "Published claim support states fed to the eligibility gate. dependsOnCapabilityIds lets a limitation NAME both the capability and the claim it blocks.",
+    "eligible": [
+      { "claimId": "C1", "support": "direct_evidence", "dependsOnCapabilityIds": ["workflow_roster_list", "workflow_execution_logs"] },
+      { "claimId": "C2", "support": "direct_evidence", "dependsOnCapabilityIds": ["conversation_ai_agent_detail"] }
+    ],
+    "inferred-only": [
+      { "claimId": "C1", "support": "inferred_only", "dependsOnCapabilityIds": ["workflow_execution_logs"] },
+      { "claimId": "C2", "support": "direct_evidence", "dependsOnCapabilityIds": ["conversation_ai_agent_detail"] }
+    ],
+    "stale": [
+      { "claimId": "C1", "support": "stale", "dependsOnCapabilityIds": ["workflow_execution_logs"] },
+      { "claimId": "C2", "support": "ambiguous", "dependsOnCapabilityIds": ["conversation_ai_agent_detail"] }
+    ]
+  },
+
+  "traces": {
+    "note": "Tool traces handed to the read-only gate. Only `clean` may pass.",
+    "clean": [
+      { "tool": "auth_status", "capabilityId": null, "status": 200, "ok": true, "boundLocationId": "L1" },
+      { "tool": "list_workflows_complete", "capabilityId": "workflow_roster_list", "status": 200, "ok": true, "boundLocationId": "L1" }
+    ],
+    "write-attempt": [
+      { "tool": "auth_status", "capabilityId": null, "status": 200, "ok": true, "boundLocationId": "L1" },
+      { "tool": "publish_workflow", "capabilityId": "workflow_publish", "status": 200, "ok": true, "boundLocationId": "L1" }
+    ],
+    "raw-attempt": [
+      { "tool": "raw_request", "capabilityId": null, "status": 200, "ok": true, "boundLocationId": "L1" }
+    ],
+    "confirmation-attempt": [
+      { "tool": "get_workflow", "capabilityId": "workflow_detail", "status": 200, "ok": true, "boundLocationId": "L1", "confirmed": true }
+    ],
+    "cross-location": [
+      { "tool": "list_workflows_complete", "capabilityId": "workflow_roster_list", "status": 200, "ok": true, "boundLocationId": "L2" }
+    ],
+    "unregistered-tool": [
+      { "tool": "list_account_entities", "capabilityId": "account_entities", "status": 200, "ok": true, "boundLocationId": "L1" }
+    ]
+  },
+
+  "canaries": {
+    "note": "Strings planted in fixture responses for test 16. NONE may appear in any result, checkpoint, trace, SQLite page or publication input.",
+    "authorization": "Bearer eyJhbGciOiJIUzI1NiJ9.CANARYPAYLOAD.CANARYSIGNATURE",
+    "keyReference": "vault://grom/audit/CANARY-KEY-REF",
+    "pii": "canary.patient@example.com",
+    "transcript": "CANARY TRANSCRIPT: the patient said she would call back on Tuesday",
+    "rawRequest": "GET https://services.leadconnectorhq.com/CANARY/raw",
+    "privatePath": "/Users/canary/.grom-factory.json"
+  }
+}

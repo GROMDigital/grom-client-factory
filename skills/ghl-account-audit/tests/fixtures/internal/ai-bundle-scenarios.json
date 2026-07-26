@@ -1,0 +1,1669 @@
+{
+  "note": "get_ai_configuration_bundle `data` bodies, minus the boilerplate the harness stamps on (appliedQueries, boundLocationId, capabilityVersion, capturedAt, companyId, contractVersion, locationBinding, truncated). Components carry NINE keys, not the README's five. `pages.budget` is null on the two single-shot surfaces. `applicable` is tri-state. ANTI-ORACLE RULE: detailDenominator, detailsRead, pages.* and totalHistory are INDEPENDENT literals, never derived from `items`. Tests 9-16 extend this file; scenarios 1-8 only need a valid baseline and one deliberate self-contradiction.",
+
+  "complete": {
+    "expect": "complete",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [
+          {"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}},
+          {"id": "VA2", "row": {"id": "VA2", "isDeleted": true, "agentStatus": "INACTIVE"}, "tombstone": true, "detailRead": false, "detail": null}
+        ],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [2]
+      },
+      "agent_studio": {
+        "applicable": false,
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          }
+        ],
+        "totalHistory": [0]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-detail-denominator": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. conversation_ai declares detailDenominator 2 / detailsRead 2 while serving one non-tombstone item with detailRead true. The declared coverage numerator cannot be trusted against the served rows.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 2,
+        "detailsRead": 2,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [2]
+      },
+      "voice_ai": {
+        "applicable": false,
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [0]
+      },
+      "agent_studio": {
+        "applicable": false,
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [],
+        "totalHistory": [0]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "all-surfaces-complete": {
+    "expect": "complete",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "terminal-empty": {
+    "expect": "complete",
+    "note": "Terminal schema-valid discovery proving total zero on all three surfaces. Complete, NOT an invented empty healthy array.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          }
+        ],
+        "totalHistory": [0]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          }
+        ],
+        "totalHistory": [0]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          }
+        ],
+        "totalHistory": [0]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "voice-tombstone-confirmed": {
+    "expect": "complete",
+    "note": "BOTH deletion signals proven on VA2. Retained as discovery evidence, excluded from the detail denominator: denominator 1 over 2 discovered rows.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [
+          {"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}},
+          {"id": "VA2", "row": {"id": "VA2", "isDeleted": true, "agentStatus": "INACTIVE"}, "tombstone": true, "detailRead": false, "detail": null}
+        ],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [2]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "voice-tombstone-deleted-only": {
+    "expect": "incomplete",
+    "note": "isDeleted true but agentStatus still ACTIVE. The server calls it a tombstone; ONE signal never proves non-applicability, so voice_ai is Partial.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [
+          {"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}},
+          {"id": "VA2", "row": {"id": "VA2", "isDeleted": true, "agentStatus": "ACTIVE"}, "tombstone": true, "detailRead": false, "detail": null}
+        ],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [2]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "voice-tombstone-inactive-only": {
+    "expect": "incomplete",
+    "note": "agentStatus INACTIVE but isDeleted false. ONE signal again; Partial.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [
+          {"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}},
+          {"id": "VA2", "row": {"id": "VA2", "isDeleted": false, "agentStatus": "INACTIVE"}, "tombstone": true, "detailRead": false, "detail": null}
+        ],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [2]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "unknown-applicability": {
+    "expect": "incomplete",
+    "note": "Tri-state applicability resolved to 'unknown'. Never convertible to an empty healthy array.",
+    "components": {
+      "conversation_ai": {
+        "applicable": "unknown",
+        "complete": true,
+        "detailDenominator": 0,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          }
+        ],
+        "totalHistory": [0]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "failed-component": {
+    "expect": "incomplete",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": false,
+        "detailDenominator": 1,
+        "detailsRead": 0,
+        "errors": [{"capabilityId": "voice_ai_agent_discovery", "code": "HTTP_403", "component": "voice_ai"}],
+        "items": [],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 403,
+            "ok": false,
+            "failureClass": "entitlement",
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": false,
+    "warnings": [{"code": "AI_COMPONENT_FAILED", "component": "voice_ai", "detail": "redacted", "detailSamples": [], "occurrences": 1}]
+  },
+
+  "malformed-success": {
+    "expect": "incomplete",
+    "note": "complete:true over a discovered row with no valid ID. A malformed success is not a success.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 2,
+        "detailsRead": 2,
+        "errors": [],
+        "items": [
+          {"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}},
+          {"id": null, "row": {"name": "Nameless"}, "tombstone": false, "detailRead": true, "detail": {"name": "Nameless"}}
+        ],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [2]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "missing-detail": {
+    "expect": "incomplete",
+    "note": "Applicable non-tombstone item with no detail read. detailsRead honestly reports 0 while complete claims true.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 0,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": false, "detail": null}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "wrong-location-identity": {
+    "expect": "incomplete",
+    "note": "A returned AI identity bound to a different location than the run.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "locationId": "L2"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "incomplete-pagination": {
+    "expect": "incomplete",
+    "note": "agent_studio exhausted its page budget mid-traversal while still declaring complete:true.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 3, "fetched": 2, "exhausted": true, "budget": 2},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [5, 5]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-voice-denominator": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. voice_ai declares detailDenominator 3 / detailsRead 3 while serving ONE non-tombstone item and one confirmed tombstone. The declared denominator is an independent literal and actively disagrees with the served rows.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 3,
+        "detailsRead": 3,
+        "errors": [],
+        "items": [
+          {"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}},
+          {"id": "VA2", "row": {"id": "VA2", "isDeleted": true, "agentStatus": "INACTIVE"}, "tombstone": true, "detailRead": false, "detail": null}
+        ],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [2]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-agent-studio-total": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. agent_studio declares an UNSTABLE totalHistory [2,5] and detailDenominator 2 / detailsRead 2 over one served row, still claiming complete:true.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 2,
+        "detailsRead": 2,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [2, 5]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  },
+
+  "excluded-portal-surfaces": {
+    "expect": "incomplete",
+    "note": "The server offers portal surfaces the audit rail must never accept. They are out of scope for this adapter and the onboarding portal adapter remains the only portal evidence source.",
+    "components": {
+      "conversation_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CA1", "row": {"id": "CA1", "name": "Primary"}, "tombstone": false, "detailRead": true, "detail": {"id": "CA1", "name": "Primary", "mode": "auto"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "conversation_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/ai-employees/agents",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:00.000Z"
+          },
+          {
+            "capabilityId": "conversation_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/ai-employees/employees/CA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:01.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "voice_ai": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "VA1", "row": {"id": "VA1", "isDeleted": false, "agentStatus": "ACTIVE"}, "tombstone": false, "detailRead": true, "detail": {"id": "VA1", "agentStatus": "ACTIVE"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [
+          {
+            "capabilityId": "voice_ai_agent_discovery",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/simple",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:02.000Z"
+          },
+          {
+            "capabilityId": "voice_ai_agent_detail",
+            "host": "services",
+            "appliedPath": "/voice-ai/agents/VA1",
+            "appliedQuery": {"locationId": "L1"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:03.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "agent_studio": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "AS1", "row": {"id": "AS1", "name": "Super"}, "tombstone": false, "detailRead": true, "detail": {"id": "AS1", "name": "Super", "productId": "superagent"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": 100},
+        "sourceRoutes": [
+          {
+            "capabilityId": "agent_studio_agent_discovery",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/agents-with-folders",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:04.000Z"
+          },
+          {
+            "capabilityId": "agent_studio_agent_detail",
+            "host": "services",
+            "appliedPath": "/agent-studio/agents/AS1",
+            "appliedQuery": {"agencyId": "CO1", "productId": "superagent", "page": "1", "pageSize": "100"},
+            "status": 200,
+            "ok": true,
+            "failureClass": null,
+            "capturedAt": "2026-07-20T00:06:05.000Z"
+          }
+        ],
+        "totalHistory": [1]
+      },
+      "courses": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "COURSES1", "row": {"id": "COURSES1"}, "tombstone": false, "detailRead": true, "detail": {"id": "COURSES1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "lessons": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "LESSONS1", "row": {"id": "LESSONS1"}, "tombstone": false, "detailRead": true, "detail": {"id": "LESSONS1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "offers": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "OFFERS1", "row": {"id": "OFFERS1"}, "tombstone": false, "detailRead": true, "detail": {"id": "OFFERS1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "memberships": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "MEMBERSHIPS1", "row": {"id": "MEMBERSHIPS1"}, "tombstone": false, "detailRead": true, "detail": {"id": "MEMBERSHIPS1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "communities": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "COMMUNITIES1", "row": {"id": "COMMUNITIES1"}, "tombstone": false, "detailRead": true, "detail": {"id": "COMMUNITIES1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "assessments": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "ASSESSMENTS1", "row": {"id": "ASSESSMENTS1"}, "tombstone": false, "detailRead": true, "detail": {"id": "ASSESSMENTS1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "certificates": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "CERTIFICATES1", "row": {"id": "CERTIFICATES1"}, "tombstone": false, "detailRead": true, "detail": {"id": "CERTIFICATES1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      },
+      "course_credentials": {
+        "applicable": true,
+        "complete": true,
+        "detailDenominator": 1,
+        "detailsRead": 1,
+        "errors": [],
+        "items": [{"id": "COURSE_CREDENTIALS1", "row": {"id": "COURSE_CREDENTIALS1"}, "tombstone": false, "detailRead": true, "detail": {"id": "COURSE_CREDENTIALS1"}}],
+        "pages": {"attempted": 1, "fetched": 1, "exhausted": false, "budget": null},
+        "sourceRoutes": [],
+        "totalHistory": [1]
+      }
+    },
+    "rateLimit": {"limited": false, "retryAfterMs": null},
+    "complete": true,
+    "warnings": []
+  }
+}

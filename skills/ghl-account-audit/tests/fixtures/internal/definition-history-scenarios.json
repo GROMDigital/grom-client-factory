@@ -1,0 +1,127 @@
+{
+  "note": "Historical definition-binding fixtures for `historical events bind only to an effective definition`. Each scenario supplies the `workflowDefinition.validity` block the runtime window publishes plus the runtime events to bind. CONTRACT FLAG: the live audit rail exposes NO version-history capability — core/workflow-runtime-window.mjs hard-codes validity to {effectiveFrom:null, effectiveTo:null, source:null, provenEffectiveInterval:false, appliesToRequestedWindow:'unproven'} on every run, and configurationBinding is a constant. `versionHistory` below is the forward-compatible slot the same block reserves; only `no-version-history-source` is reachable against today's server. ANTI-ORACLE RULE: every interval bound and every expected binding is an independent literal — no expectation is derived from the events served.",
+
+  "window": { "fromIso": "2026-07-13T00:00:00.000Z", "toIso": "2026-07-20T00:00:00.000Z" },
+
+  "hashes": {
+    "v4": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1",
+    "v5": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e"
+  },
+
+  "change-inside-window": {
+    "expect": "bound",
+    "currentDefinitionRef": "WF1_V5",
+    "validity": {
+      "effectiveFrom": "2026-07-16T12:00:00.000Z",
+      "effectiveTo": null,
+      "source": "workflow_version_history",
+      "provenEffectiveInterval": true,
+      "appliesToRequestedWindow": "partial",
+      "versionHistory": [
+        { "version": 4, "canonicalHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "effectiveFrom": "2026-07-01T00:00:00.000Z", "effectiveTo": "2026-07-16T12:00:00.000Z" },
+        { "version": 5, "canonicalHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e", "effectiveFrom": "2026-07-16T12:00:00.000Z", "effectiveTo": null }
+      ]
+    },
+    "events": [
+      { "id": "E_EARLY", "timestamp": 1784019600000, "expectedDefinitionHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "expectedCausalProof": true },
+      { "id": "E_LATE", "timestamp": 1784365200000, "expectedDefinitionHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e", "expectedCausalProof": true }
+    ]
+  },
+
+  "change-after-window": {
+    "expect": "bound",
+    "currentDefinitionRef": "WF1",
+    "validity": {
+      "effectiveFrom": "2026-07-01T00:00:00.000Z",
+      "effectiveTo": "2026-07-22T00:00:00.000Z",
+      "source": "workflow_version_history",
+      "provenEffectiveInterval": true,
+      "appliesToRequestedWindow": "proven",
+      "versionHistory": [
+        { "version": 4, "canonicalHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "effectiveFrom": "2026-07-01T00:00:00.000Z", "effectiveTo": "2026-07-22T00:00:00.000Z" },
+        { "version": 5, "canonicalHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e", "effectiveFrom": "2026-07-22T00:00:00.000Z", "effectiveTo": null }
+      ]
+    },
+    "events": [
+      { "id": "E_EARLY", "timestamp": 1784019600000, "expectedDefinitionHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "expectedCausalProof": true },
+      { "id": "E_LATE", "timestamp": 1784365200000, "expectedDefinitionHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "expectedCausalProof": true }
+    ]
+  },
+
+  "event-on-effective-boundary": {
+    "expect": "unbound",
+    "note": "E_BOUNDARY sits exactly on the instant v5 took effect. The internal contract declares no boundary convention for effectiveFrom/effectiveTo, so which definition was in force at that instant is not PROVEN. Fail closed: retain the event, bind null.",
+    "currentDefinitionRef": "WF1_V5",
+    "validity": {
+      "effectiveFrom": "2026-07-16T12:00:00.000Z",
+      "effectiveTo": null,
+      "source": "workflow_version_history",
+      "provenEffectiveInterval": true,
+      "appliesToRequestedWindow": "partial",
+      "versionHistory": [
+        { "version": 4, "canonicalHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "effectiveFrom": "2026-07-01T00:00:00.000Z", "effectiveTo": "2026-07-16T12:00:00.000Z" },
+        { "version": 5, "canonicalHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e", "effectiveFrom": "2026-07-16T12:00:00.000Z", "effectiveTo": null }
+      ]
+    },
+    "events": [
+      { "id": "E_BOUNDARY", "timestamp": 1784203200000, "expectedDefinitionHash": null, "expectedCausalProof": false }
+    ]
+  },
+
+  "overlapping-version-intervals": {
+    "expect": "unbound",
+    "note": "v4 and v5 both claim 2026-07-18. Two candidate definitions is no proof at all.",
+    "currentDefinitionRef": "WF1_V5",
+    "validity": {
+      "effectiveFrom": "2026-07-14T00:00:00.000Z",
+      "effectiveTo": null,
+      "source": "workflow_version_history",
+      "provenEffectiveInterval": false,
+      "appliesToRequestedWindow": "unproven",
+      "versionHistory": [
+        { "version": 4, "canonicalHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "effectiveFrom": "2026-07-01T00:00:00.000Z", "effectiveTo": "2026-07-20T00:00:00.000Z" },
+        { "version": 5, "canonicalHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e", "effectiveFrom": "2026-07-14T00:00:00.000Z", "effectiveTo": null }
+      ]
+    },
+    "events": [
+      { "id": "E_LATE", "timestamp": 1784365200000, "expectedDefinitionHash": null, "expectedCausalProof": false }
+    ]
+  },
+
+  "gap-between-version-intervals": {
+    "expect": "unbound",
+    "note": "The event time falls in no declared interval at all.",
+    "currentDefinitionRef": "WF1_V5",
+    "validity": {
+      "effectiveFrom": "2026-07-19T00:00:00.000Z",
+      "effectiveTo": null,
+      "source": "workflow_version_history",
+      "provenEffectiveInterval": true,
+      "appliesToRequestedWindow": "partial",
+      "versionHistory": [
+        { "version": 4, "canonicalHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1", "effectiveFrom": "2026-07-01T00:00:00.000Z", "effectiveTo": "2026-07-14T00:00:00.000Z" },
+        { "version": 5, "canonicalHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e", "effectiveFrom": "2026-07-19T00:00:00.000Z", "effectiveTo": null }
+      ]
+    },
+    "events": [
+      { "id": "E_GAP", "timestamp": 1784203200000, "expectedDefinitionHash": null, "expectedCausalProof": false }
+    ]
+  },
+
+  "no-version-history-source": {
+    "expect": "unbound",
+    "note": "THE ONLY SCENARIO REACHABLE AGAINST TODAY'S SERVER. validity is all-null and provenEffectiveInterval is false, so nothing proves the captured definition governed anything.",
+    "currentDefinitionRef": "WF1",
+    "validity": {
+      "effectiveFrom": null,
+      "effectiveTo": null,
+      "source": null,
+      "provenEffectiveInterval": false,
+      "appliesToRequestedWindow": "unproven"
+    },
+    "events": [
+      { "id": "E_EARLY", "timestamp": 1784019600000, "expectedDefinitionHash": null, "expectedCausalProof": false },
+      { "id": "E_LATE", "timestamp": 1784365200000, "expectedDefinitionHash": null, "expectedCausalProof": false }
+    ]
+  }
+}

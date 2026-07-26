@@ -16,7 +16,9 @@ import {
 import {
   createCipheriv,
   createDecipheriv,
+  createHmac,
   randomBytes,
+  timingSafeEqual,
 } from 'node:crypto';
 import {
   basename,
@@ -29,9 +31,14 @@ import {
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { openState } from './state.mjs';
 import {
+  collectInternalEvidencePhase,
   enforcePublicOnlyPublication,
+  evaluateFullEligibility,
+  frozenInputAnchorDigest,
+  mergeInternalEvidence,
   planWeeklyCollection,
   replayWeeklyFixture,
+  scanPublicationPrivacy,
 } from './modes/weekly.mjs';
 
 export { planWeeklyCollection };
@@ -51,8 +58,38 @@ const PHASES = Object.freeze([
   'verifying',
   'persisting',
   'complete_partial',
+  // Task 11 / controller decision D1. APPENDED, never inserted: `phaseArtifactPath()` bakes
+  // `PHASES.indexOf(phase)` into the on-disk checkpoint filename and `restorePhase()` refuses
+  // any other pathname, so renumbering an existing phase would break every in-flight resume.
+  // Array position is STORAGE identity; EXECUTION position is the source order inside
+  // `execute()`, where these two run between `collecting_public` and `normalizing`.
+  'awaiting_internal_auth',
+  'collecting_internal',
+  // The DERIVED terminal phase (finding I7). Appended for the same storage-identity reason as
+  // the two above. Unreachable today because gate 2 has no live_runtime receipt to satisfy it.
+  'complete_full',
 ]);
-const TERMINAL = new Set(['blocked', 'failed', 'quarantined', 'complete_partial']);
+const TERMINAL = new Set([
+  'blocked',
+  'failed',
+  'quarantined',
+  'complete_partial',
+  'complete_full',
+]);
+/**
+ * Finding I4. Quarantine is not only the `AUDIT_INTEGRITY_FAILURE*` / `AUDIT_CHECKPOINT_INVALID*`
+ * / `VERIFIER_*` families: the brief also quarantines on location mismatch, a write/raw trace
+ * and a manifest/profile/hash mismatch, and controller decision D4 quarantines a privacy-scan
+ * failure. These all landed in `failed` before.
+ */
+const QUARANTINING_CODES = new Set([
+  'AUDIT_QUARANTINED',
+  'INTERNAL_AUDIT_LOCATION_MISMATCH',
+  'INTERNAL_AUDIT_MANIFEST_INVALID',
+  'INTERNAL_AUDIT_PROFILE_MISMATCH',
+  'INTERNAL_AUDIT_READ_ONLY_VIOLATION',
+]);
+const NON_PUBLISHING_STATUSES = new Set(['blocked', 'failed', 'quarantined']);
 const WRITE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const REVISION_PHASES = new Set([
   'awaiting_model_review',
@@ -61,6 +98,9 @@ const REVISION_PHASES = new Set([
   'verifying',
   'persisting',
   'complete_partial',
+  // Finding R2-M3: `complete_full` was omitted while its sibling terminal phase was present, so
+  // a second revision of a Full run would collide on the single `16-complete_full.json` path.
+  'complete_full',
 ]);
 const OPAQUE_ID = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
 
@@ -139,6 +179,117 @@ function validateKeys(keys) {
     || !Buffer.isBuffer(keys.pseudonymKey)
     || keys.pseudonymKey.length !== 32
   ) throw codedError('AUDIT_PREFLIGHT_FAILED_KEY_MATERIAL');
+}
+
+// ---------------------------------------------------------------------------
+// Finding R7-C1 — `analyzer.freezeInputs` had NO provenance requirement
+// ---------------------------------------------------------------------------
+
+/**
+ * Round 6 moved the anchoring half of the frozen inputs out of the record that carries the proof
+ * chain, and authenticated it with a MAC keyed by the run's vault key material. That closed the
+ * SHIPPED composition root — `lib/local-runtime.mjs` — and nothing else, because this kernel
+ * still did `const frozenInputs = await analyzer.freezeInputs(args)` and accepted whatever came
+ * back. `analyzer` is INJECTED. A library host supplying its own therefore went on sealing its
+ * own forgery: it returned anchors naming a proof chain it had minted, the kernel sealed them
+ * into the run at `createRunWithLease`, and `evaluateFullEligibility` anchored on them because
+ * nothing could state HOW they had been authenticated.
+ *
+ * `freezeInputs` may now return its frozen inputs wrapped in a host seal. The seal is a MAC over
+ * the digest of EXACTLY the anchoring fields, keyed by the material `keyResolver` resolves for
+ * this run — key material the provider configuration does not contain and its author cannot
+ * read. Only a verified seal produces the provenance token that gate 2 requires.
+ *
+ * FAIL CLOSED, in both directions, exactly as the shipped half does:
+ *  - a PLAIN return (every existing host, and every host that has no vault access) is accepted
+ *    unchanged and carries NO provenance, so no identity is anchored, gate 2 fails and the run
+ *    is capped at `complete_partial`. That is honest-but-limited, never a quarantine: absent
+ *    authentication is missing evidence, not corrupt evidence.
+ *  - a seal that is DECLARED and does not verify is refused at PREFLIGHT, matching the R2-M4
+ *    precedent that a malformed declaration is refused rather than silently degraded.
+ */
+const FROZEN_INPUT_SEAL_KIND = 'host_sealed_frozen_inputs';
+const FROZEN_INPUT_SEAL_DOMAIN = 'grom.audit.kernel.frozen-input-provenance.v1';
+const FROZEN_INPUT_PROVENANCE_METHOD = 'host_key_mac';
+const FROZEN_INPUT_SEAL_FIELDS = Object.freeze(['frozenInputs', 'kind', 'mac']);
+
+function frozenInputSealMac(anchorDigest, keys) {
+  // Domain-separated from every other use of the same key material, so a value produced for
+  // another purpose can never be replayed as a frozen-input seal.
+  const sealKey = createHmac('sha256', Buffer.concat([keys.encryptionKey, keys.pseudonymKey]))
+    .update(FROZEN_INPUT_SEAL_DOMAIN)
+    .digest();
+  return createHmac('sha256', sealKey)
+    .update(canonicalJson({
+      anchorDigest,
+      domain: FROZEN_INPUT_SEAL_DOMAIN,
+      kind: FROZEN_INPUT_SEAL_KIND,
+    }))
+    .digest('hex');
+}
+
+function frozenInputMacMatches(expected, actual) {
+  if (typeof actual !== 'string' || actual.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(expected, 'utf8'), Buffer.from(actual, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Mints the host seal. A host calls this from inside its own `freezeInputs`, with the key
+ * material its vault resolved for the run — which is what makes the seal a seal: the party whose
+ * anchoring claim it is cannot produce the MAC.
+ */
+export function sealFrozenInputs({ frozenInputs, keys } = {}) {
+  validateKeys(keys);
+  const anchorDigest = frozenInputAnchorDigest(frozenInputs);
+  if (typeof anchorDigest !== 'string' || anchorDigest.length === 0) {
+    throw codedError('AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS');
+  }
+  return {
+    kind: FROZEN_INPUT_SEAL_KIND,
+    frozenInputs,
+    mac: frozenInputSealMac(anchorDigest, keys),
+  };
+}
+
+/**
+ * Unwraps what `freezeInputs` returned into the frozen inputs the run is created with, plus the
+ * provenance of their anchoring half. The frozen inputs handed on are ALWAYS the plain record —
+ * `lib/state.mjs` `FROZEN_INPUT_FIELDS` is an exact-match list, so a wrapper must never reach
+ * `createRunWithLease`, and a sealed run's `frozenInputsHash` stays byte-identical to the
+ * unsealed one for the same inputs.
+ */
+function acceptFrozenInputs(returned, keys) {
+  assertObject(returned, 'AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS');
+  if (!Object.hasOwn(returned, 'kind') || returned.kind !== FROZEN_INPUT_SEAL_KIND) {
+    return { frozenInputs: returned, provenance: null };
+  }
+  const fail = () => {
+    throw codedError('AUDIT_PREFLIGHT_FAILED_FROZEN_INPUT_SEAL');
+  };
+  // Exact-field: the MAC covers only what it names, so an unnamed key would ride along
+  // unauthenticated.
+  const present = Object.keys(returned).sort();
+  if (present.length !== FROZEN_INPUT_SEAL_FIELDS.length) fail();
+  if (present.some((key, index) => key !== FROZEN_INPUT_SEAL_FIELDS[index])) fail();
+  const inner = returned.frozenInputs;
+  if (!inner || typeof inner !== 'object' || Array.isArray(inner)) fail();
+  const anchorDigest = frozenInputAnchorDigest(inner);
+  if (typeof anchorDigest !== 'string' || anchorDigest.length === 0) fail();
+  if (!frozenInputMacMatches(frozenInputSealMac(anchorDigest, keys), returned.mac)) fail();
+  return {
+    frozenInputs: inner,
+    // Bound to the anchors it authenticated. A provenance minted for one anchor block can never
+    // license a different one, so re-writing the anchors after minting is not a seal either.
+    provenance: Object.freeze({
+      authenticated: true,
+      method: FROZEN_INPUT_PROVENANCE_METHOD,
+      anchorDigest,
+    }),
+  };
 }
 
 function phasePayload(value) {
@@ -714,7 +865,16 @@ export function createAuditKernel({
     return saved;
   }
 
-  async function execute({ args, runId, frozenInputs, state, keys }) {
+  async function execute({
+    args,
+    runId,
+    frozenInputs,
+    // Finding R7-C1. `null` is the honest UNKNOWN: the host stated nothing about how the
+    // anchoring half of `frozenInputs` was authenticated, so gate 2 anchors nothing.
+    frozenInputProvenance = null,
+    state,
+    keys,
+  }) {
     let phase = 'queued';
     const runPhase = async (phaseName, input, compute) => {
       const storedPhase = checkpointPhase(phaseName, input);
@@ -804,16 +964,124 @@ export function createAuditKernel({
       });
       assertSafeCollected(publicEvidence);
 
+      // ---- internal evidence (Task 11) ------------------------------------
+      // Executed here, between `collecting_public` and `normalizing`, even though the two
+      // phase names live at the END of `PHASES` (decision D1). Internal auth is resolved only
+      // AFTER the public evidence above is durably checkpointed.
+      let internalEvidence = null;
+      let internalMerge = null;
+      {
+        const internalInput = {
+          publicHash: sha256(publicEvidence),
+          collectionPlan,
+        };
+        // Finding R2-I1: the DURABLE ANSWER IS CONSULTED FIRST. Collecting before reading the
+        // `collecting_internal` checkpoint threw a run that had already checkpointed its
+        // internal evidence back to `awaiting_internal_auth` on every single resume once the
+        // short-lived credential lapsed (D5 = 300 s, i.e. the normal case), wedging the run
+        // forever and re-issuing live account reads each time.
+        //
+        // Finding R3-I1: the durable answer is now consulted whether or not THIS kernel has an
+        // internal rail. Restoring it costs no live call — the input is `{publicHash,
+        // collectionPlan}`, computable with the rail off — and it is what makes a rail ROLLBACK
+        // resume instead of quarantine: the `normalizing` input below is derived from the same
+        // internal evidence either way, so disabling the rail no longer changes the phase input
+        // of a run that already answered it with the rail on.
+        const restoredInternal = restorePhase({
+          state,
+          runId,
+          phase: checkpointPhase('collecting_internal', internalInput),
+          input: internalInput,
+          keys,
+        });
+        if (restoredInternal !== undefined) {
+          phase = 'collecting_internal';
+          internalEvidence = restoredInternal.internalEvidence;
+          internalMerge = restoredInternal.merge;
+          assertSafeCollected(internalEvidence);
+        } else if (typeof adapters.collectInternal === 'function') {
+          const internalPhase = await collectInternalEvidencePhase({
+            adapter: await adapters.collectInternal({ ...args, runId, context, collectionPlan }),
+            target: args.target,
+            window: {
+              from: new Date(collectionPlan.collectionStart).toISOString(),
+              to: new Date(collectionPlan.cutoff).toISOString(),
+            },
+            applicability: args.providerConfig?.internalApplicability ?? {},
+            stepRosterRequests: args.providerConfig?.stepRosterRequests ?? {},
+            publicEvidence,
+            checkpoint: { schemaVersion: '1.0.0', phase: 'collecting_public' },
+          });
+          if (internalPhase.phase === 'awaiting_internal_auth') {
+            phase = 'awaiting_internal_auth';
+            await runPhase(phase, internalInput, async () => ({
+              limitations: [...internalPhase.limitations],
+            }));
+            // Mirrors the `awaiting_model_review` suspend exactly. The lease is deliberately NOT
+            // released here — that is a known Task 9 defect scoped to Task 12, not to this task.
+            state.updateRunStatus({ runId, status: phase, now: clock() });
+            return deepFreeze({ status: phase, runId });
+          }
+          if (internalPhase.internalEvidence !== null) {
+            phase = 'collecting_internal';
+            // The merge is checkpointed WITH the evidence that produced it. That is the durable
+            // mark finding M3 asked for: the one bounded public refresh a logical run may spend
+            // is restored from disk on resume rather than being spent again.
+            const collected = await runPhase(phase, internalInput, async () => {
+              const evidence = internalPhase.internalEvidence;
+              const merged = await mergeInternalEvidence({
+                publicEvidence,
+                internalEvidence: evidence,
+                coveragePolicy: args.providerConfig?.coveragePolicy ?? {},
+                checkpoint: internalPhase.checkpoint,
+                refreshPublicEvidence: typeof adapters.refreshPublic === 'function'
+                  ? (request) => adapters.refreshPublic({ ...args, runId, ...request })
+                  : undefined,
+                refreshLedger: null,
+              });
+              return { internalEvidence: evidence, merge: merged };
+            });
+            internalEvidence = collected.internalEvidence;
+            internalMerge = collected.merge;
+            assertSafeCollected(internalEvidence);
+          }
+        }
+      }
+
       phase = 'normalizing';
-      const normalized = await runPhase(phase, {
+      // Finding C5: the `normalizing` checkpoint INPUT must stay byte-identical to the approved
+      // Task 10 shape when there is no internal evidence, or every run checkpointed by Task 10
+      // and resumed after this change terminates `quarantined`. The key is added ONLY when
+      // internal evidence actually exists.
+      const publicOnlyNormalizingInput = {
         contextHash: sha256(context),
         publicHash: sha256(publicEvidence),
         collectionPlan,
-      }, async () => (
+      };
+      let normalizingInput = publicOnlyNormalizingInput;
+      if (internalEvidence !== null) {
+        // Finding R2-I2: C5 was closed only while the RESUMING kernel also had no rail. A
+        // `normalizing` checkpoint already written under the Task 10 (public-only) input shape
+        // stays restorable even when the resuming kernel HAS an internal rail — which is the
+        // deployment this task exists to enable. The extended shape is used only for a phase
+        // this run has not already durably answered.
+        const stored = state.getCheckpoint({ runId, phase: 'normalizing' });
+        normalizingInput = stored !== undefined
+          && stored.inputHash === sha256(publicOnlyNormalizingInput)
+          ? publicOnlyNormalizingInput
+          : {
+              ...publicOnlyNormalizingInput,
+              internalHash: sha256(internalEvidence),
+              mergeHash: sha256(internalMerge ?? null),
+            };
+      }
+      const normalized = await runPhase(phase, normalizingInput, async () => (
         typeof analyzer.normalize === 'function'
           ? analyzer.normalize({
               context,
               publicEvidence,
+              internalEvidence,
+              merge: internalMerge,
               frozenInputs,
               runId,
               collectionPlan,
@@ -937,6 +1205,10 @@ export function createAuditKernel({
       ));
 
       phase = 'compiling';
+      const runBinding = {
+        runId,
+        frozenInputsHash: sha256(frozenInputs),
+      };
       const compiled = await runPhase(phase, {
         prioritizedHash: sha256(prioritized),
         memoryHash: sha256(memory),
@@ -950,8 +1222,88 @@ export function createAuditKernel({
               runId,
             })
           : { status: 'complete_partial', findings: [] };
+        // ---- finding I7: the integration, no longer inert ---------------------
+        // With no internal rail the decision stays `null` and `enforcePublicOnlyPublication`
+        // behaves exactly as the approved Task 10 code, byte for byte. With an internal rail
+        // the status is DERIVED from validated machine data by the ten gates.
+        let fullEligibility = null;
+        if (internalEvidence !== null) {
+          // ---- finding R2-C1: gate 10 is DEFERRED, never a second verifier call ----------
+          // The brief puts gate 10 INSIDE the trusted atomic publication gate. Invoking the
+          // injected verifier here, mid-`compiling`, ran it a SECOND time and on the PRE-clamp
+          // analyzer output — before `enforcePublicOnlyPublication` injects the two
+          // INTERNAL_LIMITATIONS that the shipped verifier demands — so an identical run
+          // terminated `complete_partial` with the rail off and `quarantined` with it on.
+          // The trusted carrier already defers verification to `publishAtomically`, which
+          // refuses to rename a publication into place unless the verifier attests `pass`
+          // (`lib/artifacts.mjs`), and a failure there raises a `VERIFIER_*` code that
+          // quarantines. That deferral IS gate 10; a compiled payload that does not travel the
+          // trusted carrier has no such gate, so it fails closed and can never reach Full.
+          const trustedCarrier = Boolean(
+            compiledRaw?.payloadArtifacts
+            && compiledRaw?.projections
+            && compiledRaw?.manifestInput,
+          );
+          fullEligibility = await evaluateFullEligibility({
+            internalEvidence,
+            merge: internalMerge,
+            trace: internalEvidence.trace ?? null,
+            claimSupport: typeof analyzer.describeClaimSupport === 'function'
+              ? await analyzer.describeClaimSupport({
+                  compiled: compiledRaw,
+                  normalized,
+                  merge: internalMerge,
+                  frozenInputs,
+                  runId,
+                })
+              : null,
+            privacyScan: scanPublicationPrivacy(compiledRaw),
+            // Not an assertion that the verifier already ran: an assertion that this payload is
+            // bound to a publication path where the verifier MUST pass before anything is
+            // published. `null` (no such binding) is UNKNOWN and fails gate 10 closed without
+            // being read as a verifier FAILURE, which would quarantine.
+            verification: trustedCarrier
+              ? { passed: true, code: null, boundTo: 'trusted_publication_gate' }
+              : null,
+            requiredWindows: [{
+              windowId: 'analytical',
+              from: new Date(collectionPlan.collectionStart).toISOString(),
+              to: new Date(collectionPlan.cutoff).toISOString(),
+            }],
+            expected: {
+              ...(args.providerConfig?.internalIdentities ?? {}),
+              locationId: args.target.locationId,
+            },
+            // ---- finding R3-C2: the anchor is the SEALED frozen inputs --------------------
+            // `providerConfig.internalIdentities` is minted by the same actor, and in the
+            // shipped composition root the same configuration record, as the proof index it
+            // was supposed to vouch for — so anchoring against it (or against the evidence's
+            // own self-declared identity fields) was circular and a wholly self-minted proof
+            // chain reached `complete_full` with no live canary. Decision D3's frozen inputs
+            // are sealed at run creation, hashed into `frozenInputsHash` and
+            // `RESUME_INPUT_MISMATCH`-protected: they are the only identity statement this run
+            // cannot rewrite. `expected` above is retained ONLY as a mismatch discriminator.
+            frozenInputs,
+            // ---- finding R7-C1: HOW the anchoring half was authenticated ------------------
+            // Round 6 authenticated the anchors in the shipped composition root; the kernel
+            // still accepted any `analyzer.freezeInputs` return with no provenance at all, so
+            // a library host running its own analyzer sealed its own forgery. This token is
+            // emitted by `acceptFrozenInputs` ONLY after a host MAC keyed by this run's vault
+            // key material verified against the digest of exactly these anchors. Absent — the
+            // default for every host that seals nothing — no identity is anchored, gate 2
+            // fails, and the run is capped at `complete_partial` rather than quarantined.
+            frozenInputProvenance,
+            run: runBinding,
+          });
+          if (NON_PUBLISHING_STATUSES.has(fullEligibility.status)) {
+            // `blocked`, `failed` and `quarantined` runs publish no findings and no packs.
+            throw codedError('AUDIT_QUARANTINED');
+          }
+        }
         return enforcePublicOnlyPublication(compiledRaw, {
           firstBaseline: collectionPlan.mode === 'first',
+          fullEligibility,
+          expectedRun: fullEligibility === null ? null : runBinding,
         });
       });
 
@@ -974,6 +1326,11 @@ export function createAuditKernel({
       }
 
       phase = 'persisting';
+      // Finding I7: DERIVED, never hardcoded. `enforcePublicOnlyPublication` is the single
+      // authority that stamped this status, and it only ever emits one of these two.
+      const derivedStatus = compiled?.status === 'complete_full'
+        ? 'complete_full'
+        : 'complete_partial';
       const revisionHash = sha256({
         runId,
         frozenInputsHash: sha256(frozenInputs),
@@ -1001,7 +1358,7 @@ export function createAuditKernel({
             paths: state.paths,
             runManifest: {
               ...compiled.manifestInput,
-              status: 'complete_partial',
+              status: derivedStatus,
               publicationId: prepared.publicationId,
             },
             payloadArtifacts: compiled.payloadArtifacts,
@@ -1042,7 +1399,7 @@ export function createAuditKernel({
           publicationRoot,
         };
       });
-      phase = 'complete_partial';
+      phase = derivedStatus;
       await runPhase(phase, persisted, async () => ({
         publicationId: persisted.publicationId,
       }));
@@ -1059,6 +1416,7 @@ export function createAuditKernel({
           error.code.startsWith('AUDIT_INTEGRITY_FAILURE')
           || error.code.startsWith('AUDIT_CHECKPOINT_INVALID')
           || error.code.startsWith('VERIFIER_')
+          || QUARANTINING_CODES.has(error.code)
         );
       const status = integrity ? 'quarantined' : 'failed';
       try {
@@ -1080,7 +1438,15 @@ export function createAuditKernel({
     try {
       keys = await keyResolver(args.vaultKeyReference);
       validateKeys(keys);
-      const frozenInputs = await analyzer.freezeInputs(args);
+      // Finding R7-C1. What `freezeInputs` returns is a CLAIM until the run's own key material
+      // authenticates its anchoring half. `frozenInputs` below is always the plain record —
+      // the seal never reaches `createRunWithLease`, so `frozenInputsHash` is unchanged.
+      const returnedInputs = await analyzer.freezeInputs(args);
+      assertObject(returnedInputs, 'AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS');
+      const { frozenInputs, provenance: frozenInputProvenance } = acceptFrozenInputs(
+        returnedInputs,
+        keys,
+      );
       assertObject(frozenInputs, 'AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS');
       const runId = idFactory('run');
       if (typeof runId !== 'string' || !OPAQUE_ID.test(runId)) {
@@ -1110,7 +1476,7 @@ export function createAuditKernel({
         now: clock(),
         ttlMs: 300_000,
       });
-      return await execute({ args, runId, frozenInputs, state, keys });
+      return await execute({ args, runId, frozenInputs, frozenInputProvenance, state, keys });
     } catch (error) {
       if (error?.code) throw error;
       throw codedError('AUDIT_PREFLIGHT_FAILED');
@@ -1157,7 +1523,15 @@ export function createAuditKernel({
         providerDescriptor: currentProviderDescriptor,
         vaultKeyReference: input.vaultKeyReference,
       };
-      const currentInputs = await analyzer.freezeInputs(args);
+      // Finding R7-C1. A resume re-authenticates rather than inheriting: the seal that decides
+      // is the one the host can produce NOW. `currentInputs` stays the plain record, so the
+      // `assertResumeInputs` comparison below is byte-identical to the unsealed one.
+      const returnedInputs = await analyzer.freezeInputs(args);
+      assertObject(returnedInputs, 'AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS');
+      const {
+        frozenInputs: currentInputs,
+        provenance: frozenInputProvenance,
+      } = acceptFrozenInputs(returnedInputs, keys);
       let resumeMismatch = currentProviderDescriptor.configHash
         !== invocation.providerDescriptor.configHash;
       try {
@@ -1192,6 +1566,7 @@ export function createAuditKernel({
         args,
         runId: input.runId,
         frozenInputs: currentInputs,
+        frozenInputProvenance,
         state,
         keys,
       });

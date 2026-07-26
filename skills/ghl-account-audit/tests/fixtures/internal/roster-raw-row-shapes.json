@@ -1,0 +1,95 @@
+{
+  "note": "R2-I6. The internal server serves the RAW GHL workflow row (core/audit-configuration.mjs finalize() pushes `row`, not a projection) and identifies it with `idOf`: `_id` first, `id` second, one level of BSON wrapper unwrapped ($oid/_id/id), String()-coerced, empty string rejected. These scenarios are the identity vocabulary the LIVE account actually emits. Every ledger field below is an INDEPENDENT literal, as in roster-scenarios.json: nothing is derived from the rows served alongside it. Each scenario stays on ONE page so it can be layered onto the `one-page` applied-query and source-route ledger.",
+  "underscore-id": {
+    "expect": "complete",
+    "ids": ["WF1", "WF2"],
+    "workflows": [
+      { "_id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  },
+  "oid-wrapped-id": {
+    "expect": "complete",
+    "ids": ["WF1", "WF2"],
+    "workflows": [
+      { "_id": { "$oid": "WF1" }, "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": { "$oid": "WF2" }, "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  },
+  "unreadable-underscore-falls-back-to-id": {
+    "expect": "complete",
+    "ids": ["WF1", "WF2"],
+    "workflows": [
+      { "_id": [], "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": {}, "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  },
+  "numeric-id": {
+    "expect": "sealed",
+    "ids": ["7", "9"],
+    "workflows": [
+      { "_id": 7, "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": 9, "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  },
+  "one-row-three-serializations": {
+    "expect": "sealed",
+    "ids": ["5"],
+    "workflows": [
+      { "_id": "5", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": 5, "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": { "$oid": "5" }, "name": "01 Meta Lead Intake", "status": "published", "version": 4 }
+    ],
+    "reportedTotal": 1,
+    "uniqueCount": 1,
+    "uniqueProgress": [1],
+    "totalHistory": [1],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  },
+  "empty-string-id-is-not-an-id": {
+    "expect": "incomplete",
+    "ids": [],
+    "workflows": [
+      { "_id": "", "id": "", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  },
+  "free-text-id-is-not-an-id": {
+    "expect": "incomplete",
+    "ids": [],
+    "workflows": [
+      { "_id": "QCANARY Hi Jane Doe, this is Dr Smith re your consult", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "_id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 }
+  }
+}

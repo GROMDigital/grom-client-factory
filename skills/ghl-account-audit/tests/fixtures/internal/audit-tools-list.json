@@ -1,0 +1,82 @@
+{
+  "note": "Verbatim structural copy of the audit profile's tools/list result. Order is load-bearing: toolProfileHash = sha256Of([...names]) and arrays are NOT sorted by the internal canonicaliser. Source: core/audit-profile.mjs AUDIT_TOOL_NAMES + core/tools.mjs inputSchema shapes.",
+  "tools": [
+    {
+      "name": "auth_status",
+      "description": "Report the audit rail's credential state without issuing any request.",
+      "inputSchema": { "type": "object", "properties": {} }
+    },
+    {
+      "name": "list_workflows_complete",
+      "description": "Walk the complete offset-paged workflow roster and publish its reconciliation ledger.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "locationId": { "type": "string" },
+          "pageSize": { "type": "integer", "minimum": 1, "maximum": 100, "default": 100 },
+          "maxPages": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 }
+        },
+        "required": ["locationId"]
+      }
+    },
+    {
+      "name": "get_workflow",
+      "description": "Summary of one workflow. Use export_workflow for the full graph.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "locationId": { "type": "string" },
+          "workflowId": { "type": "string" }
+        },
+        "required": ["locationId", "workflowId"]
+      }
+    },
+    {
+      "name": "export_workflow",
+      "description": "Full workflow graph, triggers and sticky notes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "locationId": { "type": "string" },
+          "workflowId": { "type": "string" }
+        },
+        "required": ["locationId", "workflowId"]
+      }
+    },
+    {
+      "name": "get_workflow_runtime_window",
+      "description": "Complete runtime evidence for one workflow over a half-open [fromDate, toDate) window.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "locationId": { "type": "string" },
+          "workflowId": { "type": "string" },
+          "fromDate": { "type": "integer", "minimum": 0 },
+          "toDate": { "type": "integer", "exclusiveMinimum": 0 },
+          "contactId": { "type": "string" },
+          "eventTypes": { "type": "array", "items": { "type": "string" }, "maxItems": 20, "default": [] },
+          "stepIds": { "type": "array", "items": { "type": "string" }, "maxItems": 20, "default": [] },
+          "pageSize": { "const": 20, "default": 20 },
+          "maxLogPartitions": { "type": "integer", "minimum": 1, "maximum": 2048, "default": 256 },
+          "minPartitionMs": { "type": "integer", "minimum": 1, "default": 1000 },
+          "maxEnrollmentPages": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 },
+          "maxStepRosterPages": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 }
+        },
+        "required": ["locationId", "workflowId", "fromDate", "toDate"]
+      }
+    },
+    {
+      "name": "get_ai_configuration_bundle",
+      "description": "Discovery and detail coverage for conversation_ai, voice_ai and agent_studio.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "locationId": { "type": "string" },
+          "companyId": { "type": "string" },
+          "maxPages": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 }
+        },
+        "required": ["locationId"]
+      }
+    }
+  ]
+}

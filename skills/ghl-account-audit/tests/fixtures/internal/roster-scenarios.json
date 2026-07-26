@@ -1,0 +1,297 @@
+{
+  "note": "list_workflows_complete ledgers. ANTI-ORACLE RULE: reportedTotal, uniqueCount, uniqueProgress, totalHistory, pagination.* and terminalReason are INDEPENDENT literal inputs. Nothing here is derived from `workflows` at fixture-build or harness-build time, so a declared total is free to disagree with the rows actually served. Scenarios whose name starts with `liar-` declare complete:true while contradicting themselves; the adapter must catch them from the ledger alone. Source shape: core/audit-configuration.mjs finalize() (17 keys, NO contractVersion).",
+
+  "one-page": {
+    "expect": "complete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "three-page": {
+    "expect": "complete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 },
+      { "id": "WF3", "name": "03 No Show", "status": "published", "version": 1 },
+      { "id": "WF4", "name": "04 Reactivation", "status": "draft", "version": 1 },
+      { "id": "WF5", "name": "05 Internal Ops", "status": "published", "version": 7 }
+    ],
+    "reportedTotal": 5,
+    "uniqueCount": 5,
+    "uniqueProgress": [2, 2, 1],
+    "totalHistory": [5, 5, 5],
+    "pagination": { "attempted": 3, "fetched": 3, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "zero-total": {
+    "expect": "complete",
+    "workflows": [],
+    "reportedTotal": 0,
+    "uniqueCount": 0,
+    "uniqueProgress": [0],
+    "totalHistory": [0],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "reordered-duplicate": {
+    "expect": "complete",
+    "note": "The same id was served twice with byte-identical content across two pages. Deduping is legitimate: uniqueCount stays 2 while three rows were retained on the wire.",
+    "workflows": [
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 },
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [2, 0],
+    "totalHistory": [2, 2],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "stable-total": {
+    "expect": "complete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 },
+      { "id": "WF3", "name": "03 No Show", "status": "published", "version": 1 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 3,
+    "uniqueProgress": [2, 1],
+    "totalHistory": [3, 3],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "exact-retry": {
+    "expect": "complete",
+    "note": "One transport-level retry: attempted 3, fetched 2. A retried attempt must not be read as a page that made zero progress.",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 2,
+    "uniqueProgress": [1, 1],
+    "totalHistory": [2, 2],
+    "pagination": { "attempted": 3, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "changed-total": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 2,
+    "uniqueProgress": [1, 1],
+    "totalHistory": [2, 3],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_TOTAL_CHANGED", "component": "workflow_roster", "detail": "the reported total moved from 2 to 3 mid-walk", "detailSamples": ["2 -> 3"], "occurrences": 1 }
+    ]
+  },
+
+  "conflicting-duplicates": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF1", "name": "01 Meta Lead Intake (renamed)", "status": "draft", "version": 5 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 1,
+    "uniqueProgress": [1, 0],
+    "totalHistory": [2, 2],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_DUPLICATE_ID_CONFLICT", "component": "workflow_roster", "detail": "WF1 was served twice with different content hashes", "detailSamples": ["WF1"], "occurrences": 1 }
+    ]
+  },
+
+  "missing-ids": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 2,
+    "uniqueCount": 1,
+    "uniqueProgress": [1],
+    "totalHistory": [2],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_ROW_ID_MISSING", "component": "workflow_roster", "detail": "a roster row carried no readable id", "detailSamples": ["offset 1"], "occurrences": 1 }
+    ]
+  },
+
+  "zero-progress": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 1,
+    "uniqueProgress": [1, 0],
+    "totalHistory": [3, 3],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_NO_UNIQUE_PROGRESS", "component": "workflow_roster", "detail": "a page contributed no newly unique rows below the reported total", "detailSamples": ["page 2"], "occurrences": 1 }
+    ]
+  },
+
+  "premature-empty-page": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 }
+    ],
+    "reportedTotal": 4,
+    "uniqueCount": 1,
+    "uniqueProgress": [1, 0],
+    "totalHistory": [4, 4],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": false, "budget": 100 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_EMPTY_PAGE", "component": "workflow_roster", "detail": "an empty page arrived below the reported total", "detailSamples": ["offset 1"], "occurrences": 1 }
+    ]
+  },
+
+  "count-mismatch": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [3],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_TOTAL_MISMATCH", "component": "workflow_roster", "detail": "a short page arrived below the reported total", "detailSamples": ["2 of 3"], "occurrences": 1 }
+    ]
+  },
+
+  "page-budget-exhausted": {
+    "expect": "incomplete",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 40,
+    "uniqueCount": 2,
+    "uniqueProgress": [1, 1],
+    "totalHistory": [40, 40],
+    "pagination": { "attempted": 2, "fetched": 2, "exhausted": true, "budget": 2 },
+    "terminalReason": null,
+    "complete": false,
+    "warnings": [
+      { "code": "ROSTER_PAGE_BUDGET_EXHAUSTED", "component": "workflow_roster", "detail": "the roster page budget was spent before the total was reached", "detailSamples": ["budget 2"], "occurrences": 1 }
+    ]
+  },
+
+  "liar-complete-count-mismatch": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. The server claims complete:true and a terminal reason while uniqueCount (2) does not equal reportedTotal (3). The adapter must reconcile the ledger itself and refuse the claim.",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 2,
+    "uniqueProgress": [2],
+    "totalHistory": [3],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-rows-short-of-unique-count": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. uniqueCount (3) and reportedTotal (3) agree with each other but only two identified rows were served. A roster that trusts the declared counts would seal a workflow it never saw.",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 3,
+    "uniqueProgress": [3],
+    "totalHistory": [3],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-progress-ledger-short": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. pagination.fetched is 3 but uniqueProgress and totalHistory carry only 2 entries, so one fetched page is unaccounted for.",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 },
+      { "id": "WF2", "name": "02 Nurture", "status": "published", "version": 2 },
+      { "id": "WF3", "name": "03 No Show", "status": "published", "version": 1 }
+    ],
+    "reportedTotal": 3,
+    "uniqueCount": 3,
+    "uniqueProgress": [2, 1],
+    "totalHistory": [3, 3],
+    "pagination": { "attempted": 3, "fetched": 3, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-with-warnings": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. complete:true alongside a non-empty warnings array is impossible under the server's own `complete = warnings.length === 0 && !rateLimit.limited`.",
+    "workflows": [
+      { "id": "WF1", "name": "01 Meta Lead Intake", "status": "published", "version": 4 }
+    ],
+    "reportedTotal": 1,
+    "uniqueCount": 1,
+    "uniqueProgress": [1],
+    "totalHistory": [1],
+    "pagination": { "attempted": 1, "fetched": 1, "exhausted": false, "budget": 100 },
+    "terminalReason": "unique_count_equals_reported_total",
+    "complete": true,
+    "warnings": [
+      { "code": "ROSTER_ROW_MALFORMED", "component": "workflow_roster", "detail": "a roster row was not an object", "detailSamples": ["offset 0"], "occurrences": 1 }
+    ]
+  }
+}

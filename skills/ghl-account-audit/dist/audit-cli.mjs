@@ -5188,6 +5188,88 @@ import {
   writeFileSync
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+function isEmptySignal(value) {
+  if (value === null || value === void 0 || value === false || value === 0 || value === "") {
+    return true;
+  }
+  if (Array.isArray(value)) return value.length === 0;
+  if (isRecord(value)) return Object.keys(value).length === 0;
+  return false;
+}
+function isMeaningfulScalar(value) {
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "boolean" || typeof value === "bigint") return true;
+  return false;
+}
+function containsMeaningfulScalar(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (isMeaningfulScalar(value)) return true;
+  if (!value || typeof value !== "object") return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => containsMeaningfulScalar(entry, seen));
+  }
+  return Object.values(value).some((entry) => containsMeaningfulScalar(entry, seen));
+}
+function isSubstantiveRow(value) {
+  if (!isRecord(value) || Array.isArray(value)) return false;
+  return containsMeaningfulScalar(value);
+}
+function isPrivateSourceEnvelope(value) {
+  return isRecord(value) && !Array.isArray(value) && canonicalJson(Object.keys(value).sort()) === canonicalJson(["kind", "payload", "sourceId"]) && typeof value.sourceId === "string" && value.sourceId.length > 0 && typeof value.kind === "string" && value.kind.length > 0;
+}
+function isPrivateSourceInventory(value) {
+  return Array.isArray(value) && value.every((entry) => isRecord(entry) && !Array.isArray(entry) && canonicalJson(Object.keys(entry).sort()) === canonicalJson(["kind", "sourceHash", "sourceId"]) && ["sourceId", "kind", "sourceHash"].every(
+    (key) => typeof entry[key] === "string" && entry[key].length > 0
+  ));
+}
+function inspectSelfDescription(record, servedRows, spec) {
+  const state = { declarations: 0, contradicted: false, unreconciled: false, unknown: false };
+  if (!isRecord(record) || Array.isArray(record)) {
+    return { declarations: 0, contradicted: true, unreconciled: true, unknown: true };
+  }
+  for (const [key, value] of Object.entries(record)) {
+    if (!Object.hasOwn(spec, key)) {
+      state.unknown = true;
+      continue;
+    }
+    const meaning = spec[key];
+    if (isRecord(meaning)) {
+      if (!isRecord(value) || Array.isArray(value)) {
+        state.unknown = true;
+        continue;
+      }
+      const nested = inspectSelfDescription(value, servedRows, meaning);
+      state.declarations += nested.declarations;
+      state.contradicted = state.contradicted || nested.contradicted;
+      state.unreconciled = state.unreconciled || nested.unreconciled;
+      state.unknown = state.unknown || nested.unknown;
+      continue;
+    }
+    if (meaning === "row_count") {
+      state.declarations += 1;
+      if (!Number.isInteger(value) || value !== servedRows) state.unreconciled = true;
+    } else if (meaning === "terminal_true") {
+      if (value !== true) state.contradicted = true;
+    } else if (meaning === "terminal_false") {
+      if (value !== false) state.contradicted = true;
+    } else if (meaning === "empty") {
+      if (!isEmptySignal(value)) state.contradicted = true;
+    } else if (meaning === "rows") {
+      if (!Array.isArray(value)) state.unknown = true;
+    } else if (meaning === "private_source") {
+      if (!isPrivateSourceEnvelope(value)) state.unknown = true;
+    } else if (meaning === "private_inventory") {
+      if (!isPrivateSourceInventory(value)) state.unknown = true;
+    } else if (meaning === "scalar") {
+      if (value !== null && typeof value === "object") state.unknown = true;
+    } else {
+      state.unknown = true;
+    }
+  }
+  return state;
+}
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
@@ -5304,43 +5386,182 @@ function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ ne
   }
   seen.delete(value);
 }
-function enforcePublicOnlyPublication(input = {}, { firstBaseline = false } = {}) {
+function assertNoPrivateContent(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (typeof value === "string") {
+    for (const pattern of PRIVATE_VALUE_PATTERNS) {
+      if (pattern.test(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const child of value) assertNoPrivateContent(child, seen);
+  } else {
+    for (const [key, child] of Object.entries(value)) {
+      const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
+      if (PRIVATE_KEY_DENY.has(normalized)) {
+        throw codedError("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
+      }
+      assertNoPrivateContent(child, seen);
+    }
+  }
+  seen.delete(value);
+}
+function assertFullScopeClaimsSupported(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (value === null || typeof value !== "object") return;
+  if (seen.has(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_FULL_SCOPE");
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const child of value) assertFullScopeClaimsSupported(child, seen);
+  } else {
+    for (const [key, child] of Object.entries(value)) {
+      const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
+      if (["support", "claimsupport", "evidencesupport"].includes(normalized) && typeof child === "string" && INELIGIBLE_SUPPORT.has(child.toLowerCase())) throw codedError("AUDIT_INTEGRITY_FAILURE_FULL_SCOPE");
+      assertFullScopeClaimsSupported(child, seen);
+    }
+  }
+  seen.delete(value);
+}
+function scanPublicationPrivacy(value) {
+  try {
+    assertNoPrivateContent(value);
+    return { passed: true, code: null };
+  } catch (error) {
+    return {
+      passed: false,
+      code: typeof error?.code === "string" ? error.code : "PUBLICATION_NOT_SANITIZED"
+    };
+  }
+}
+function ownValue(container, key) {
+  return Object.hasOwn(container, key) ? container[key] : void 0;
+}
+function hasExactFields(value, fields) {
+  const keys = Object.keys(value);
+  return keys.length === fields.length && fields.every((field) => Object.hasOwn(value, field));
+}
+function validateFullEligibilityDecision(value, expectedRun = null) {
+  const invalid = { decision: null, reason: "structure" };
+  if (value === void 0 || value === null) return { decision: null, reason: "absent" };
+  if (typeof value !== "object" || Array.isArray(value)) return invalid;
+  if (Object.getPrototypeOf(value) !== Object.prototype) return invalid;
+  const status = ownValue(value, "status");
+  const eligible = ownValue(value, "eligible");
+  if (typeof status !== "string" || typeof eligible !== "boolean") return invalid;
+  if (!hasExactFields(value, DECISION_FIELDS)) return invalid;
+  const gates = ownValue(value, "gates");
+  if (!Array.isArray(gates) || gates.length !== FULL_ELIGIBILITY_GATES.length) return invalid;
+  const failedFromGates = [];
+  for (const [index, gate] of gates.entries()) {
+    if (!gate || typeof gate !== "object" || Array.isArray(gate)) return invalid;
+    if (Object.getPrototypeOf(gate) !== Object.prototype) return invalid;
+    if (!hasExactFields(gate, GATE_FIELDS)) return invalid;
+    if (ownValue(gate, "id") !== FULL_ELIGIBILITY_GATES[index]) return invalid;
+    const passed = ownValue(gate, "passed");
+    if (typeof passed !== "boolean") return invalid;
+    if (!passed) failedFromGates.push(gate.id);
+  }
+  const failedGates = ownValue(value, "failedGates");
+  if (!Array.isArray(failedGates)) return invalid;
+  if (failedGates.some((id) => typeof id !== "string")) return invalid;
+  if (canonicalJson([...failedGates].sort()) !== canonicalJson([...failedFromGates].sort())) return invalid;
+  const allPassed = failedFromGates.length === 0;
+  if (eligible !== allPassed) return invalid;
+  if (eligible !== (status === "complete_full")) return invalid;
+  if (NON_PUBLISHING_STATUSES.has(status) && failedFromGates.length === 0) return invalid;
+  const boundRunId = ownValue(value, "runId");
+  const boundInputsHash = ownValue(value, "frozenInputsHash");
+  const namesRun = typeof boundRunId === "string" && boundRunId.length > 0;
+  const namesInputs = typeof boundInputsHash === "string" && boundInputsHash.length > 0;
+  if (isRecord(expectedRun)) {
+    for (const [key, bound] of [["runId", boundRunId], ["frozenInputsHash", boundInputsHash]]) {
+      const wanted = expectedRun[key];
+      if (typeof wanted !== "string" || wanted.length === 0) return { decision: null, reason: "run" };
+      if (bound !== wanted) return { decision: null, reason: "run" };
+    }
+  } else if (namesRun || namesInputs) {
+    return { decision: null, reason: "run" };
+  }
+  if (eligible && !(namesRun && namesInputs)) return { decision: null, reason: "run" };
+  return { decision: { status, eligible }, reason: null };
+}
+function enforcePublicOnlyPublication(input = {}, { firstBaseline = false, fullEligibility = null, expectedRun = null } = {}) {
+  const validated = validateFullEligibilityDecision(fullEligibility, expectedRun);
+  if (validated.reason === "structure") {
+    throw codedError("AUDIT_INTEGRITY_FAILURE_FULL_ELIGIBILITY");
+  }
+  const decision = validated.decision;
+  const publishFull = decision !== null && decision.status === "complete_full";
+  const nonPublishing = decision !== null && NON_PUBLISHING_STATUSES.has(decision.status);
   if (input?.payloadArtifacts && input?.projections && input?.manifestInput) {
+    if (nonPublishing) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+    const expectedStatus = publishFull ? "complete_full" : "complete_partial";
     const coverage2 = input.payloadArtifacts["coverage.json"];
     const machine = input.payloadArtifacts["metrics-and-findings.json"];
     const limitations = Array.isArray(coverage2?.limitations) ? new Set(coverage2.limitations) : /* @__PURE__ */ new Set();
-    if (input.manifestInput.status !== "complete_partial" || coverage2?.state !== "complete_partial" || machine?.sealedInputs?.run?.status !== "complete_partial" || !limitations.has("INTERNAL_WORKFLOW_DEFINITION_MISSING") || !limitations.has("INTERNAL_WORKFLOW_RUNTIME_MISSING")) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-    for (const artifact of Object.values(input.payloadArtifacts)) {
-      if (artifact && typeof artifact === "object") {
-        assertNoPublicOnlyOverclaim(artifact);
+    if (input.manifestInput.status !== expectedStatus || coverage2?.state !== expectedStatus || machine?.sealedInputs?.run?.status !== expectedStatus || !publishFull && !limitations.has("INTERNAL_WORKFLOW_DEFINITION_MISSING") || !publishFull && !limitations.has("INTERNAL_WORKFLOW_RUNTIME_MISSING")) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+    if (publishFull) {
+      for (const artifact of Object.values(input.payloadArtifacts)) {
+        assertNoPrivateContent(artifact);
+        assertFullScopeClaimsSupported(artifact);
       }
+      assertNoPrivateContent(input.projections);
+      assertFullScopeClaimsSupported(input.projections);
+    } else {
+      for (const artifact of Object.values(input.payloadArtifacts)) {
+        if (artifact && typeof artifact === "object") {
+          assertNoPublicOnlyOverclaim(artifact);
+        }
+      }
+      assertNoPublicOnlyOverclaim(input.projections);
     }
-    assertNoPublicOnlyOverclaim(input.projections);
-    if (typeof input.payloadArtifacts["REPORT.md"] !== "string" || BROAD_REPORT_LANGUAGE.test(input.payloadArtifacts["REPORT.md"])) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+    if (typeof input.payloadArtifacts["REPORT.md"] !== "string" || !publishFull && BROAD_REPORT_LANGUAGE.test(input.payloadArtifacts["REPORT.md"])) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
     const serialized = canonicalJson(input.payloadArtifacts);
     if (firstBaseline && [...FORBIDDEN_MOVEMENT].some((label) => serialized.includes(`"${label}"`))) throw codedError("AUDIT_INTEGRITY_FAILURE_FIRST_BASELINE_MOVEMENT");
-    return deepFreeze({ ...structuredClone(input), status: "complete_partial" });
+    return deepFreeze({ ...structuredClone(input), status: expectedStatus });
   }
   const coverage = input.coverage && typeof input.coverage === "object" ? structuredClone(input.coverage) : {};
-  coverage.state = "complete_partial";
-  coverage.scope = "public_comparable_subset";
-  coverage.limitations = [.../* @__PURE__ */ new Set([
-    ...Array.isArray(coverage.limitations) ? coverage.limitations : [],
-    ...INTERNAL_LIMITATIONS
-  ])].sort();
+  if (!publishFull) {
+    coverage.state = "complete_partial";
+    coverage.scope = "public_comparable_subset";
+    coverage.limitations = [.../* @__PURE__ */ new Set([
+      ...Array.isArray(coverage.limitations) ? coverage.limitations : [],
+      ...INTERNAL_LIMITATIONS
+    ])].sort();
+  }
   const diff = input.diff && typeof input.diff === "object" ? structuredClone(input.diff) : { state: "FIRST_BASELINE", transitions: [] };
   if (Array.isArray(diff.transitions) && firstBaseline) {
     diff.transitions = diff.transitions.filter((transition) => !FORBIDDEN_MOVEMENT.has(transition?.state ?? transition));
   }
   if (firstBaseline && FORBIDDEN_MOVEMENT.has(diff.state)) diff.state = "NOT_COMPARABLE";
-  return deepFreeze({
+  let findings = [];
+  if (!nonPublishing && Array.isArray(input.findings)) {
+    if (publishFull) {
+      assertNoPrivateContent(input.findings);
+      assertFullScopeClaimsSupported(input.findings);
+      assertNoPrivateContent(coverage);
+      assertNoPrivateContent(diff);
+      if (Object.hasOwn(input, "solutionPacks")) {
+        assertNoPrivateContent(input.solutionPacks);
+        assertFullScopeClaimsSupported(input.solutionPacks);
+      }
+      findings = structuredClone(input.findings);
+    } else {
+      findings = input.findings.map(sanitizeFinding);
+    }
+  }
+  const output = {
     ...structuredClone(input),
-    status: "complete_partial",
+    status: publishFull ? "complete_full" : nonPublishing ? decision.status : "complete_partial",
     coverage,
     diff,
-    findings: Array.isArray(input.findings) ? input.findings.map(sanitizeFinding) : [],
+    findings,
     latestFull: input.latestFull ?? null
-  });
+  };
+  if (nonPublishing && Object.hasOwn(input, "solutionPacks")) output.solutionPacks = [];
+  return deepFreeze(output);
 }
 function safeFixturePath(root, candidate, code) {
   const resolvedRoot = realpathSync(root);
@@ -5443,7 +5664,794 @@ function replayWeeklyFixture({ fixtureRoot, outputRoot }) {
     publicationPath: relative(canonicalOutput, publicationRoot).split(sep).join("/")
   });
 }
-var INTERNAL_LIMITATIONS, FORBIDDEN_MOVEMENT, BROAD_REPORT_LANGUAGE;
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function jsonClone(value) {
+  return value === void 0 ? null : structuredClone(value);
+}
+function epochOrNull(value) {
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function sortedUnique(values) {
+  return [...new Set(values.filter((value) => typeof value === "string"))].sort();
+}
+async function collectInternalEvidencePhase({
+  adapter,
+  target,
+  window,
+  applicability,
+  stepRosterRequests,
+  publicEvidence,
+  checkpoint,
+  signal
+} = {}) {
+  if (publicEvidence === void 0 || publicEvidence === null) {
+    throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_EVIDENCE_MISSING");
+  }
+  const preservedPublic = jsonClone(publicEvidence);
+  const preservedCheckpoint = jsonClone(checkpoint);
+  if (adapter === void 0 || adapter === null) {
+    return deepFreeze({
+      phase: "normalizing",
+      publicEvidence: preservedPublic,
+      checkpoint: preservedCheckpoint,
+      internalEvidence: null,
+      limitations: [...INTERNAL_LIMITATIONS]
+    });
+  }
+  if (typeof adapter.collectAuditEvidence !== "function") {
+    throw codedError("INTERNAL_AUDIT_REQUEST_INVALID", TypeError);
+  }
+  const internalEvidence = await adapter.collectAuditEvidence({
+    target,
+    window,
+    applicability,
+    stepRosterRequests,
+    signal
+  });
+  const authBoundary = internalEvidence?.checkpoint?.phase === "awaiting_internal_auth" && internalEvidence?.checkpoint?.reason === AUTH_REQUIRED;
+  if (authBoundary) {
+    return deepFreeze({
+      phase: "awaiting_internal_auth",
+      publicEvidence: preservedPublic,
+      checkpoint: preservedCheckpoint,
+      internalEvidence: null,
+      limitations: [AUTH_REQUIRED, ...INTERNAL_LIMITATIONS]
+    });
+  }
+  return deepFreeze({
+    phase: "collecting_internal",
+    publicEvidence: preservedPublic,
+    checkpoint: preservedCheckpoint,
+    internalEvidence,
+    limitations: internalEvidence?.complete === true ? [] : [...INTERNAL_LIMITATIONS]
+  });
+}
+function looksLikeEnvelope(value) {
+  return isRecord(value) && !Array.isArray(value) && isRecord(value.page) && !Array.isArray(value.page) && Array.isArray(value.items);
+}
+function normalizePublicEvidence(value) {
+  if (value === null || value === void 0) return { envelopes: [], unrecognised: false };
+  if (Array.isArray(value)) return { envelopes: value, unrecognised: false };
+  if (!isRecord(value)) return { envelopes: [], unrecognised: true };
+  if (Array.isArray(value.envelopes)) {
+    return { envelopes: value.envelopes, unrecognised: false };
+  }
+  if (looksLikeEnvelope(value)) return { envelopes: [value], unrecognised: false };
+  if (Array.isArray(value.events)) {
+    if (value.events.length === 0) return { envelopes: [], unrecognised: false };
+    if (value.events.every(looksLikeEnvelope)) {
+      return { envelopes: value.events, unrecognised: false };
+    }
+    return { envelopes: [], unrecognised: true };
+  }
+  return { envelopes: [], unrecognised: true };
+}
+function inspectPublicRail(envelopes, expectedLocationId, { unrecognisedShape = false } = {}) {
+  const reasons = [];
+  let locationConflict = false;
+  if (unrecognisedShape) {
+    return { ok: false, locationConflict, reasons: ["PUBLIC_EVIDENCE_MALFORMED"] };
+  }
+  if (!Array.isArray(envelopes) || envelopes.length === 0) {
+    return { ok: false, locationConflict, reasons: ["PUBLIC_EVIDENCE_MISSING"] };
+  }
+  for (const envelope of envelopes) {
+    if (!isRecord(envelope)) {
+      reasons.push("PUBLIC_EVIDENCE_MALFORMED");
+      continue;
+    }
+    if (typeof envelope.boundLocationId !== "string" || expectedLocationId !== null && envelope.boundLocationId !== expectedLocationId) {
+      locationConflict = true;
+      reasons.push("PUBLIC_INTERNAL_LOCATION_CONFLICT");
+      continue;
+    }
+    const page = envelope.page;
+    const items = Array.isArray(envelope.items) ? envelope.items : null;
+    if (!isRecord(page) || items === null) {
+      reasons.push("PUBLIC_EVIDENCE_MALFORMED");
+      continue;
+    }
+    if (page.complete !== true) reasons.push("PUBLIC_EVIDENCE_INCOMPLETE");
+    const rows = items.filter(isSubstantiveRow);
+    if (rows.length !== items.length) {
+      reasons.push("PUBLIC_EVIDENCE_MALFORMED");
+      continue;
+    }
+    if (rows.length === 0) {
+      reasons.push("PUBLIC_EVIDENCE_INCOMPLETE");
+    }
+    const pageState = inspectSelfDescription(page, rows.length, PAGE_SPEC);
+    const envelopeState = inspectSelfDescription(
+      Object.fromEntries(Object.entries(envelope).filter(([key]) => key !== "page")),
+      rows.length,
+      ENVELOPE_SPEC
+    );
+    if (pageState.contradicted || envelopeState.contradicted) {
+      reasons.push("PUBLIC_EVIDENCE_INCOMPLETE");
+    }
+    if (pageState.unreconciled || envelopeState.unreconciled) {
+      reasons.push("PUBLIC_EVIDENCE_RECONCILIATION_FAILED");
+    }
+    if (pageState.unknown || envelopeState.unknown) {
+      reasons.push("PUBLIC_EVIDENCE_MALFORMED");
+    }
+    if (pageState.declarations === 0) reasons.push("PUBLIC_EVIDENCE_RECONCILIATION_FAILED");
+    if (Object.hasOwn(envelope, "incompleteReason") && !isEmptySignal(envelope.incompleteReason) || Object.hasOwn(page, "incompleteReason") && !isEmptySignal(page.incompleteReason)) reasons.push("PUBLIC_EVIDENCE_INCOMPLETE");
+  }
+  return { ok: reasons.length === 0, locationConflict, reasons: sortedUnique(reasons) };
+}
+function publicCaptureExtremes(envelopes) {
+  const stamps = (Array.isArray(envelopes) ? envelopes : []).map((envelope) => epochOrNull(envelope?.capturedAt)).filter((value) => value !== null);
+  if (stamps.length === 0) return null;
+  return { oldest: Math.min(...stamps), newest: Math.max(...stamps) };
+}
+function observedSkewMs(envelopes, internalCapturedAt) {
+  if (internalCapturedAt === null) return null;
+  const extremes = publicCaptureExtremes(envelopes);
+  if (extremes === null) return null;
+  return Math.max(
+    Math.abs(internalCapturedAt - extremes.oldest),
+    Math.abs(internalCapturedAt - extremes.newest)
+  );
+}
+function normalizeRefreshed(value) {
+  if (value === null || value === void 0) return null;
+  const { envelopes, unrecognised } = normalizePublicEvidence(value);
+  if (unrecognised) return null;
+  return envelopes;
+}
+function entityKeyFor(kind, nativeId, row) {
+  if (typeof nativeId === "string" && nativeId.length > 0) return `${kind}:${nativeId}`;
+  return `${kind}:unjoined:${sha256(row ?? null).slice(0, 24)}`;
+}
+function ensureEntity(entities, { entityKey, kind, nativeId }) {
+  let entity = entities.get(entityKey);
+  if (entity === void 0) {
+    entity = {
+      entityKey,
+      kind,
+      nativeId: typeof nativeId === "string" && nativeId.length > 0 ? nativeId : null,
+      rails: /* @__PURE__ */ new Set(),
+      provenance: /* @__PURE__ */ new Map(),
+      // Finding I1: each rail keeps EVERY distinct value it observed for a field, keyed by its
+      // canonical form. Arrival order can no longer decide anything, and a same-rail
+      // contradiction on one native id is recorded instead of silently overwritten.
+      publicFields: /* @__PURE__ */ new Map(),
+      internalFields: /* @__PURE__ */ new Map(),
+      internalFacts: /* @__PURE__ */ new Map()
+    };
+    entities.set(entityKey, entity);
+  }
+  return entity;
+}
+function observeField(store, field, value) {
+  const cloned = jsonClone(value);
+  const bucket = store.get(field) ?? /* @__PURE__ */ new Map();
+  bucket.set(canonicalJson(cloned ?? null), cloned);
+  store.set(field, bucket);
+}
+function railValue(store, field) {
+  const bucket = store.get(field);
+  if (bucket === void 0) {
+    return { present: false, conflicted: false, value: null, values: [] };
+  }
+  const keys = [...bucket.keys()].sort();
+  const values = keys.map((key) => bucket.get(key));
+  if (values.length === 1) {
+    return { present: true, conflicted: false, value: values[0], values };
+  }
+  return { present: true, conflicted: true, value: null, values };
+}
+function addProvenance(entity, rail, record) {
+  const entry = { rail, ...record };
+  entity.provenance.set(canonicalJson(entry), entry);
+  entity.rails.add(rail);
+}
+function collectPublicEntities(entities, envelopes) {
+  for (const envelope of Array.isArray(envelopes) ? envelopes : []) {
+    if (!isRecord(envelope) || !Array.isArray(envelope.items)) continue;
+    const provenance = {
+      source: typeof envelope.source === "string" ? envelope.source : "public_ghl",
+      operationId: typeof envelope.operationId === "string" ? envelope.operationId : null,
+      capturedAt: typeof envelope.capturedAt === "string" ? envelope.capturedAt : null,
+      requestedWindow: jsonClone(envelope.requestedWindow),
+      appliedWindow: jsonClone(envelope.appliedWindow)
+    };
+    for (const row of envelope.items) {
+      if (!isRecord(row)) continue;
+      const kind = typeof row.kind === "string" ? row.kind : "unknown";
+      const nativeId = typeof row.nativeId === "string" && row.nativeId.length > 0 ? row.nativeId : null;
+      const entity = ensureEntity(entities, {
+        entityKey: entityKeyFor(kind, nativeId, row),
+        kind,
+        nativeId
+      });
+      addProvenance(entity, "public", provenance);
+      for (const [field, value] of Object.entries(row)) {
+        if (field === "kind" || field === "nativeId") continue;
+        observeField(entity.publicFields, field, value);
+      }
+    }
+  }
+}
+function collectInternalEntities(entities, internalEvidence) {
+  if (!isRecord(internalEvidence)) return;
+  const provenance = {
+    source: typeof internalEvidence.source === "string" ? internalEvidence.source : "internal_ghl",
+    operationId: typeof internalEvidence.operationId === "string" ? internalEvidence.operationId : null,
+    capturedAt: typeof internalEvidence.capturedAt === "string" ? internalEvidence.capturedAt : null,
+    requestedWindow: jsonClone(internalEvidence.requestedWindow),
+    appliedWindow: jsonClone(internalEvidence.appliedWindow)
+  };
+  const workflows = Array.isArray(internalEvidence.workflows) ? internalEvidence.workflows : [];
+  for (const record of workflows) {
+    if (!isRecord(record) || typeof record.workflowId !== "string") continue;
+    const entity = ensureEntity(entities, {
+      entityKey: entityKeyFor("workflow", record.workflowId, record),
+      kind: "workflow",
+      nativeId: record.workflowId
+    });
+    addProvenance(entity, "internal", provenance);
+    if (typeof record.status === "string") {
+      observeField(entity.internalFields, "status", record.status);
+    }
+    if (Number.isInteger(record.version)) {
+      observeField(entity.internalFields, "version", record.version);
+    }
+    observeField(entity.internalFacts, "definition", record.definition ?? null);
+    observeField(entity.internalFacts, "runtime", record.runtime ?? null);
+    observeField(
+      entity.internalFacts,
+      "configurationBinding",
+      record.configurationBinding ?? null
+    );
+    const events = Array.isArray(record.runtime?.events) ? record.runtime.events : [];
+    for (const entry of events) {
+      const payload = isRecord(entry?.event) ? entry.event : null;
+      if (payload === null) continue;
+      for (const [idKey, kind] of EVENT_ENTITY_KEYS) {
+        const nativeId = payload[idKey];
+        if (typeof nativeId !== "string" || nativeId.length === 0) continue;
+        const referenced = ensureEntity(entities, {
+          entityKey: entityKeyFor(kind, nativeId, null),
+          kind,
+          nativeId
+        });
+        addProvenance(referenced, "internal", provenance);
+        for (const field of EVENT_CLAIM_FIELDS) {
+          if (!Object.hasOwn(payload, field)) continue;
+          observeField(referenced.internalFields, field, payload[field]);
+        }
+      }
+    }
+  }
+}
+function resolveEntities(entities) {
+  const resolved = [];
+  const conflicts = [];
+  for (const entity of entities.values()) {
+    const fields = {};
+    const entityConflicts = [];
+    const names = sortedUnique([
+      ...entity.publicFields.keys(),
+      ...entity.internalFields.keys()
+    ]);
+    const recordConflict = (conflict) => {
+      entityConflicts.push(conflict);
+      conflicts.push(conflict);
+    };
+    for (const field of names) {
+      const publicRail = railValue(entity.publicFields, field);
+      if (!publicRail.present) continue;
+      const internalRail = railValue(entity.internalFields, field);
+      if (publicRail.conflicted || internalRail.conflicted) {
+        fields[field] = {
+          state: "CONFLICT",
+          publicValue: publicRail.conflicted ? { state: "CONTRADICTORY", values: publicRail.values } : publicRail.value,
+          internalValue: !internalRail.present ? null : internalRail.conflicted ? { state: "CONTRADICTORY", values: internalRail.values } : internalRail.value
+        };
+        recordConflict({
+          nativeId: entity.nativeId,
+          field,
+          resolution: "conflict",
+          rail: publicRail.conflicted && internalRail.conflicted ? "both" : publicRail.conflicted ? "public" : "internal",
+          publicOwnedDomain: PUBLIC_OWNED_KINDS.has(entity.kind)
+        });
+        continue;
+      }
+      const publicValue = publicRail.value;
+      if (!internalRail.present) {
+        fields[field] = publicValue;
+        continue;
+      }
+      const internalValue = internalRail.value;
+      if (canonicalJson(publicValue ?? null) === canonicalJson(internalValue ?? null)) {
+        fields[field] = publicValue;
+        continue;
+      }
+      fields[field] = { state: "CONFLICT", publicValue, internalValue };
+      recordConflict({
+        nativeId: entity.nativeId,
+        field,
+        resolution: "conflict",
+        publicOwnedDomain: PUBLIC_OWNED_KINDS.has(entity.kind)
+      });
+    }
+    const internalFacts = {};
+    for (const name of INTERNAL_FACT_NAMES) {
+      const observed = railValue(entity.internalFacts, name);
+      if (!observed.present) {
+        internalFacts[name] = null;
+        continue;
+      }
+      if (observed.conflicted) {
+        internalFacts[name] = { state: "CONTRADICTORY", values: observed.values };
+        recordConflict({
+          nativeId: entity.nativeId,
+          field: `internalFacts.${name}`,
+          resolution: "conflict",
+          rail: "internal",
+          publicOwnedDomain: PUBLIC_OWNED_KINDS.has(entity.kind)
+        });
+        continue;
+      }
+      internalFacts[name] = observed.value;
+    }
+    resolved.push({
+      entityKey: entity.entityKey,
+      kind: entity.kind,
+      nativeId: entity.nativeId,
+      joinBasis: entity.nativeId === null ? "unjoined" : "provider_native_id",
+      rails: [...entity.rails].sort(),
+      provenance: [...entity.provenance.values()].sort(
+        (left, right) => canonicalJson(left).localeCompare(canonicalJson(right))
+      ),
+      fields,
+      conflicts: entityConflicts,
+      internalFacts
+    });
+  }
+  resolved.sort((left, right) => left.entityKey.localeCompare(right.entityKey));
+  conflicts.sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
+  return { entities: resolved, conflicts };
+}
+async function mergeInternalEvidence({
+  publicEvidence,
+  internalEvidence = null,
+  coveragePolicy,
+  checkpoint,
+  refreshPublicEvidence,
+  refreshLedger = null,
+  runtime
+} = {}) {
+  const policy = isRecord(coveragePolicy) ? coveragePolicy : {};
+  const policyMs = Number.isFinite(policy.maxSnapshotSkewMs) ? Number(policy.maxSnapshotSkewMs) : DEFAULT_SNAPSHOT_SKEW_MS;
+  const analyticalCutoff = typeof policy.analyticalCutoff === "string" ? policy.analyticalCutoff : null;
+  const freshnessFloor = epochOrNull(policy.freshnessFloor);
+  const preservedCheckpoint = jsonClone(checkpoint);
+  const normalizedPublic = normalizePublicEvidence(jsonClone(publicEvidence ?? null));
+  const publicShapeUnrecognised = normalizedPublic.unrecognised;
+  let envelopes = normalizedPublic.envelopes;
+  const limitations = /* @__PURE__ */ new Set();
+  let quarantined = false;
+  const internalPresent = isRecord(internalEvidence);
+  const expectedLocationId = internalPresent && typeof internalEvidence.boundLocationId === "string" ? internalEvidence.boundLocationId : typeof envelopes[0]?.boundLocationId === "string" ? envelopes[0].boundLocationId : null;
+  const publicRail = inspectPublicRail(envelopes, expectedLocationId, {
+    unrecognisedShape: publicShapeUnrecognised
+  });
+  for (const reason of publicRail.reasons) limitations.add(reason);
+  if (publicRail.locationConflict) quarantined = true;
+  if (!internalPresent) {
+    limitations.add("INTERNAL_EVIDENCE_MISSING");
+    for (const code of INTERNAL_LIMITATIONS) limitations.add(code);
+  } else if (internalEvidence.complete !== true) {
+    limitations.add("INTERNAL_EVIDENCE_INCOMPLETE");
+  }
+  const internalCapturedAt = internalPresent ? epochOrNull(internalEvidence.capturedAt) : null;
+  let observedMs = observedSkewMs(envelopes, internalCapturedAt);
+  let withinPolicy = observedMs !== null && observedMs <= policyMs;
+  let refreshed = false;
+  const priorAttempted = isRecord(refreshLedger) ? refreshLedger.attempted === true : isRecord(preservedCheckpoint) && preservedCheckpoint.publicRefreshAttempted === true;
+  let attemptedNow = false;
+  if (publicRail.ok && internalCapturedAt !== null && observedMs !== null && !withinPolicy && priorAttempted) {
+    limitations.add(SNAPSHOT_SKEW);
+  } else if (publicRail.ok && internalCapturedAt !== null && observedMs !== null && !withinPolicy) {
+    if (typeof refreshPublicEvidence !== "function") {
+      limitations.add(SNAPSHOT_SKEW);
+    } else {
+      attemptedNow = true;
+      const requestedWindow = jsonClone(envelopes[0]?.requestedWindow ?? null);
+      let candidate = null;
+      try {
+        candidate = normalizeRefreshed(await refreshPublicEvidence({
+          requestedWindow,
+          reason: SNAPSHOT_SKEW
+        }));
+      } catch {
+        candidate = null;
+      }
+      const candidateRail = candidate === null ? { ok: false, locationConflict: false, reasons: [] } : inspectPublicRail(candidate, expectedLocationId);
+      const candidateSkew = candidate === null ? null : observedSkewMs(candidate, internalCapturedAt);
+      const candidateFresh = candidate === null || freshnessFloor === null ? candidate !== null : (publicCaptureExtremes(candidate)?.oldest ?? -Infinity) >= freshnessFloor;
+      if (candidateRail.ok && candidateSkew !== null && candidateSkew <= policyMs && candidateFresh) {
+        envelopes = jsonClone(candidate);
+        observedMs = candidateSkew;
+        withinPolicy = true;
+        refreshed = true;
+      } else {
+        if (candidateRail.locationConflict) quarantined = true;
+        limitations.add(SNAPSHOT_SKEW);
+      }
+    }
+  } else if (!withinPolicy && (observedMs !== null || internalPresent)) {
+    limitations.add(SNAPSHOT_SKEW);
+  }
+  const entityMap = /* @__PURE__ */ new Map();
+  if (publicRail.ok || !publicRail.locationConflict) collectPublicEntities(entityMap, envelopes);
+  collectInternalEntities(entityMap, internalEvidence);
+  const { entities, conflicts } = resolveEntities(entityMap);
+  const status = quarantined ? "QUARANTINED" : publicRail.ok && internalPresent && internalEvidence.complete === true && withinPolicy ? "COMPLETE" : "PARTIAL";
+  return deepFreeze({
+    status,
+    analyticalCutoff,
+    entities,
+    conflicts,
+    limitations: [...limitations].sort(),
+    skew: {
+      observedMs,
+      policyMs,
+      withinPolicy,
+      refreshed
+    },
+    // The durable mark finding M3 asked for. The caller persists it (the kernel checkpoints it
+    // with the internal phase) and hands it back as `refreshLedger` on any later attempt.
+    publicRefreshLedger: {
+      attempted: priorAttempted || attemptedNow,
+      attemptedThisCall: attemptedNow,
+      alreadyAttempted: priorAttempted
+    },
+    publicEvidence: envelopes,
+    internalEvidence: internalPresent ? internalEvidence : null,
+    checkpoint: preservedCheckpoint
+  });
+}
+function coverageRowsOf(internalEvidence) {
+  const coverage = internalEvidence?.capabilityCoverage;
+  if (Array.isArray(coverage)) return coverage.filter(isRecord);
+  if (isRecord(coverage)) return Object.values(coverage).filter(isRecord);
+  return [];
+}
+function windowsCovered(internalEvidence, requiredWindows) {
+  const applied = isRecord(internalEvidence?.appliedWindow) ? internalEvidence.appliedWindow : internalEvidence?.requestedWindow;
+  const from = epochOrNull(applied?.from);
+  const to2 = epochOrNull(applied?.to);
+  if (from === null || to2 === null) return false;
+  const required = Array.isArray(requiredWindows) ? requiredWindows : [];
+  if (required.length === 0) return false;
+  return required.every((entry) => {
+    const start = epochOrNull(entry?.from);
+    const end = epochOrNull(entry?.to);
+    if (start === null || end === null) return false;
+    return from <= start && to2 >= end;
+  });
+}
+function inspectReadOnlyTrace(trace, expectedLocationId) {
+  if (!Array.isArray(trace) || trace.length === 0) {
+    return { clean: false, violation: false };
+  }
+  let unbound = false;
+  let evidenceCalls = 0;
+  let unusableOutcome = false;
+  for (const entry of trace) {
+    if (!isRecord(entry)) return { clean: false, violation: true };
+    if (typeof entry.tool !== "string" || !REGISTERED_AUDIT_TOOLS.has(entry.tool)) {
+      return { clean: false, violation: true };
+    }
+    if (entry.confirmed === true) return { clean: false, violation: true };
+    if (typeof entry.method === "string" && WRITE_METHODS.has(entry.method.toUpperCase())) {
+      return { clean: false, violation: true };
+    }
+    if (EVIDENCE_TOOLS.has(entry.tool)) evidenceCalls += 1;
+    if (entry.ok !== true) unusableOutcome = true;
+    if (Object.hasOwn(entry, "status") && entry.status !== null && !(Number.isInteger(entry.status) && entry.status >= 200 && entry.status < 300)) unusableOutcome = true;
+    if (expectedLocationId === null || typeof entry.boundLocationId !== "string" || entry.boundLocationId.length === 0) {
+      unbound = true;
+      continue;
+    }
+    if (entry.boundLocationId !== expectedLocationId) return { clean: false, violation: true };
+  }
+  return { clean: !unbound && !unusableOutcome && evidenceCalls > 0, violation: false };
+}
+function rosterCoverageReconciles(roster, workflows) {
+  const declaredIds = Array.isArray(roster?.workflowIds) ? roster.workflowIds : null;
+  if (declaredIds === null || declaredIds.length === 0) return false;
+  if (declaredIds.some((id) => typeof id !== "string" || id.length === 0)) return false;
+  const declared = new Set(declaredIds);
+  if (declared.size !== declaredIds.length) return false;
+  const stated = inspectSelfDescription(roster, declared.size, ROSTER_SPEC);
+  if (stated.declarations === 0 || stated.unreconciled || stated.contradicted || stated.unknown) return false;
+  const read = /* @__PURE__ */ new Set();
+  for (const entry of workflows) {
+    if (!isRecord(entry) || typeof entry.workflowId !== "string") return false;
+    if (entry.applicable !== true || entry.complete !== true || entry.definition === null || entry.definition === void 0 || entry.runtime === null || entry.runtime === void 0) return false;
+    if (!declared.has(entry.workflowId)) return false;
+    read.add(entry.workflowId);
+  }
+  return read.size === declared.size;
+}
+function internalDigest(value) {
+  try {
+    return `sha256:${sha256(value)}`;
+  } catch {
+    return null;
+  }
+}
+function governingAttestations({ proofChain, sealedAttestationHashes, provenCapabilityIds }) {
+  const governing = [];
+  if (!isRecord(proofChain) || sealedAttestationHashes.size === 0) return governing;
+  const attestations = proofChain.attestations;
+  if (!isRecord(attestations) || Array.isArray(attestations)) return governing;
+  const receipts = Array.isArray(proofChain.index?.receipts) ? proofChain.index.receipts : [];
+  const referenced = /* @__PURE__ */ new Set();
+  for (const receipt of receipts) {
+    if (!isRecord(receipt) || Array.isArray(receipt)) continue;
+    if (receipt.proofClass !== "live_runtime") continue;
+    if (typeof receipt.capabilityId !== "string") continue;
+    if (!provenCapabilityIds.has(receipt.capabilityId)) continue;
+    if (typeof receipt.attestationHash !== "string" || receipt.attestationHash.length === 0) {
+      continue;
+    }
+    referenced.add(receipt.attestationHash);
+  }
+  for (const [hash, attestation] of Object.entries(attestations)) {
+    if (!sealedAttestationHashes.has(hash)) continue;
+    if (!referenced.has(hash)) continue;
+    if (!isRecord(attestation) || Array.isArray(attestation)) continue;
+    if (attestation.attestationHash !== hash) continue;
+    if (ATTESTATION_BOUND_FIELDS.some((field) => !Object.hasOwn(attestation, field))) continue;
+    if (typeof attestation.approver !== "string" || attestation.approver.length === 0) continue;
+    if (ATTESTATION_BOUND_FIELDS.slice(0, 4).some(
+      (field) => typeof attestation[field] !== "string" || attestation[field].length === 0
+    )) continue;
+    const { attestationHash: _selfHash, ...rest } = attestation;
+    if (internalDigest(rest) !== hash) continue;
+    governing.push(attestation);
+  }
+  return governing;
+}
+function frozenInputAnchorDigest(frozenInputs) {
+  if (!isRecord(frozenInputs)) return null;
+  return sha256(Object.fromEntries(FROZEN_INPUT_ANCHOR_FIELDS.map((field) => [
+    field,
+    Object.hasOwn(frozenInputs, field) ? frozenInputs[field] : null
+  ])));
+}
+function anchorProvenanceAuthenticates(provenance, frozenInputs) {
+  if (!isRecord(provenance)) return false;
+  if (ownValue(provenance, "authenticated") !== true) return false;
+  if (ownValue(provenance, "method") !== FROZEN_INPUT_PROVENANCE_METHOD) return false;
+  const digest = frozenInputAnchorDigest(frozenInputs);
+  if (typeof digest !== "string" || digest.length === 0) return false;
+  return ownValue(provenance, "anchorDigest") === digest;
+}
+function sealedIdentityAnchors(frozenInputs, {
+  proofChain = null,
+  provenCapabilityIds = /* @__PURE__ */ new Set(),
+  evidenceGoverningHashes = null
+} = {}) {
+  if (!isRecord(frozenInputs)) return null;
+  const sealedString = (value) => typeof value === "string" && value.length > 0 ? value : null;
+  const sealedSet = (value) => new Set(
+    (Array.isArray(value) ? value : []).filter((entry) => sealedString(entry) !== null)
+  );
+  const toolProfile = sealedString(frozenInputs.providerToolProfileHash);
+  const manifests = sealedSet(frozenInputs.capabilityManifestHashes);
+  const attestationHashes = sealedSet(frozenInputs.capabilityAttestationHashes);
+  const proofDigests = /* @__PURE__ */ new Set([
+    ...attestationHashes,
+    ...sealedSet(frozenInputs.capabilityReceiptHashes),
+    ...sealedString(frozenInputs.capabilityProofIndexHash) === null ? [] : [frozenInputs.capabilityProofIndexHash]
+  ]);
+  const acceptedGoverning = new Set(
+    (Array.isArray(evidenceGoverningHashes) ? evidenceGoverningHashes : []).filter((entry) => sealedString(entry) !== null)
+  );
+  const sealedGoverning = new Set(
+    [...acceptedGoverning].filter((hash) => attestationHashes.has(hash))
+  );
+  const ready = toolProfile !== null && manifests.size > 0 && attestationHashes.size > 0;
+  const chainSupplied = isRecord(proofChain);
+  const governing = ready ? governingAttestations({
+    proofChain,
+    sealedAttestationHashes: attestationHashes,
+    provenCapabilityIds
+  }) : [];
+  return {
+    ready,
+    governingCount: governing.length,
+    sealedGoverningCount: sealedGoverning.size,
+    anchorsIdentities(identities) {
+      if (!ready) return false;
+      const claimed = isRecord(identities) ? identities : {};
+      const profile = sealedString(claimed.toolProfileHash);
+      const manifest = sealedString(claimed.capabilityManifestHash);
+      const bundle = sealedString(claimed.bundleHash);
+      if (profile === null || manifest === null || bundle === null) return false;
+      if (proofDigests.has(profile) || proofDigests.has(manifest) || proofDigests.has(bundle)) {
+        return false;
+      }
+      if (profile !== toolProfile) return false;
+      if (!manifests.has(manifest)) return false;
+      if (!manifests.has(bundle)) return false;
+      if (bundle === manifest || bundle === profile || manifest === profile) return false;
+      if (sealedGoverning.size === 0) return false;
+      if (chainSupplied || governing.length > 0) {
+        return governing.some((attestation) => sealedGoverning.has(attestation.attestationHash) && attestation.toolProfileHash === profile && attestation.capabilityManifestHash === manifest && attestation.bundleHash === bundle);
+      }
+      return sealedGoverning.size > 0;
+    }
+  };
+}
+async function evaluateFullEligibility({
+  internalEvidence = null,
+  merge = null,
+  trace = null,
+  claimSupport = null,
+  privacyScan = null,
+  verification = null,
+  requiredWindows = null,
+  expected = null,
+  frozenInputs = null,
+  // Finding R7-C1. How the anchoring half of `frozenInputs` was authenticated. The kernel emits
+  // this only after verifying a host MAC keyed by the run's vault key material. Absent — every
+  // caller that supplies no provenance, including a library host running its own analyzer — is
+  // UNKNOWN, and unknown anchors anchor nothing.
+  frozenInputProvenance = null,
+  run = null
+} = {}) {
+  const identities = isRecord(expected) ? expected : {};
+  const expectedLocationId = typeof identities.locationId === "string" ? identities.locationId : null;
+  const internalPresent = isRecord(internalEvidence);
+  const coverageRows = coverageRowsOf(internalEvidence);
+  const unprovenCapabilities = sortedUnique(coverageRows.filter((row) => row.proven !== true || row.proofClass !== "live_runtime").map((row) => row.capabilityId));
+  const supportingCapabilities = new Set(coverageRows.filter((row) => row.proven === true && row.proofClass === "live_runtime" && row.exercised === true && typeof row.capabilityId === "string" && row.capabilityId.length > 0).map((row) => row.capabilityId));
+  const unexercisedCapabilities = sortedUnique(coverageRows.filter((row) => row.exercised !== true).map((row) => row.capabilityId));
+  const supportRows = Array.isArray(claimSupport) ? claimSupport.filter(isRecord) : [];
+  const blockedClaims = sortedUnique(supportRows.filter((row) => {
+    const dependencies = Array.isArray(row.dependsOnCapabilityIds) ? row.dependsOnCapabilityIds.filter((id) => typeof id === "string" && id.length > 0) : [];
+    if (dependencies.length === 0) return true;
+    return !dependencies.every((id) => supportingCapabilities.has(id));
+  }).map((row) => row.claimId));
+  const unsupportedClaims = sortedUnique(supportRows.filter((row) => row.support !== "direct_evidence").map((row) => row.claimId));
+  const mergeLimitations = Array.isArray(merge?.limitations) ? merge.limitations.map((entry) => typeof entry === "string" ? entry : entry?.code).filter((code) => typeof code === "string") : [];
+  const workflows = Array.isArray(internalEvidence?.workflows) ? internalEvidence.workflows : [];
+  const roster = internalEvidence?.workflowRoster;
+  const mergePresent = isRecord(merge);
+  const mergeComplete = mergePresent && merge.status === "COMPLETE";
+  const railsClean = mergePresent && !mergeLimitations.some((code) => RAIL_BLOCKING_LIMITATIONS.includes(code));
+  const publicRailComplete = mergeComplete && railsClean;
+  const anchorProvenanced = anchorProvenanceAuthenticates(frozenInputProvenance, frozenInputs);
+  const sealed = !anchorProvenanced ? null : sealedIdentityAnchors(frozenInputs, {
+    proofChain: isRecord(identities.capabilityProofIndex) ? identities.capabilityProofIndex : null,
+    provenCapabilityIds: supportingCapabilities,
+    // Finding R4-C1, round-5 close: the attestations the ADAPTER accepted after verifying their
+    // preimage. Anchoring is now the intersection of that set with the run's sealed
+    // `capabilityAttestationHashes`, so withholding the document no longer waives layer 3.
+    evidenceGoverningHashes: internalPresent ? internalEvidence.governingAttestationHashes : null
+  });
+  const proofAnchored = internalPresent && sealed !== null && sealed.anchorsIdentities({
+    toolProfileHash: internalEvidence.toolProfileHash,
+    capabilityManifestHash: internalEvidence.capabilityManifestHash,
+    bundleHash: internalEvidence.bundleHash
+  });
+  const traceInspection = inspectReadOnlyTrace(trace, expectedLocationId);
+  const identityMismatch = internalPresent && (typeof identities.contractVersion === "string" && internalEvidence.contractVersion !== identities.contractVersion || typeof identities.toolProfileHash === "string" && internalEvidence.toolProfileHash !== identities.toolProfileHash || typeof identities.capabilityManifestHash === "string" && internalEvidence.capabilityManifestHash !== identities.capabilityManifestHash || typeof identities.bundleHash === "string" && internalEvidence.bundleHash !== identities.bundleHash);
+  const locationMismatch = internalPresent && expectedLocationId !== null && internalEvidence.boundLocationId !== expectedLocationId;
+  const passed = {
+    capability_coverage: internalPresent && coverageRows.length > 0 && coverageRows.every((row) => row.applicable === true) && coverageRows.some((row) => row.exercised === true) && windowsCovered(internalEvidence, requiredWindows) && publicRailComplete,
+    live_runtime_receipts: internalPresent && coverageRows.length > 0 && unprovenCapabilities.length === 0 && proofAnchored && !identityMismatch,
+    workflow_roster_and_coverage: internalPresent && isRecord(roster) && roster.complete === true && roster.sealed === true && workflows.length > 0 && workflows.every((entry) => entry?.complete === true) && rosterCoverageReconciles(roster, workflows),
+    ai_discovery_and_details: internalPresent && internalEvidence.aiConfiguration?.complete === true,
+    reconciliation: internalPresent && internalEvidence.complete === true && mergeComplete && railsClean && !locationMismatch,
+    snapshot_skew: mergePresent && merge.skew?.withinPolicy === true && Number.isFinite(merge.skew?.observedMs),
+    read_only_trace: traceInspection.clean,
+    claim_support: supportRows.length > 0 && Array.isArray(claimSupport) && supportRows.length === claimSupport.length && supportRows.every((row) => typeof row.claimId === "string" && row.claimId.length > 0) && unsupportedClaims.length === 0 && blockedClaims.length === 0,
+    privacy_scan: isRecord(privacyScan) && privacyScan.passed === true,
+    verifier: isRecord(verification) && verification.passed === true
+  };
+  const gates = FULL_ELIGIBILITY_GATES.map((id) => ({ id, passed: passed[id] === true }));
+  const failedGates = gates.filter((gate) => !gate.passed).map((gate) => gate.id);
+  const quarantined = traceInspection.violation || isRecord(privacyScan) && privacyScan.passed !== true || isRecord(verification) && verification.passed !== true || merge?.status === "QUARANTINED" || identityMismatch || locationMismatch;
+  const status = quarantined ? "quarantined" : failedGates.length === 0 ? "complete_full" : "complete_partial";
+  const eligible = status === "complete_full";
+  const limitations = [];
+  const addLimitation = (code, capabilityIds = [], claimIds = []) => {
+    if (limitations.some((entry) => entry.code === code)) return;
+    limitations.push({ code, capabilityIds: [...capabilityIds], claimIds: [...claimIds] });
+  };
+  if (!passed.live_runtime_receipts && unprovenCapabilities.length > 0) {
+    addLimitation("INTERNAL_AUDIT_CAPABILITY_UNPROVEN", unprovenCapabilities, blockedClaims);
+  }
+  if (!passed.capability_coverage) {
+    addLimitation("CAPABILITY_COVERAGE_INCOMPLETE", unprovenCapabilities, []);
+  }
+  if (internalPresent && !proofAnchored) {
+    addLimitation("INTERNAL_AUDIT_PROOF_UNANCHORED", [], []);
+  }
+  if (!internalPresent || !passed.workflow_roster_and_coverage) {
+    for (const code of INTERNAL_LIMITATIONS) addLimitation(code, [], []);
+  }
+  if (!passed.ai_discovery_and_details) addLimitation("INTERNAL_AUDIT_AI_INCOMPLETE", [], []);
+  if (!passed.reconciliation) addLimitation("INTERNAL_AUDIT_RECONCILIATION_INCOMPLETE", [], []);
+  if (!passed.snapshot_skew) addLimitation(SNAPSHOT_SKEW, [], []);
+  if (!passed.read_only_trace) addLimitation("INTERNAL_AUDIT_READ_ONLY_VIOLATION", [], []);
+  if (!passed.claim_support) {
+    addLimitation(
+      "CLAIM_SUPPORT_INSUFFICIENT",
+      sortedUnique([...unprovenCapabilities, ...unexercisedCapabilities]),
+      sortedUnique([...unsupportedClaims, ...blockedClaims])
+    );
+  }
+  if (!passed.privacy_scan) {
+    addLimitation(
+      typeof privacyScan?.code === "string" ? privacyScan.code : "PUBLICATION_NOT_SANITIZED",
+      [],
+      []
+    );
+  }
+  if (!passed.verifier) {
+    addLimitation(
+      typeof verification?.code === "string" ? verification.code : "AUDIT_VERIFY_FAILED",
+      [],
+      []
+    );
+  }
+  if (identityMismatch) addLimitation("INTERNAL_AUDIT_MANIFEST_INVALID", [], []);
+  if (locationMismatch) addLimitation("INTERNAL_AUDIT_LOCATION_MISMATCH", [], []);
+  for (const code of mergeLimitations) addLimitation(code, [], []);
+  const publishes = status === "complete_full" || status === "complete_partial";
+  const binding = isRecord(run) ? run : {};
+  const boundRunId = typeof binding.runId === "string" && binding.runId.length > 0 ? binding.runId : null;
+  const boundInputsHash = typeof binding.frozenInputsHash === "string" && binding.frozenInputsHash.length > 0 ? binding.frozenInputsHash : null;
+  const runBound = boundRunId !== null && boundInputsHash !== null;
+  return deepFreeze({
+    status,
+    eligible,
+    // Finding I3: the decision now NAMES the run and the frozen inputs it describes, so a
+    // decision minted for one run can be refused by another.
+    runId: runBound ? boundRunId : null,
+    frozenInputsHash: runBound ? boundInputsHash : null,
+    gates,
+    failedGates,
+    limitations,
+    publishesFindings: publishes,
+    publishesSolutionPacks: publishes
+  });
+}
+var INTERNAL_LIMITATIONS, FORBIDDEN_MOVEMENT, AUTH_REQUIRED, SNAPSHOT_SKEW, FULL_ELIGIBILITY_GATES, NON_PUBLISHING_STATUSES, REGISTERED_AUDIT_TOOLS, WRITE_METHODS, PUBLIC_OWNED_KINDS, EVENT_ENTITY_KEYS, EVENT_CLAIM_FIELDS, DEFAULT_SNAPSHOT_SKEW_MS, BROAD_REPORT_LANGUAGE, RAIL_BLOCKING_LIMITATIONS, PRIVATE_KEY_DENY, PRIVATE_VALUE_PATTERNS, INELIGIBLE_SUPPORT, DECISION_FIELDS, GATE_FIELDS, WINDOW_SPEC, PAGE_SPEC, ENVELOPE_SPEC, ROSTER_SPEC, SELF_DESCRIPTION_SPECS, EVIDENCE_TOOLS, INTERNAL_FACT_NAMES, ATTESTATION_BOUND_FIELDS, FROZEN_INPUT_ANCHOR_FIELDS, FROZEN_INPUT_PROVENANCE_METHOD;
 var init_weekly = __esm({
   "lib/modes/weekly.mjs"() {
     init_index_esm();
@@ -5453,7 +6461,178 @@ var init_weekly = __esm({
       "INTERNAL_WORKFLOW_RUNTIME_MISSING"
     ]);
     FORBIDDEN_MOVEMENT = /* @__PURE__ */ new Set(["IMPROVING", "REGRESSED", "RESOLVED"]);
+    AUTH_REQUIRED = "INTERNAL_AUDIT_AUTH_REQUIRED";
+    SNAPSHOT_SKEW = "PUBLIC_INTERNAL_SNAPSHOT_SKEW";
+    FULL_ELIGIBILITY_GATES = Object.freeze([
+      "capability_coverage",
+      "live_runtime_receipts",
+      "workflow_roster_and_coverage",
+      "ai_discovery_and_details",
+      "reconciliation",
+      "snapshot_skew",
+      "read_only_trace",
+      "claim_support",
+      "privacy_scan",
+      "verifier"
+    ]);
+    NON_PUBLISHING_STATUSES = /* @__PURE__ */ new Set(["blocked", "failed", "quarantined"]);
+    REGISTERED_AUDIT_TOOLS = /* @__PURE__ */ new Set([
+      "tools/list",
+      "auth_status",
+      "list_workflows_complete",
+      "get_workflow",
+      "export_workflow",
+      "get_workflow_runtime_window",
+      "get_ai_configuration_bundle"
+    ]);
+    WRITE_METHODS = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
+    PUBLIC_OWNED_KINDS = /* @__PURE__ */ new Set(["contact", "appointment", "opportunity", "message"]);
+    EVENT_ENTITY_KEYS = Object.freeze([
+      Object.freeze(["contactId", "contact"]),
+      Object.freeze(["appointmentId", "appointment"]),
+      Object.freeze(["opportunityId", "opportunity"]),
+      Object.freeze(["messageId", "message"])
+    ]);
+    EVENT_CLAIM_FIELDS = Object.freeze(["outcome", "state", "stage", "direction", "status"]);
+    DEFAULT_SNAPSHOT_SKEW_MS = 0;
     BROAD_REPORT_LANGUAGE = /(?:account[- ]wide|whole[- ]account|all systems passed|total (?:account )?impact|top leak across)/iu;
+    RAIL_BLOCKING_LIMITATIONS = Object.freeze([
+      "PUBLIC_EVIDENCE_MISSING",
+      "PUBLIC_EVIDENCE_MALFORMED",
+      "PUBLIC_EVIDENCE_INCOMPLETE",
+      "PUBLIC_EVIDENCE_RECONCILIATION_FAILED",
+      "PUBLIC_INTERNAL_LOCATION_CONFLICT",
+      "INTERNAL_EVIDENCE_MISSING",
+      "INTERNAL_EVIDENCE_INCOMPLETE",
+      SNAPSHOT_SKEW
+    ]);
+    PRIVATE_KEY_DENY = /* @__PURE__ */ new Set([
+      "transcript",
+      "transcripts",
+      "messagebody",
+      "messagetext",
+      "messagecontent",
+      "rawrequest",
+      "authorization",
+      "cookie",
+      "bearertoken",
+      "accesstoken",
+      "refreshtoken",
+      "apikey",
+      "password",
+      "secret",
+      "credential",
+      "credentialpath",
+      "credentialreference",
+      "keyreference",
+      "tokenid",
+      "tokenfile",
+      "privatepath",
+      "email",
+      "emailaddress",
+      "contactemail",
+      "phone",
+      "phonenumber",
+      "contactphone",
+      "dateofbirth",
+      "dob",
+      "ssn"
+    ]);
+    PRIVATE_VALUE_PATTERNS = Object.freeze([
+      /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/u,
+      /\bBearer\s+[A-Za-z0-9._-]{8,}/u,
+      /\bvault:\/\//u,
+      /\b(?:GET|POST|PUT|PATCH|DELETE)\s+https?:\/\//u
+    ]);
+    INELIGIBLE_SUPPORT = /* @__PURE__ */ new Set([
+      "inferred_only",
+      "inferred-only",
+      "stale",
+      "ambiguous",
+      "incomplete",
+      "none",
+      "unsupported"
+    ]);
+    DECISION_FIELDS = Object.freeze([
+      "status",
+      "eligible",
+      "runId",
+      "frozenInputsHash",
+      "gates",
+      "failedGates",
+      "limitations",
+      "publishesFindings",
+      "publishesSolutionPacks"
+    ]);
+    GATE_FIELDS = Object.freeze(["id", "passed"]);
+    WINDOW_SPEC = Object.freeze({ from: "scalar", to: "scalar" });
+    PAGE_SPEC = Object.freeze({
+      // Where THIS page STARTED. It is a position, not a claim that more data exists, so it is the
+      // one cursor-shaped key that may legitimately be non-empty; `nextCursor` is the claim.
+      cursor: "scalar",
+      nextCursor: "empty",
+      reportedCount: "row_count",
+      collectedCount: "row_count",
+      complete: "terminal_true",
+      truncated: "terminal_false",
+      incompleteReason: "empty"
+    });
+    ENVELOPE_SPEC = Object.freeze({
+      source: "scalar",
+      operationId: "scalar",
+      boundLocationId: "scalar",
+      requestedWindow: WINDOW_SPEC,
+      appliedWindow: WINDOW_SPEC,
+      capturedAt: "scalar",
+      items: "rows",
+      incompleteReason: "empty",
+      // The Task-4 private-source authorization. Neither key states a row count or a continuation,
+      // so neither may relax terminality; both are shape-checked so they cannot smuggle structure
+      // in past a `scalar` meaning.
+      privateSourceEnvelope: "private_source",
+      privateSourceInventory: "private_inventory"
+    });
+    ROSTER_SPEC = Object.freeze({
+      complete: "terminal_true",
+      sealed: "terminal_true",
+      reportedTotal: "row_count",
+      terminalReason: "scalar",
+      workflowIds: "rows",
+      incompleteReason: "empty"
+    });
+    SELF_DESCRIPTION_SPECS = Object.freeze({
+      page: PAGE_SPEC,
+      envelope: ENVELOPE_SPEC,
+      window: WINDOW_SPEC,
+      roster: ROSTER_SPEC
+    });
+    EVIDENCE_TOOLS = /* @__PURE__ */ new Set([
+      "list_workflows_complete",
+      "get_workflow",
+      "export_workflow",
+      "get_workflow_runtime_window",
+      "get_ai_configuration_bundle"
+    ]);
+    INTERNAL_FACT_NAMES = Object.freeze(["definition", "runtime", "configurationBinding"]);
+    ATTESTATION_BOUND_FIELDS = Object.freeze([
+      "toolProfileHash",
+      "capabilityManifestHash",
+      "bundleHash",
+      "targetHash",
+      "provenAt",
+      "expiresAt",
+      "callTraceHashes",
+      "approver"
+    ]);
+    FROZEN_INPUT_ANCHOR_FIELDS = Object.freeze([
+      "providerToolProfileHash",
+      "capabilityManifestHashes",
+      "capabilityProofIndexHash",
+      "capabilityReceiptHashes",
+      "capabilityAttestationHashes",
+      "capabilityProofExpiries"
+    ]);
+    FROZEN_INPUT_PROVENANCE_METHOD = "host_key_mac";
   }
 });
 
@@ -8128,6 +9307,2253 @@ var init_mechanisms = __esm({
   }
 });
 
+// lib/adapters/collection.mjs
+function codedError6(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function cloneJson(value, code = "COLLECTION_VALUE_INVALID") {
+  try {
+    return JSON.parse(canonicalJson(value));
+  } catch {
+    throw codedError6(code, TypeError);
+  }
+}
+function deepFreezeJson(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreezeJson(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+function isIsoTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+function validateCollectionWindow(value, code = "COLLECTION_WINDOW_INVALID") {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(",") !== "from,to" || !isIsoTimestamp(value.from) || !isIsoTimestamp(value.to) || Date.parse(value.from) >= Date.parse(value.to)) throw codedError6(code, TypeError);
+  return deepFreezeJson(cloneJson(value, code));
+}
+function capturedAt(runtime = {}) {
+  const value = typeof runtime.now === "function" ? runtime.now() : Date.now();
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) throw codedError6("COLLECTION_CLOCK_INVALID", TypeError);
+  return date.toISOString();
+}
+function inventorySourceId(source, operationId) {
+  return `${source}.${sha256({ operationId, source }).slice(0, 32)}`;
+}
+function privatePayload(value, root = false) {
+  if (typeof value === "number") return { $number: JSON.stringify(value) };
+  if (Array.isArray(value)) return { $array: value.map((entry) => privatePayload(entry)) };
+  if (value && typeof value === "object") {
+    const encoded = Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+      key,
+      privatePayload(nested)
+    ]));
+    return root ? encoded : { $object: encoded };
+  }
+  return value;
+}
+function assertTerminalCollection(collection) {
+  if (!collection || typeof collection !== "object" || !collection.page || collection.page.complete !== true || collection.page.truncated !== false || collection.page.nextCursor !== null || !Array.isArray(collection.items) || collection.page.collectedCount !== collection.items.length || collection.page.reportedCount !== collection.page.collectedCount || Object.hasOwn(collection, "incompleteReason")) throw codedError6("PRIVATE_SOURCE_INVENTORY_NOT_TERMINAL");
+}
+function buildPrivateSourceEnvelope(collection) {
+  assertTerminalCollection(collection);
+  const source = cloneJson(collection, "PRIVATE_SOURCE_COLLECTION_INVALID");
+  const envelope = {
+    sourceId: inventorySourceId(source.source, source.operationId),
+    kind: "private-content",
+    payload: privatePayload(source, true)
+  };
+  return deepFreezeJson(envelope);
+}
+function authorizeTerminalCollection(collection) {
+  assertTerminalCollection(collection);
+  const source = deepFreezeJson(cloneJson(collection));
+  const privateSourceEnvelope = buildPrivateSourceEnvelope(source);
+  const privateSourceInventory = [{
+    sourceId: privateSourceEnvelope.sourceId,
+    kind: privateSourceEnvelope.kind,
+    sourceHash: sha256({ schemaVersion: "1.0.0", source: privateSourceEnvelope })
+  }].sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  return deepFreezeJson({
+    ...collection,
+    privateSourceEnvelope,
+    privateSourceInventory
+  });
+}
+function completeCollection({
+  source,
+  operationId,
+  boundLocationId,
+  requestedWindow,
+  appliedWindow,
+  capturedAt: captured,
+  items,
+  cursor = null,
+  reportedCount
+}) {
+  const collection = {
+    source,
+    operationId,
+    boundLocationId,
+    requestedWindow: cloneJson(requestedWindow),
+    appliedWindow: cloneJson(appliedWindow),
+    capturedAt: captured,
+    items: cloneJson(items),
+    page: {
+      cursor,
+      nextCursor: null,
+      reportedCount,
+      collectedCount: items.length,
+      complete: true,
+      truncated: false
+    }
+  };
+  return authorizeTerminalCollection(collection);
+}
+function incompleteCollection({
+  source,
+  operationId,
+  boundLocationId,
+  requestedWindow,
+  appliedWindow,
+  capturedAt: captured,
+  items,
+  cursor = null,
+  nextCursor = null,
+  reportedCount,
+  reason,
+  truncated = false
+}) {
+  return deepFreezeJson({
+    source,
+    operationId,
+    boundLocationId,
+    requestedWindow: cloneJson(requestedWindow),
+    appliedWindow: cloneJson(appliedWindow),
+    capturedAt: captured,
+    items: cloneJson(items),
+    page: {
+      cursor,
+      nextCursor,
+      reportedCount,
+      collectedCount: items.length,
+      complete: false,
+      truncated
+    },
+    incompleteReason: reason
+  });
+}
+var init_collection = __esm({
+  "lib/adapters/collection.mjs"() {
+    init_canonical();
+  }
+});
+
+// lib/adapters/internal-ghl.mjs
+import { createHmac, randomBytes as randomBytes2 } from "node:crypto";
+function isPlainObject3(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  );
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+function normalizeToken(value) {
+  return String(value).toLowerCase().replaceAll(/[^a-z0-9]/gu, "");
+}
+function internalDigest2(value) {
+  return `sha256:${sha256(value)}`;
+}
+function isoOrNull(value) {
+  if (typeof value !== "string") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function nowMs(runtime) {
+  const value = typeof runtime?.now === "function" ? runtime.now() : Date.now();
+  const parsed = value instanceof Date ? value.getTime() : Number(value);
+  if (!Number.isFinite(parsed)) throw codedError6(CODES.REQUEST, TypeError);
+  return parsed;
+}
+function safeClone(value, code = CODES.REQUEST) {
+  return cloneJson(value === void 0 ? null : value, code);
+}
+function isoOrNullString(value) {
+  return typeof value === "string" && ISO_INSTANT.test(value) && isoOrNull(value) !== null ? value : null;
+}
+function projectTyped(value, spec) {
+  if (!isPlainObject3(value)) return null;
+  const projected = {};
+  for (const key of Object.keys(spec)) {
+    if (!Object.hasOwn(value, key)) continue;
+    const nested = value[key];
+    if (!spec[key](nested)) continue;
+    projected[key] = Array.isArray(nested) ? [...nested] : nested;
+  }
+  return projected;
+}
+function projectTypedList(value, spec) {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => projectTyped(entry, spec)).filter((entry) => entry !== null);
+}
+function inVocabularyOrNull(check, value) {
+  return check(value) ? value : null;
+}
+function canonicalWorkflowStatus(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_TOKEN_LENGTH) {
+    return null;
+  }
+  const lowered = value.toLowerCase();
+  return WORKFLOW_STATUSES.includes(lowered) ? lowered : null;
+}
+function normalizeCursorInstant(value) {
+  if (isIsoInstant(value)) return value;
+  if (typeof value !== "string" || !EPOCH_DIGITS.test(value)) return null;
+  const asMs = value.length <= 10 ? Number(value) * 1e3 : Number(value);
+  if (!Number.isInteger(asMs) || asMs < EPOCH_MS_FLOOR || asMs >= EPOCH_MS_CEILING) return null;
+  return new Date(asMs).toISOString();
+}
+function pseudonymizerFor(key) {
+  return (value) => {
+    if (value === null || value === void 0 || typeof value === "object") return null;
+    const normalized = String(value).normalize("NFKC").toLocaleLowerCase("und").replaceAll(/\s+/gu, " ").trim();
+    if (normalized === "") return null;
+    return `psn_${createHmac("sha256", key).update(normalized).digest("hex").slice(0, 32)}`;
+  };
+}
+function resolvePseudonymKey(candidate) {
+  if (candidate === void 0 || candidate === null) {
+    return { key: randomBytes2(PSEUDONYM_KEY_BYTES), source: "ephemeral" };
+  }
+  let key = null;
+  if (Buffer.isBuffer(candidate) || candidate instanceof Uint8Array) key = Buffer.from(candidate);
+  else if (typeof candidate === "string") key = Buffer.from(candidate, "utf8");
+  if (key === null || key.length < PSEUDONYM_KEY_BYTES) throw codedError6(CODES.REQUEST, TypeError);
+  return { key, source: "injected" };
+}
+function projectRoute(route, manifest) {
+  if (!isPlainObject3(route)) return null;
+  const declaredCapabilityId = isNonEmptyString(route.capabilityId) ? route.capabilityId : null;
+  const sealed = declaredCapabilityId && manifest ? manifest.descriptors.get(declaredCapabilityId) : null;
+  const capabilityId = sealed ? declaredCapabilityId : null;
+  const spec = sealed ? sealed.descriptor : null;
+  return {
+    capabilityId,
+    // R3-2 — the manifest is UNTRUSTED input, and `host`/`normalizedPath` were retained on
+    // `isNonEmptyString` alone. A poisoned manifest put an absolute path to a private token
+    // file with a `?token=` query into `appliedPath` and it survived every layer. Both are
+    // closed vocabularies in the real manifest, so both are checked against them here.
+    host: spec && isRouteHost(spec.host) ? spec.host : null,
+    appliedPath: spec && isNormalizedPath(spec.normalizedPath) ? spec.normalizedPath : null,
+    status: Number.isInteger(route.status) ? route.status : null,
+    ok: route.ok === true,
+    failureClass: inVocabularyOrNull(isFailureClass, route.failureClass),
+    capturedAt: isoOrNullString(route.capturedAt)
+  };
+}
+function projectRoutes(routes, manifest, filter = null) {
+  if (!Array.isArray(routes)) return [];
+  const projected = [];
+  for (const route of routes) {
+    if (!isPlainObject3(route)) continue;
+    if (filter && !filter(route)) continue;
+    const entry = projectRoute(route, manifest);
+    if (entry !== null) projected.push(entry);
+  }
+  return projected;
+}
+function projectEnrollments(value, pseudonymize) {
+  if (!isPlainObject3(value)) return null;
+  const rows = Array.isArray(value.rows) ? value.rows : [];
+  return {
+    ...projectTyped(value, ENROLLMENT_SPEC),
+    rows: rows.filter(isPlainObject3).map((row) => {
+      const projected = projectTyped(row, ENROLLMENT_ROW_SPEC) ?? {};
+      const identifier = rosterRowId(row);
+      return identifier === null ? projected : { _id: pseudonymize(identifier), ...projected };
+    })
+  };
+}
+function projectStepRosters(value, pseudonymize) {
+  if (!Array.isArray(value)) return [];
+  return value.map((roster) => {
+    if (!isPlainObject3(roster)) return null;
+    const contacts = Array.isArray(roster.contacts) ? roster.contacts : [];
+    return {
+      ...projectTyped(roster, STEP_ROSTER_SPEC),
+      // A step-roster row IS a contact record. Its id is pseudonymised; every other field it
+      // carries (name, email, phone, tags) is dropped by the empty projection spec.
+      contacts: contacts.filter(isPlainObject3).map((contact) => {
+        const projected = projectTyped(contact, STEP_ROSTER_CONTACT_SPEC) ?? {};
+        const identifier = rosterRowId(contact);
+        return identifier === null ? projected : { id: pseudonymize(identifier), ...projected };
+      })
+    };
+  }).filter((roster) => roster !== null);
+}
+function projectEventDetail(value) {
+  const projected = projectTyped(value, RUNTIME_EVENT_DETAIL_SPEC) ?? {};
+  if (!isPlainObject3(value)) return projected;
+  const unrecognised = RUNTIME_EVENT_CLAIM_FIELDS.filter(
+    (field) => Object.hasOwn(value, field) && !Object.hasOwn(projected, field)
+  );
+  return unrecognised.length === 0 ? projected : { ...projected, unrecognisedFields: unrecognised };
+}
+function projectRuntimeFilters(value, request, pseudonymize) {
+  const requestedStepIds = Array.isArray(request?.stepIds) ? request.stepIds.filter(isOpaqueId) : [];
+  const requestedContactId = request?.contactId ?? null;
+  const declared = isPlainObject3(value) ? value : {};
+  const echoedStepIds = Array.isArray(declared.stepIds) ? declared.stepIds : [];
+  return {
+    // The outbound request carries NO contact id, so the only honest echo is `null`. A wire
+    // value here is a contradiction, not evidence — the demonstrated leak was a live MSISDN
+    // arriving under exactly this key on a run that never asked about a contact. Should a
+    // future request ever carry one, the matching echo is pseudonymised, never echoed raw.
+    contactId: requestedContactId !== null && declared.contactId === requestedContactId ? pseudonymize(requestedContactId) : null,
+    // The outbound request never narrows by event type either.
+    eventTypes: [],
+    stepIds: requestedStepIds.filter((stepId) => echoedStepIds.includes(stepId))
+  };
+}
+function projectPagination(value) {
+  if (!isPlainObject3(value)) return null;
+  return {
+    logPartitions: projectTyped(value.logPartitions, LOG_PARTITION_SPEC),
+    enrollmentPages: projectTyped(value.enrollmentPages, PAGE_LEDGER_SPEC),
+    stepRosterPages: projectTyped(value.stepRosterPages, PAGE_LEDGER_SPEC)
+  };
+}
+function collectLocationIndicators(value, indicators = [], seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return indicators;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const entry of value) collectLocationIndicators(entry, indicators, seen);
+    return indicators;
+  }
+  for (const [key, nested] of Object.entries(value)) {
+    const normalized = normalizeToken(key);
+    if (LOCATION_INDICATOR_KEYS.includes(normalized)) {
+      indicators.push(nested);
+    } else if (normalized === "location") {
+      if (isPlainObject3(nested) && Object.hasOwn(nested, "id")) indicators.push(nested.id);
+      else if (typeof nested === "string") indicators.push(nested);
+    }
+    collectLocationIndicators(nested, indicators, seen);
+  }
+  return indicators;
+}
+function assertResponseLocation(body, expectedLocationId) {
+  const indicators = collectLocationIndicators(body);
+  if (indicators.some((locationId) => locationId !== expectedLocationId)) {
+    throw codedError6(CODES.LOCATION);
+  }
+}
+function assertBoundLocation(body, expectedLocationId) {
+  if (!isPlainObject3(body) || body.boundLocationId !== expectedLocationId) {
+    throw codedError6(CODES.LOCATION);
+  }
+  const binding = body.locationBinding;
+  if (!isPlainObject3(binding)) throw codedError6(CODES.LOCATION);
+  if (binding.quarantined === true) throw codedError6(CODES.QUARANTINED);
+  if (binding.inspectionIncomplete === true) throw codedError6(CODES.QUARANTINED);
+  if (Array.isArray(binding.conflicts) && binding.conflicts.length > 0) {
+    throw codedError6(CODES.QUARANTINED);
+  }
+  assertResponseLocation(body, expectedLocationId);
+}
+function assertContractVersion(body, expectedContractVersion) {
+  if (body.contractVersion !== expectedContractVersion) throw codedError6(CODES.CONTRACT);
+}
+function scanForbiddenSurface(text) {
+  const normalized = normalizeToken(text);
+  return FORBIDDEN_SURFACE_TOKENS.some((token) => normalized.includes(token));
+}
+function validateToolRegistry(listing) {
+  const source = isPlainObject3(listing) && Array.isArray(listing.content) ? parseToolBody(listing).data : listing;
+  if (!isPlainObject3(source) || !Array.isArray(source.tools)) throw codedError6(CODES.HANDSHAKE);
+  const tools = source.tools;
+  if (tools.length !== AUDIT_TOOL_NAMES.length) throw codedError6(CODES.HANDSHAKE);
+  for (const tool of tools) {
+    if (!isPlainObject3(tool) || !isNonEmptyString(tool.name)) throw codedError6(CODES.HANDSHAKE);
+    if (scanForbiddenSurface(tool.name)) throw codedError6(CODES.READ_ONLY);
+  }
+  const names = tools.map((tool) => tool.name);
+  if (canonicalJson(names) !== canonicalJson([...AUDIT_TOOL_NAMES])) {
+    throw codedError6(CODES.HANDSHAKE);
+  }
+  for (const tool of tools) {
+    const schema = tool.inputSchema;
+    if (!isPlainObject3(schema) || schema.type !== "object") throw codedError6(CODES.HANDSHAKE);
+    const properties = schema.properties;
+    if (!isPlainObject3(properties)) throw codedError6(CODES.HANDSHAKE);
+    const allowed = AUDIT_TOOL_INPUT_KEYS[tool.name];
+    for (const key of Object.keys(properties)) {
+      if (scanForbiddenSurface(key)) throw codedError6(CODES.READ_ONLY);
+      if (!allowed.includes(key)) throw codedError6(CODES.HANDSHAKE);
+    }
+    if (Object.hasOwn(schema, "required")) {
+      if (!Array.isArray(schema.required)) throw codedError6(CODES.HANDSHAKE);
+      for (const key of schema.required) {
+        if (scanForbiddenSurface(key)) throw codedError6(CODES.READ_ONLY);
+        if (!allowed.includes(key)) throw codedError6(CODES.HANDSHAKE);
+      }
+    }
+  }
+  return Object.freeze([...names]);
+}
+function validateManifest(manifest, bundleHash) {
+  if (!isPlainObject3(manifest)) throw codedError6(CODES.MANIFEST);
+  if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION) throw codedError6(CODES.MANIFEST);
+  if (manifest.profile !== MANIFEST_PROFILE) throw codedError6(CODES.MANIFEST);
+  if (manifest.proofModel !== MANIFEST_PROOF_MODEL) throw codedError6(CODES.MANIFEST);
+  if (!Array.isArray(manifest.capabilities) || manifest.capabilities.length === 0) {
+    throw codedError6(CODES.MANIFEST);
+  }
+  if (!Array.isArray(manifest.tools) || canonicalJson(manifest.tools) !== canonicalJson([...AUDIT_TOOL_NAMES])) throw codedError6(CODES.MANIFEST);
+  const declared = manifest.manifestHash;
+  if (typeof declared !== "string" || !INTERNAL_DIGEST.test(declared)) {
+    throw codedError6(CODES.MANIFEST);
+  }
+  const { manifestHash: _omitted, ...withoutSelfHash } = manifest;
+  let recomputed;
+  try {
+    recomputed = internalDigest2(withoutSelfHash);
+  } catch {
+    throw codedError6(CODES.MANIFEST);
+  }
+  if (recomputed !== declared) throw codedError6(CODES.MANIFEST);
+  if (typeof bundleHash !== "string" || !INTERNAL_DIGEST.test(bundleHash)) {
+    throw codedError6(CODES.MANIFEST);
+  }
+  const descriptors = /* @__PURE__ */ new Map();
+  for (const row of manifest.capabilities) {
+    if (!isPlainObject3(row) || !isNonEmptyString(row.capabilityId)) throw codedError6(CODES.MANIFEST);
+    const { tool: _tool, ...descriptor } = row;
+    const encoded = canonicalJson(descriptor);
+    const existing = descriptors.get(descriptor.capabilityId);
+    if (existing && existing.encoded !== encoded) throw codedError6(CODES.MANIFEST);
+    if (!existing) {
+      descriptors.set(descriptor.capabilityId, {
+        encoded,
+        descriptorHash: internalDigest2(descriptor),
+        descriptor: Object.freeze(safeClone(descriptor, CODES.MANIFEST))
+      });
+    }
+  }
+  return Object.freeze({
+    manifestHash: internalDigest2(manifest),
+    selfHash: declared,
+    bundleHash,
+    descriptors
+  });
+}
+function targetIsAuthorized(attestation, authorizedTargetHashes) {
+  if (authorizedTargetHashes === null) return true;
+  return isNonEmptyString(attestation.targetHash) && authorizedTargetHashes.has(attestation.targetHash);
+}
+function attestationIsSound(attestation, attestationHash, pins) {
+  if (!isPlainObject3(attestation)) return false;
+  for (const field of ATTESTATION_BOUND_FIELDS2) {
+    if (!Object.hasOwn(attestation, field)) return false;
+  }
+  const { attestationHash: declared, ...rest } = attestation;
+  if (declared !== attestationHash) return false;
+  let recomputed;
+  try {
+    recomputed = internalDigest2(rest);
+  } catch {
+    return false;
+  }
+  if (recomputed !== attestationHash) return false;
+  if (!targetIsAuthorized(attestation, pins.authorizedCanaryTargetHashes ?? null)) return false;
+  if (attestation.toolProfileHash !== pins.toolProfileHash) return false;
+  if (attestation.capabilityManifestHash !== pins.capabilityManifestHash) return false;
+  if (attestation.bundleHash !== pins.bundleHash) return false;
+  return true;
+}
+function evaluateCapabilityProofs({
+  capabilityProofIndex,
+  capabilityIds,
+  manifest,
+  toolProfileHash,
+  now,
+  authorizedCanaryTargetHashes = null
+}) {
+  const coverage = {};
+  const reasons = [];
+  const governingAttestationHashes = /* @__PURE__ */ new Set();
+  const record = (capabilityId, proven2, code) => {
+    coverage[capabilityId] = {
+      capabilityId,
+      applicable: true,
+      proven: proven2,
+      proofClass: proven2 ? LIVE_RUNTIME : null
+    };
+    if (!proven2 && code) reasons.push(code);
+  };
+  const indexIsUsable = isPlainObject3(capabilityProofIndex) && isPlainObject3(capabilityProofIndex.index) && capabilityProofIndex.index.schemaVersion === PROOF_INDEX_SCHEMA_VERSION && Array.isArray(capabilityProofIndex.index.receipts) && isPlainObject3(capabilityProofIndex.attestations) && manifest !== null;
+  if (!indexIsUsable) {
+    for (const capabilityId of capabilityIds) record(capabilityId, false, CODES.PROOF_INVALID);
+    return {
+      coverage,
+      reasons,
+      proven: capabilityIds.length === 0,
+      governingAttestationHashes: []
+    };
+  }
+  const receiptsById = /* @__PURE__ */ new Map();
+  const duplicated = /* @__PURE__ */ new Set();
+  for (const receipt of capabilityProofIndex.index.receipts) {
+    if (!isPlainObject3(receipt) || !isNonEmptyString(receipt.capabilityId)) continue;
+    if (receiptsById.has(receipt.capabilityId)) duplicated.add(receipt.capabilityId);
+    else receiptsById.set(receipt.capabilityId, receipt);
+  }
+  const pins = {
+    toolProfileHash,
+    capabilityManifestHash: manifest.manifestHash,
+    bundleHash: manifest.bundleHash,
+    // R6-I2 — the run's explicit canary scope, or `null` when the run declares none.
+    authorizedCanaryTargetHashes
+  };
+  for (const capabilityId of capabilityIds) {
+    const descriptor = manifest.descriptors.get(capabilityId);
+    if (!descriptor) {
+      record(capabilityId, false, CODES.UNPROVEN);
+      continue;
+    }
+    if (duplicated.has(capabilityId)) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    const receipt = receiptsById.get(capabilityId);
+    if (!receipt) {
+      record(capabilityId, false, CODES.UNPROVEN);
+      continue;
+    }
+    if (canonicalJson(Object.keys(receipt).sort()) !== canonicalJson([...RECEIPT_FIELDS])) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    if (receipt.proofClass !== LIVE_RUNTIME) {
+      record(capabilityId, false, CODES.UNPROVEN);
+      continue;
+    }
+    if (receipt.capabilityDescriptorHash !== descriptor.descriptorHash) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    const attestation = Object.hasOwn(capabilityProofIndex.attestations, receipt.attestationHash) ? capabilityProofIndex.attestations[receipt.attestationHash] : null;
+    if (!attestationIsSound(attestation, receipt.attestationHash, pins)) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    if (receipt.provenAt !== attestation.provenAt || receipt.expiresAt !== attestation.expiresAt) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    const provenAt = isoOrNull(receipt.provenAt);
+    const expiresAt = isoOrNull(receipt.expiresAt);
+    if (provenAt === null || expiresAt === null || expiresAt <= provenAt) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    if (expiresAt - provenAt > MAXIMUM_PROOF_VALIDITY_MS) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    if (provenAt > now) {
+      record(capabilityId, false, CODES.PROOF_INVALID);
+      continue;
+    }
+    if (expiresAt <= now) {
+      record(capabilityId, false, CODES.PROOF_EXPIRED);
+      continue;
+    }
+    governingAttestationHashes.add(receipt.attestationHash);
+    record(capabilityId, true, null);
+  }
+  const proven = capabilityIds.every((capabilityId) => coverage[capabilityId].proven);
+  return {
+    coverage,
+    reasons,
+    proven,
+    governingAttestationHashes: [...governingAttestationHashes].sort()
+  };
+}
+function parseToolBody(response) {
+  if (!isPlainObject3(response) || !Array.isArray(response.content)) {
+    return { status: "failed", code: "RESPONSE_ENVELOPE_INVALID" };
+  }
+  const text = response.content.find((entry) => isPlainObject3(entry) && entry.type === "text")?.text;
+  if (typeof text !== "string") return { status: "failed", code: "RESPONSE_ENVELOPE_INVALID" };
+  let body;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { status: "failed", code: "RESPONSE_BODY_INVALID" };
+  }
+  if (!isPlainObject3(body)) return { status: "failed", code: "RESPONSE_BODY_INVALID" };
+  if (body.ok === true) {
+    if (!isPlainObject3(body.data)) return { status: "failed", code: "RESPONSE_BODY_INVALID" };
+    return { status: "ok", data: body.data };
+  }
+  return {
+    status: "failed",
+    code: isNonEmptyString(body.code) ? body.code : "RESPONSE_FAILED"
+  };
+}
+function validateAppliedQueries(appliedQueries, manifest, expectedPages) {
+  if (!Array.isArray(appliedQueries) || appliedQueries.length !== expectedPages) return false;
+  for (const entry of appliedQueries) {
+    if (!isPlainObject3(entry) || !isNonEmptyString(entry.capabilityId)) return false;
+    if (!isPlainObject3(entry.query)) return false;
+    if (!manifest) continue;
+    const descriptor = manifest.descriptors.get(entry.capabilityId);
+    if (!descriptor) return false;
+    const spec = descriptor.descriptor;
+    const allowed = /* @__PURE__ */ new Set([
+      ...spec.requiredQueryKeys ?? [],
+      ...spec.optionalQueryKeys ?? [],
+      ...spec.repeatableQueryKeys ?? [],
+      ...Object.keys(spec.queryBindings ?? {})
+    ]);
+    for (const key of Object.keys(entry.query)) {
+      if (!allowed.has(key)) return false;
+    }
+    for (const key of spec.requiredQueryKeys ?? []) {
+      if (!Object.hasOwn(entry.query, key)) return false;
+    }
+    for (const [key, value] of Object.entries(spec.fixedQueryValues ?? {})) {
+      if (entry.query[key] !== value) return false;
+    }
+  }
+  return true;
+}
+function validateSourceRoutes(sourceRoutes, manifest, { requireOk = true } = {}) {
+  if (!Array.isArray(sourceRoutes)) return false;
+  for (const route of sourceRoutes) {
+    if (!isPlainObject3(route) || !isNonEmptyString(route.capabilityId)) return false;
+    if (manifest && !manifest.descriptors.has(route.capabilityId)) return false;
+    if (requireOk && route.ok !== true) return false;
+  }
+  return true;
+}
+function unwrapRosterId(raw) {
+  if (raw === null || raw === void 0) return null;
+  if (typeof raw !== "object") return raw;
+  if (Array.isArray(raw)) return null;
+  for (const key of ROSTER_ID_WRAPPER_KEYS) {
+    if (!Object.hasOwn(raw, key)) continue;
+    const inner = raw[key];
+    return inner !== null && inner !== void 0 && typeof inner !== "object" ? inner : null;
+  }
+  return null;
+}
+function rosterRowId(row) {
+  if (!isPlainObject3(row)) return null;
+  for (const key of ["_id", "id"]) {
+    const raw = unwrapRosterId(row[key]);
+    if (raw === null) continue;
+    const value = String(raw);
+    if (value !== "") return value;
+  }
+  return null;
+}
+function rosterRowFingerprint(row) {
+  const normalized = { ...row };
+  for (const key of ["_id", "id"]) {
+    if (!Object.hasOwn(normalized, key)) continue;
+    const unwrapped = unwrapRosterId(normalized[key]);
+    if (unwrapped !== null) normalized[key] = String(unwrapped);
+  }
+  return canonicalJson(normalized);
+}
+function reconcileRoster(data, manifest) {
+  const fail = (reason) => ({ ok: false, reason, workflowIds: [] });
+  if (!isPlainObject3(data)) return fail("roster_body_invalid");
+  const rows = data.workflows;
+  if (!Array.isArray(rows)) return fail("roster_page_never_read");
+  const identified = [];
+  const seen = /* @__PURE__ */ new Map();
+  let rowsMalformed = null;
+  for (const row of rows) {
+    if (!isPlainObject3(row)) {
+      rowsMalformed = "roster_row_malformed";
+      break;
+    }
+    const rowId = rosterRowId(row);
+    if (rowId === null) {
+      rowsMalformed = "roster_row_id_missing";
+      break;
+    }
+    if (!isOpaqueId(rowId)) {
+      rowsMalformed = "roster_row_id_invalid";
+      break;
+    }
+    const fingerprint = rosterRowFingerprint(row);
+    if (seen.has(rowId)) {
+      if (seen.get(rowId) !== fingerprint) {
+        rowsMalformed = "roster_duplicate_conflict";
+        break;
+      }
+    } else {
+      seen.set(rowId, fingerprint);
+      identified.push({ row, rowId });
+    }
+  }
+  const workflowIds = identified.map((entry) => entry.rowId);
+  const withIds = (result) => ({ ...result, workflowIds });
+  if (rowsMalformed) return withIds({ ok: false, reason: rowsMalformed });
+  const pagination = data.pagination;
+  if (!isPlainObject3(pagination) || !Number.isInteger(pagination.attempted) || !Number.isInteger(pagination.fetched) || pagination.fetched < 1 || pagination.attempted < pagination.fetched) return withIds({ ok: false, reason: "roster_pagination_invalid" });
+  if (pagination.exhausted !== false) {
+    return withIds({ ok: false, reason: "roster_page_budget_exhausted" });
+  }
+  if (!isPlainObject3(data.rateLimit) || data.rateLimit.limited !== false) {
+    return withIds({ ok: false, reason: "roster_rate_limited" });
+  }
+  if (!Array.isArray(data.warnings) || data.warnings.length > 0) {
+    return withIds({ ok: false, reason: "roster_warnings_present" });
+  }
+  if (data.complete !== true || data.truncated !== false) {
+    return withIds({ ok: false, reason: "roster_declared_incomplete" });
+  }
+  if (!isRosterTerminalReason(data.terminalReason)) {
+    return withIds({ ok: false, reason: "roster_not_terminal" });
+  }
+  if (!Number.isInteger(data.reportedTotal) || data.reportedTotal < 0) {
+    return withIds({ ok: false, reason: "roster_reported_total_invalid" });
+  }
+  if (!Number.isInteger(data.uniqueCount) || data.uniqueCount < 0) {
+    return withIds({ ok: false, reason: "roster_unique_count_invalid" });
+  }
+  if (!isNonEmptyString(data.capabilityVersion) || !isNonEmptyString(data.capturedAt)) {
+    return withIds({ ok: false, reason: "roster_provenance_invalid" });
+  }
+  const totalHistory = data.totalHistory;
+  const uniqueProgress = data.uniqueProgress;
+  if (!Array.isArray(totalHistory) || totalHistory.length !== pagination.fetched) {
+    return withIds({ ok: false, reason: "roster_total_ledger_short" });
+  }
+  if (!Array.isArray(uniqueProgress) || uniqueProgress.length !== pagination.fetched) {
+    return withIds({ ok: false, reason: "roster_progress_ledger_short" });
+  }
+  if (totalHistory.some((total) => total !== data.reportedTotal)) {
+    return withIds({ ok: false, reason: "roster_total_unstable" });
+  }
+  if (workflowIds.length !== data.uniqueCount) {
+    return withIds({ ok: false, reason: "roster_unique_count_mismatch" });
+  }
+  if (data.reportedTotal !== data.uniqueCount) {
+    return withIds({ ok: false, reason: "roster_total_mismatch" });
+  }
+  let running = 0;
+  for (const progress of uniqueProgress) {
+    if (!Number.isInteger(progress) || progress < 0) {
+      return withIds({ ok: false, reason: "roster_progress_invalid" });
+    }
+    if (progress === 0 && running < data.reportedTotal) {
+      return withIds({ ok: false, reason: "roster_no_unique_progress" });
+    }
+    running += progress;
+  }
+  if (running !== data.uniqueCount) {
+    return withIds({ ok: false, reason: "roster_progress_sum_mismatch" });
+  }
+  if (!validateAppliedQueries(data.appliedQueries, manifest, pagination.fetched)) {
+    return withIds({ ok: false, reason: "roster_applied_queries_invalid" });
+  }
+  if (!validateSourceRoutes(data.sourceRoutes, manifest)) {
+    return withIds({ ok: false, reason: "roster_source_routes_invalid" });
+  }
+  return {
+    ok: true,
+    reason: null,
+    workflowIds,
+    terminalReason: data.terminalReason,
+    rows: identified.map(({ row, rowId }) => ({
+      workflowId: rowId,
+      // `status` is a RAW upstream GHL row field. The demonstrated leak put an absolute path
+      // to a private token file here, and it reached both the composite and `collect()`.
+      status: canonicalWorkflowStatus(row.status),
+      version: Number.isInteger(row.version) ? row.version : null
+    }))
+  };
+}
+function extractEnrollmentCursor(appliedQueries) {
+  if (!Array.isArray(appliedQueries)) return null;
+  let latest = null;
+  for (const row of appliedQueries) {
+    if (!isPlainObject3(row) || row.capabilityId !== "workflow_enrollment_search") continue;
+    if (!isPlainObject3(row.query)) continue;
+    if (!ENROLLMENT_CURSOR_KEYS.some((key) => Object.hasOwn(row.query, key))) continue;
+    latest = row.query;
+  }
+  if (latest === null) return null;
+  const cursor = projectTyped(latest, ENROLLMENT_CURSOR_SPEC);
+  if (cursor === null || Object.keys(cursor).length === 0) return null;
+  if (Object.hasOwn(cursor, "referenceCreatedAt")) {
+    cursor.referenceCreatedAt = normalizeCursorInstant(cursor.referenceCreatedAt);
+  }
+  return cursor;
+}
+function reconcileRuntime(data, {
+  manifest,
+  requestedWindow,
+  requestedStepIds
+}) {
+  const fail = (reason) => ({ ok: false, reason });
+  if (!isPlainObject3(data)) return fail("runtime_body_invalid");
+  if (data.complete !== true || data.truncated !== false) return fail("runtime_declared_incomplete");
+  if (!Array.isArray(data.warnings) || data.warnings.length > 0) return fail("runtime_warnings_present");
+  if (!isPlainObject3(data.rateLimit) || data.rateLimit.limited !== false) return fail("runtime_rate_limited");
+  const completeness = data.componentCompleteness;
+  if (!isPlainObject3(completeness)) return fail("runtime_completeness_invalid");
+  for (const component of [
+    "workflowDefinition",
+    "runtimeEvents",
+    "perStepCounts",
+    "enrollments",
+    "stepRosters",
+    "enrollmentTotals"
+  ]) {
+    if (completeness[component] !== true) return fail("runtime_component_incomplete");
+  }
+  const requested = data.requestedWindow;
+  const applied = data.appliedWindow;
+  if (!isPlainObject3(requested) || requested.fromDate !== requestedWindow.fromDate || requested.toDate !== requestedWindow.toDate || requested.boundaries !== "[)") return fail("runtime_requested_window_mismatch");
+  if (!isPlainObject3(applied) || !Number.isInteger(applied.expansionMs) || applied.expansionMs < 0 || applied.fromDate !== requested.fromDate - applied.expansionMs || applied.toDate !== requested.toDate || applied.analyticalFilter !== "[)") return fail("runtime_applied_window_mismatch");
+  const events = data.runtimeEvents;
+  if (!Array.isArray(events)) return fail("runtime_events_invalid");
+  for (const event of events) {
+    if (!isPlainObject3(event) || !isOpaqueId(event.id)) return fail("runtime_event_invalid");
+    if (!Number.isInteger(event.timestamp)) return fail("runtime_event_timestamp_invalid");
+    if (event.timestamp < requested.fromDate || event.timestamp >= requested.toDate) {
+      return fail("runtime_half_open_violation");
+    }
+  }
+  const enrollments = data.enrollments;
+  if (!isPlainObject3(enrollments) || !Array.isArray(enrollments.rows)) {
+    return fail("runtime_enrollments_invalid");
+  }
+  if (enrollments.complete !== true) return fail("runtime_enrollments_incomplete");
+  const totals = data.enrollmentTotals;
+  if (!isPlainObject3(totals) || !Number.isInteger(totals.total) || totals.total < 0) {
+    return fail("runtime_enrollment_totals_missing");
+  }
+  if (enrollments.rows.length > totals.total) return fail("runtime_enrollment_rows_exceed_total");
+  if (!Array.isArray(data.perStepCounts)) return fail("runtime_per_step_counts_invalid");
+  const stepRosters = data.stepRosters;
+  if (!Array.isArray(stepRosters)) return fail("runtime_step_rosters_invalid");
+  const rosterByStep = /* @__PURE__ */ new Map();
+  for (const roster of stepRosters) {
+    if (!isPlainObject3(roster) || !isNonEmptyString(roster.stepId)) {
+      return fail("runtime_step_roster_invalid");
+    }
+    if (roster.complete !== true || !Array.isArray(roster.contacts)) {
+      return fail("runtime_step_roster_unsealed");
+    }
+    if (roster.total !== null && !Number.isInteger(roster.total)) {
+      return fail("runtime_step_roster_total_mismatch");
+    }
+    if (Number.isInteger(roster.total) && roster.contacts.length > roster.total) {
+      return fail("runtime_step_roster_total_mismatch");
+    }
+    if (!Number.isInteger(roster.pages) || roster.pages < 1) {
+      return fail("runtime_step_roster_pages_invalid");
+    }
+    rosterByStep.set(roster.stepId, roster);
+  }
+  for (const stepId of requestedStepIds) {
+    if (!rosterByStep.has(stepId)) return fail("runtime_step_roster_missing");
+  }
+  const pagination = data.pagination;
+  if (!isPlainObject3(pagination)) return fail("runtime_pagination_invalid");
+  const partitions = pagination.logPartitions;
+  if (!isPlainObject3(partitions) || !Number.isInteger(partitions.attempted) || !Number.isInteger(partitions.terminal) || partitions.exhausted !== false || partitions.terminal < 1 || partitions.attempted !== 2 * partitions.terminal - LOG_PARTITION_STREAMS) return fail("runtime_log_partitions_incomplete");
+  for (const key of ["enrollmentPages", "stepRosterPages"]) {
+    const ledger = pagination[key];
+    if (!isPlainObject3(ledger) || !Number.isInteger(ledger.fetched) || ledger.fetched < 0 || ledger.exhausted !== false) return fail("runtime_page_budget_exhausted");
+  }
+  if (!validateSourceRoutes(data.sourceRoutes, manifest)) {
+    return fail("runtime_source_routes_invalid");
+  }
+  if (!Array.isArray(data.sourceRoutes) || data.sourceRoutes.length === 0) {
+    return fail("runtime_source_routes_missing");
+  }
+  if (!isNonEmptyString(data.capabilityVersion) || !isNonEmptyString(data.capturedAt)) {
+    return fail("runtime_provenance_invalid");
+  }
+  return { ok: true, reason: null };
+}
+function bindEventsToDefinition(validity, events, {
+  currentDefinitionHash = null,
+  compositeBinding = null,
+  governingCapabilityProven = false,
+  definitionHashVerification = null
+} = {}) {
+  const unprovenLimitation = "No typed evidence proves which definition was in force for these runtime events, so configuration-to-execution stops at correlation.";
+  const rawIntervals = isPlainObject3(validity) && Array.isArray(validity.versionHistory) ? validity.versionHistory : null;
+  const intervalsWellFormed = Array.isArray(rawIntervals) && rawIntervals.length > 0 && rawIntervals.every((interval) => isPlainObject3(interval) && typeof interval.canonicalHash === "string" && BARE_DIGEST.test(interval.canonicalHash) && isoOrNull(interval.effectiveFrom) !== null && (interval.effectiveTo === null || isoOrNull(interval.effectiveTo) !== null));
+  const tiesToVerifiedDefinition = intervalsWellFormed && typeof currentDefinitionHash === "string" && BARE_DIGEST.test(currentDefinitionHash) && rawIntervals.some((interval) => interval.canonicalHash === currentDefinitionHash);
+  const sourceToken = isPlainObject3(validity) && typeof validity.source === "string" && isDefinitionValiditySource(validity.source) ? validity.source : null;
+  const intervals = rawIntervals;
+  const definitionExactlyVerified = definitionHashVerification === "exact";
+  const provenSource = isPlainObject3(validity) && validity.provenEffectiveInterval === true && sourceToken !== null && intervalsWellFormed && tiesToVerifiedDefinition && governingCapabilityProven === true && definitionExactlyVerified;
+  const bound = events.map((event) => {
+    if (!provenSource) {
+      return { ...event, workflowDefinitionHash: null, supportsDirectMechanismProof: false };
+    }
+    const candidates = intervals.filter((interval) => {
+      if (!isPlainObject3(interval) || typeof interval.canonicalHash !== "string") return false;
+      const from = isoOrNull(interval.effectiveFrom);
+      const to2 = interval.effectiveTo === null ? Number.POSITIVE_INFINITY : isoOrNull(interval.effectiveTo);
+      if (from === null || to2 === null) return false;
+      return from < event.timestamp && event.timestamp < to2;
+    });
+    if (candidates.length !== 1) {
+      return { ...event, workflowDefinitionHash: null, supportsDirectMechanismProof: false };
+    }
+    return {
+      ...event,
+      workflowDefinitionHash: candidates[0].canonicalHash,
+      supportsDirectMechanismProof: true
+    };
+  });
+  const allBound = bound.length > 0 && bound.every((event) => event.workflowDefinitionHash !== null);
+  const compositeProven = isPlainObject3(compositeBinding) && compositeBinding.definitionGovernedRuntimeEvents === "proven" && compositeBinding.publishableAsGoverning === true;
+  const governing = allBound && compositeProven;
+  return {
+    events: bound,
+    binding: {
+      definitionGovernedRuntimeEvents: governing ? "proven" : "unproven",
+      // `provenBy` only ever carries a token that passed the strict grammar above.
+      provenBy: governing ? sourceToken : null,
+      publishableAsGoverning: governing,
+      limitation: governing ? null : unprovenLimitation
+    }
+  };
+}
+function emptyAiComponent(surface) {
+  return {
+    component: surface,
+    applicable: null,
+    complete: false,
+    discoveryTerminal: false,
+    detailDenominator: 0,
+    detailsRead: 0,
+    items: [],
+    reportedTotal: null,
+    reason: "ai_component_missing"
+  };
+}
+function reconcileAiComponent(surface, component, { manifest, companyId, coverage }) {
+  if (!isPlainObject3(component)) return emptyAiComponent(surface);
+  const declaredApplicable = component.applicable;
+  const items = Array.isArray(component.items) ? component.items : null;
+  const tombstonesApply = TOMBSTONE_SURFACES.includes(surface);
+  const mapped = (items ?? []).map((item) => {
+    const row = isPlainObject3(item?.row) ? item.row : {};
+    const tombstoneProven = tombstonesApply && row.isDeleted === true && row.agentStatus === "INACTIVE";
+    return {
+      id: isOpaqueId(item?.id) ? item.id : null,
+      applicable: !tombstoneProven,
+      tombstoneProven,
+      detailRequired: !tombstoneProven,
+      detailRead: item?.detailRead === true && item?.detail !== null && item?.detail !== void 0,
+      declaredTombstone: item?.tombstone === true
+    };
+  });
+  const shell = {
+    component: surface,
+    // R2-I5 — anything that is not a boolean is UNKNOWN, and unknown is `null`. Copying the
+    // wire value verbatim here carried an arbitrary nested object (a bearer token, an email
+    // and a transcript were demonstrated) straight into the result via `ai_applicability_unknown`.
+    applicable: isBoolean(declaredApplicable) ? declaredApplicable : null,
+    complete: false,
+    discoveryTerminal: false,
+    detailDenominator: mapped.filter((item) => item.detailRequired).length,
+    detailsRead: mapped.filter((item) => item.detailRequired && item.detailRead).length,
+    items: mapped.map(({ declaredTombstone: _declared, ...rest }) => rest),
+    // BLOCKER C — the total the upstream reported, or `null` when it reported none. Published
+    // so that "the row count was reconciled against a declared total" and "no total was ever
+    // offered, so the short-page/single-shot terminal is the only proof there is" are
+    // distinguishable in the artefact rather than collapsed into a silent pass.
+    reportedTotal: Array.isArray(component.totalHistory) && Number.isInteger(component.totalHistory[0]) ? component.totalHistory[0] : null,
+    reason: null
+  };
+  const fail = (reason) => ({ ...shell, reason });
+  if (items === null) return fail("ai_items_missing");
+  if (declaredApplicable !== true && declaredApplicable !== false) {
+    return fail("ai_applicability_unknown");
+  }
+  if (component.complete !== true) return fail("ai_component_failed");
+  if (!Array.isArray(component.errors) || component.errors.length > 0) {
+    return fail("ai_component_errors");
+  }
+  if (mapped.some((item) => item.id === null)) return fail("ai_item_id_missing");
+  if (mapped.some((item) => item.declaredTombstone !== item.tombstoneProven)) {
+    return fail("ai_tombstone_unproven");
+  }
+  const pages = component.pages;
+  if (!isPlainObject3(pages) || !Number.isInteger(pages.attempted) || !Number.isInteger(pages.fetched) || pages.fetched < 1 || pages.exhausted !== false) return fail("ai_pagination_incomplete");
+  const totalHistory = component.totalHistory;
+  if (!Array.isArray(totalHistory) || totalHistory.length === 0) return fail("ai_total_history_missing");
+  if (totalHistory.some((total) => total !== totalHistory[0])) return fail("ai_total_unstable");
+  const reportedTotal = totalHistory[0];
+  if (reportedTotal !== null && !Number.isInteger(reportedTotal)) return fail("ai_total_mismatch");
+  if (reportedTotal !== null && reportedTotal !== mapped.length) return fail("ai_total_mismatch");
+  const discoveryTerminal = true;
+  if (component.detailDenominator !== shell.detailDenominator) return fail("ai_detail_denominator_mismatch");
+  if (component.detailsRead !== shell.detailsRead) return fail("ai_details_read_mismatch");
+  if (shell.detailsRead !== shell.detailDenominator) return fail("ai_detail_missing");
+  if (!validateSourceRoutes(component.sourceRoutes, manifest)) return fail("ai_source_routes_invalid");
+  const capabilities = AI_SURFACE_CAPABILITIES[surface];
+  if (coverage[capabilities.discovery]?.proven !== true) {
+    return { ...shell, discoveryTerminal, reason: "ai_discovery_capability_unproven" };
+  }
+  if (shell.detailDenominator > 0 && coverage[capabilities.detail]?.proven !== true) {
+    return { ...shell, discoveryTerminal, reason: "ai_detail_capability_unproven" };
+  }
+  if (surface === "agent_studio" && declaredApplicable === true && !isNonEmptyString(companyId)) {
+    return { ...shell, discoveryTerminal, reason: "ai_company_context_missing" };
+  }
+  return { ...shell, complete: true, discoveryTerminal, reason: null };
+}
+function reconcileAiBundle(data, { manifest, coverage }) {
+  const components = {};
+  const reasons = [];
+  const push = (reason) => {
+    if (reason) reasons.push(reason);
+  };
+  const declaredComponents = isPlainObject3(data?.components) ? data.components : {};
+  const foreignSurfaces = Object.keys(declaredComponents).filter(
+    (surface) => !AI_SURFACES.includes(surface)
+  );
+  const portalOffered = foreignSurfaces.some(
+    (surface) => EXCLUDED_PORTAL_TOKENS.some((token) => normalizeToken(surface).includes(token))
+  );
+  if (foreignSurfaces.length > 0) {
+    for (const surface of AI_SURFACES) components[surface] = emptyAiComponent(surface);
+    return {
+      components,
+      complete: false,
+      reasons: [portalOffered ? "ai_excluded_surface_offered" : "ai_unknown_surface_offered"]
+    };
+  }
+  if (!isPlainObject3(data) || !isPlainObject3(data.rateLimit) || data.rateLimit.limited !== false) {
+    for (const surface of AI_SURFACES) components[surface] = emptyAiComponent(surface);
+    return { components, complete: false, reasons: ["ai_bundle_rate_limited"] };
+  }
+  const bundleHealthy = data.truncated === false && Array.isArray(data.warnings) && isNonEmptyString(data.capabilityVersion) && isNonEmptyString(data.capturedAt);
+  if (!bundleHealthy) {
+    for (const surface of AI_SURFACES) components[surface] = emptyAiComponent(surface);
+    return { components, complete: false, reasons: ["ai_bundle_invalid"] };
+  }
+  const bundleDegraded = data.complete !== true || data.warnings.length > 0;
+  const companyId = isNonEmptyString(data.companyId) ? data.companyId : null;
+  for (const surface of AI_SURFACES) {
+    const component = reconcileAiComponent(surface, declaredComponents[surface], {
+      manifest,
+      companyId,
+      coverage
+    });
+    components[surface] = bundleDegraded && component.complete ? { ...component, complete: false, reason: "ai_bundle_degraded" } : component;
+    push(components[surface].reason);
+  }
+  const complete = AI_SURFACES.every((surface) => components[surface].complete === true);
+  return { components, complete, reasons };
+}
+function createInternalGhlAdapter(options = {}) {
+  if (!isPlainObject3(options)) throw codedError6(CODES.REQUEST, TypeError);
+  const {
+    client,
+    expectedContractVersion,
+    expectedLocationId,
+    expectedToolProfileHash,
+    capabilityProofIndex,
+    runtime = {}
+  } = options;
+  if (!client || typeof client.callTool !== "function") {
+    throw codedError6(CODES.HANDSHAKE, TypeError);
+  }
+  const { key: pseudonymKey, source: pseudonymKeySource } = resolvePseudonymKey(
+    options.pseudonymKey
+  );
+  const pseudonymize = pseudonymizerFor(pseudonymKey);
+  const authorizedCanaryTargetHashes = (() => {
+    if (!Object.hasOwn(options, "authorizedCanaryTargetHashes")) return null;
+    const declared = options.authorizedCanaryTargetHashes;
+    if (declared === null) return null;
+    if (!Array.isArray(declared) || !declared.every(isNonEmptyString)) {
+      throw codedError6(CODES.REQUEST, TypeError);
+    }
+    return new Set(declared);
+  })();
+  function makeSession({ signal, manifest = null }) {
+    const trace = [];
+    const sourceRoutes = [];
+    const exercisedCapabilityIds = [];
+    let toolCalls = 0;
+    const budgetLimit = Number.isInteger(runtime?.budget?.toolCalls) ? runtime.budget.toolCalls : null;
+    const deadlineAt = Number.isFinite(runtime?.deadlineAt) ? Number(runtime.deadlineAt) : null;
+    const boundary = () => {
+      if (signal?.aborted === true) return CODES.ABORTED;
+      if (deadlineAt !== null && nowMs(runtime) >= deadlineAt) return CODES.DEADLINE;
+      if (budgetLimit !== null && toolCalls >= budgetLimit) return CODES.BUDGET;
+      return null;
+    };
+    const dispatch = async (name, args) => {
+      if (!AUDIT_TOOL_NAMES.includes(name)) throw codedError6(CODES.READ_ONLY);
+      toolCalls += 1;
+      let response;
+      try {
+        response = await client.callTool({ name, arguments: args }, { signal });
+      } catch (error) {
+        trace.push({
+          tool: name,
+          capabilityId: null,
+          status: null,
+          ok: false,
+          boundLocationId: expectedLocationId ?? null
+        });
+        return { status: "failed", code: isNonEmptyString(error?.code) ? error.code : "TRANSPORT_FAILED" };
+      }
+      const parsed = parseToolBody(response);
+      trace.push({
+        tool: name,
+        capabilityId: null,
+        status: parsed.status === "ok" ? 200 : null,
+        ok: parsed.status === "ok",
+        boundLocationId: expectedLocationId ?? null
+      });
+      return parsed;
+    };
+    const listTools = async () => {
+      toolCalls += 1;
+      trace.push({
+        tool: "tools/list",
+        capabilityId: null,
+        status: 200,
+        ok: true,
+        boundLocationId: expectedLocationId ?? null
+      });
+      if (typeof client.listTools === "function") return client.listTools({ signal });
+      return client.callTool({ name: "tools/list", arguments: null }, { signal });
+    };
+    const recordRoutes = (routes) => {
+      if (Array.isArray(routes)) {
+        for (const raw of routes) {
+          if (isPlainObject3(raw) && isNonEmptyString(raw.capabilityId)) {
+            exercisedCapabilityIds.push(raw.capabilityId);
+          }
+        }
+      }
+      for (const route of projectRoutes(routes, manifest)) sourceRoutes.push(route);
+    };
+    return {
+      boundary,
+      dispatch,
+      listTools,
+      recordRoutes,
+      trace,
+      sourceRoutes,
+      exercisedCapabilityIds
+    };
+  }
+  const manifestPinned = Object.hasOwn(options, "expectedCapabilityManifestHash");
+  const bundlePinned = Object.hasOwn(options, "expectedBundleHash");
+  const { expectedCapabilityManifestHash, expectedBundleHash } = options;
+  function preflight(window) {
+    if (typeof expectedContractVersion !== "string" || !SUPPORTED_CONTRACT_VERSIONS.includes(expectedContractVersion)) throw codedError6(CODES.CONTRACT);
+    if (!isNonEmptyString(expectedLocationId)) throw codedError6(CODES.LOCATION);
+    const requestedWindow = validateCollectionWindow(window, CODES.WINDOW);
+    if (isPlainObject3(capabilityProofIndex)) {
+      for (const key of Object.keys(capabilityProofIndex)) {
+        if (!PROOF_INDEX_KEYS.includes(key)) throw codedError6(CODES.MANIFEST);
+      }
+    }
+    const manifest = isPlainObject3(capabilityProofIndex) ? validateManifest(capabilityProofIndex.manifest, capabilityProofIndex.bundleHash) : null;
+    if ((manifestPinned || bundlePinned) && manifest === null) throw codedError6(CODES.MANIFEST);
+    if (manifestPinned) {
+      if (typeof expectedCapabilityManifestHash !== "string" || !INTERNAL_DIGEST.test(expectedCapabilityManifestHash) || expectedCapabilityManifestHash !== manifest.manifestHash) throw codedError6(CODES.MANIFEST);
+    }
+    if (bundlePinned) {
+      if (typeof expectedBundleHash !== "string" || !INTERNAL_DIGEST.test(expectedBundleHash) || expectedBundleHash !== manifest.bundleHash) throw codedError6(CODES.MANIFEST);
+    }
+    return { requestedWindow, manifest };
+  }
+  function assertHandshake(listing) {
+    const names = validateToolRegistry(listing);
+    const toolProfileHash = internalDigest2([...names]);
+    if (typeof expectedToolProfileHash !== "string" || !INTERNAL_DIGEST.test(expectedToolProfileHash) || expectedToolProfileHash !== toolProfileHash) throw codedError6(CODES.PROFILE);
+    return toolProfileHash;
+  }
+  async function collectAuditEvidence(request = {}) {
+    if (!isPlainObject3(request)) throw codedError6(CODES.REQUEST, TypeError);
+    const { target, window, applicability, stepRosterRequests, signal } = request;
+    const { requestedWindow, manifest } = preflight(window);
+    if (!isPlainObject3(target) || target.locationId !== expectedLocationId) {
+      throw codedError6(CODES.LOCATION);
+    }
+    const expectedCompanyId = isNonEmptyString(target.companyId) ? target.companyId : null;
+    const declaredCapabilityIds = Array.isArray(applicability?.capabilityIds) ? [...new Set(applicability.capabilityIds)] : null;
+    const capabilityIds = declaredCapabilityIds === null ? [...manifest ? manifest.descriptors.keys() : []] : declaredCapabilityIds.filter(
+      (capabilityId) => isProvenanceToken(capabilityId) && (manifest !== null ? manifest.descriptors.has(capabilityId) : isSealedCapabilityId(capabilityId))
+    );
+    const unsealedDeclaredCount = declaredCapabilityIds === null ? 0 : declaredCapabilityIds.length - capabilityIds.length;
+    const workflowFilter = Array.isArray(applicability?.workflowIds) ? new Set(applicability.workflowIds.filter(isNonEmptyString)) : null;
+    const stepRequests = isPlainObject3(stepRosterRequests) ? stepRosterRequests : {};
+    const session = makeSession({ signal, manifest });
+    const now = nowMs(runtime);
+    const captured = capturedAt(runtime);
+    const windowMs = {
+      fromDate: Date.parse(requestedWindow.from),
+      toDate: Date.parse(requestedWindow.to)
+    };
+    const operationId = `internal-audit.${sha256({
+      schemaVersion: SCHEMA_VERSION,
+      source: SOURCE,
+      boundLocationId: expectedLocationId,
+      requestedWindow,
+      capabilityIds: [...capabilityIds].sort()
+    }).slice(0, 32)}`;
+    const warnings = [];
+    const addWarning = (code, component, reason) => {
+      warnings.push({ code, component, reason: reason ?? null });
+    };
+    let coverage = Object.fromEntries(capabilityIds.map((capabilityId) => [capabilityId, {
+      capabilityId,
+      applicable: true,
+      proven: false,
+      proofClass: null
+    }]));
+    let coverageProven = capabilityIds.length === 0;
+    let toolProfileHash = null;
+    const governingAttestationHashes = /* @__PURE__ */ new Set();
+    const reconcileExercisedCoverage = () => {
+      const declaredOnTheWire = [...new Set(session.exercisedCapabilityIds)].sort();
+      const exercised = declaredOnTheWire.filter(
+        (capabilityId) => manifest !== null && manifest.descriptors.has(capabilityId)
+      );
+      const unsealed = declaredOnTheWire.length - exercised.length;
+      const undeclared = exercised.filter((capabilityId) => !Object.hasOwn(coverage, capabilityId));
+      let merged = coverage;
+      if (undeclared.length > 0) {
+        const extra = evaluateCapabilityProofs({
+          capabilityProofIndex,
+          capabilityIds: undeclared,
+          manifest,
+          toolProfileHash,
+          now,
+          authorizedCanaryTargetHashes
+        });
+        for (const hash of extra.governingAttestationHashes) {
+          governingAttestationHashes.add(hash);
+        }
+        merged = { ...coverage, ...extra.coverage };
+      }
+      const withExercise = {};
+      for (const [capabilityId, entry] of Object.entries(merged)) {
+        withExercise[capabilityId] = { ...entry, exercised: exercised.includes(capabilityId) };
+      }
+      const unproven = exercised.filter(
+        (capabilityId) => withExercise[capabilityId]?.proven !== true
+      );
+      return { coverage: withExercise, unproven, unsealed };
+    };
+    const finish = ({
+      stage,
+      reason = null,
+      workflowRoster = {
+        complete: false,
+        sealed: false,
+        reportedTotal: null,
+        terminalReason: null,
+        workflowIds: [],
+        incompleteReason: null
+      },
+      workflows: workflows2 = [],
+      aiConfiguration: aiConfiguration2 = { components: {}, complete: false },
+      complete: complete2 = false
+    }) => {
+      const exercisedCoverage = reconcileExercisedCoverage();
+      coverage = exercisedCoverage.coverage;
+      for (const capabilityId of exercisedCoverage.unproven) {
+        const named = manifest !== null && manifest.descriptors.has(capabilityId);
+        addWarning(
+          CODES.UNPROVEN,
+          named ? capabilityId : "capability_proof",
+          "exercised_capability_not_proven_live"
+        );
+      }
+      if (unsealedDeclaredCount > 0) {
+        addWarning(
+          CODES.UNPROVEN,
+          "capability_proof",
+          "declared_capability_outside_sealed_manifest"
+        );
+      }
+      if (exercisedCoverage.unsealed > 0) {
+        addWarning(
+          CODES.UNPROVEN,
+          "capability_proof",
+          "exercised_capability_outside_sealed_manifest"
+        );
+      }
+      const rosterMembers = Array.isArray(workflowRoster.workflowIds) ? [...new Set(workflowRoster.workflowIds)] : [];
+      const reviewedIds = new Set(
+        workflows2.filter((entry) => entry.reviewed === true).map((entry) => entry.workflowId)
+      );
+      const completedIds = new Set(
+        workflows2.filter((entry) => entry.reviewed === true && entry.complete === true).map((entry) => entry.workflowId)
+      );
+      const notReviewed = rosterMembers.filter((workflowId) => !reviewedIds.has(workflowId)).sort();
+      for (const workflowId of notReviewed) {
+        addWarning(CODES.WORKFLOW, workflowId, "roster_member_not_reviewed");
+      }
+      const workflowCoverage = {
+        rosterSealed: workflowRoster.sealed === true,
+        rosterTotal: rosterMembers.length,
+        reviewed: [...reviewedIds].filter((id) => rosterMembers.includes(id)).length,
+        complete: [...completedIds].filter((id) => rosterMembers.includes(id)).length,
+        notReviewed,
+        reconciled: workflowRoster.sealed === true && notReviewed.length === 0 && completedIds.size === rosterMembers.length
+      };
+      const effectiveComplete = complete2 === true && exercisedCoverage.unproven.length === 0 && workflowCoverage.reconciled === true && warnings.length === 0;
+      const checkpoint = {
+        schemaVersion: SCHEMA_VERSION,
+        source: SOURCE,
+        operationId,
+        phase: stage === "auth" ? "awaiting_internal_auth" : "collecting_internal",
+        stage,
+        boundLocationId: expectedLocationId,
+        requestedWindow,
+        capturedAt: captured,
+        reason,
+        sealedRoster: workflowRoster.sealed === true,
+        rosterReconciled: workflowCoverage.reconciled,
+        collectedWorkflowIds: workflows2.filter((entry) => entry.complete === true && entry.reviewed === true).map((entry) => entry.workflowId).sort()
+      };
+      const result = {
+        source: SOURCE,
+        operationId,
+        boundLocationId: expectedLocationId,
+        requestedWindow,
+        appliedWindow: requestedWindow,
+        capturedAt: captured,
+        contractVersion: expectedContractVersion,
+        toolProfileHash,
+        capabilityManifestHash: manifest ? manifest.manifestHash : null,
+        bundleHash: manifest ? manifest.bundleHash : null,
+        // R4-I2 — whether this run's pseudonyms are reproducible. The KEY never leaves this
+        // module; only the fact of its provenance does. `ephemeral` means the two pseudonymised
+        // ledgers cannot be joined to any other run, so a week-over-week diff must treat every
+        // enrolled contact as new rather than silently doing so.
+        pseudonymBinding: {
+          keySource: pseudonymKeySource,
+          stableAcrossRuns: pseudonymKeySource === "injected"
+        },
+        // Which identities were anchored OUTSIDE the untrusted proof index on this run.
+        capabilityProofAnchor: {
+          toolProfilePinned: true,
+          manifestPinned,
+          bundlePinned
+        },
+        /**
+         * Finding R4-C1, round-5 close — THE GOVERNING ATTESTATIONS.
+         *
+         * The attestation hashes `attestationIsSound` actually accepted on this run: validated
+         * documents, each referenced by an unexpired `live_runtime` receipt for a
+         * manifest-sealed capability, each binding exactly the three identities this artefact
+         * declares above (`toolProfileHash`, `capabilityManifestHash`, `bundleHash`) —
+         * `pins` in `evaluateCapabilityProofs` is built from the same three values.
+         *
+         * This is the PREIMAGE RELATION, computed where the document actually lives. The
+         * publication gate can then require one of these hashes to be SEALED in the run's
+         * frozen inputs without ever needing the document: an attacker can mint an attestation,
+         * but its hash is then a value the run never sealed, and an attestation whose hash the
+         * run DID seal cannot have been minted by them, because producing a document that
+         * hashes to a sealed digest is a second-preimage attack on SHA-256. Sorted, so the
+         * artefact stays byte-reproducible.
+         */
+        governingAttestationHashes: [...governingAttestationHashes].sort(),
+        workflowRoster,
+        workflows: workflows2,
+        workflowCoverage,
+        aiConfiguration: aiConfiguration2,
+        capabilityCoverage: coverage,
+        locationBinding: {
+          boundLocationId: expectedLocationId,
+          bindingMethod: "native",
+          quarantined: false,
+          conflicts: []
+        },
+        sourceRoutes: session.sourceRoutes,
+        trace: session.trace,
+        complete: effectiveComplete,
+        truncated: !effectiveComplete,
+        checkpoint,
+        warnings
+      };
+      return deepFreezeJson(safeClone(result, CODES.REQUEST));
+    };
+    let hit = session.boundary();
+    if (hit) {
+      addWarning(hit, "run", "boundary_before_handshake");
+      return finish({ stage: "handshake", reason: hit });
+    }
+    let listing;
+    try {
+      listing = await session.listTools();
+    } catch {
+      throw codedError6(CODES.HANDSHAKE);
+    }
+    toolProfileHash = assertHandshake(listing);
+    const proofs = evaluateCapabilityProofs({
+      capabilityProofIndex,
+      capabilityIds,
+      manifest,
+      toolProfileHash,
+      now,
+      authorizedCanaryTargetHashes
+    });
+    coverage = proofs.coverage;
+    coverageProven = proofs.proven;
+    for (const hash of proofs.governingAttestationHashes) governingAttestationHashes.add(hash);
+    for (const code of [...new Set(proofs.reasons)]) {
+      addWarning(code, "capability_proof", "capability_not_proven_live");
+    }
+    hit = session.boundary();
+    if (hit) {
+      addWarning(hit, "run", "boundary_before_auth");
+      return finish({ stage: "handshake", reason: hit });
+    }
+    const auth = await session.dispatch("auth_status", {});
+    if (auth.status !== "ok" || !credentialIsUsable(auth.data)) {
+      addWarning(CODES.AUTH, "auth", "internal_credential_unavailable");
+      return finish({ stage: "auth", reason: CODES.AUTH });
+    }
+    hit = session.boundary();
+    if (hit) {
+      addWarning(hit, "run", "boundary_before_roster");
+      return finish({ stage: "auth", reason: hit });
+    }
+    const rosterResponse = await session.dispatch("list_workflows_complete", {
+      locationId: expectedLocationId
+    });
+    if (rosterResponse.status !== "ok") {
+      addWarning(CODES.ROSTER, "workflow_roster", "roster_read_failed");
+      return finish({
+        stage: "roster",
+        reason: CODES.ROSTER,
+        workflowRoster: {
+          complete: false,
+          sealed: false,
+          reportedTotal: null,
+          terminalReason: null,
+          workflowIds: [],
+          incompleteReason: "roster_read_failed"
+        }
+      });
+    }
+    assertBoundLocation(rosterResponse.data, expectedLocationId);
+    session.recordRoutes(rosterResponse.data.sourceRoutes);
+    const roster = reconcileRoster(rosterResponse.data, manifest);
+    if (!roster.ok) {
+      addWarning(CODES.ROSTER, "workflow_roster", roster.reason);
+      return finish({
+        stage: "roster",
+        reason: CODES.ROSTER,
+        workflowRoster: {
+          complete: false,
+          sealed: false,
+          reportedTotal: Number.isInteger(rosterResponse.data.reportedTotal) ? rosterResponse.data.reportedTotal : null,
+          // Same grammar on the failure path: an unsealed roster is exactly where a
+          // transcript-bearing `terminalReason` would otherwise still reach the publisher.
+          terminalReason: inVocabularyOrNull(
+            isRosterTerminalReason,
+            rosterResponse.data.terminalReason
+          ),
+          workflowIds: roster.workflowIds,
+          incompleteReason: roster.reason
+        }
+      });
+    }
+    const sealedRoster = {
+      complete: true,
+      sealed: true,
+      reportedTotal: rosterResponse.data.reportedTotal,
+      terminalReason: roster.terminalReason,
+      workflowIds: roster.workflowIds,
+      incompleteReason: null
+    };
+    const workflows = [];
+    for (const row of roster.rows) {
+      const workflowId = row.workflowId;
+      const applicable = workflowFilter === null || workflowFilter.has(workflowId);
+      if (!applicable) {
+        workflows.push({
+          workflowId,
+          applicable: false,
+          reviewed: false,
+          complete: false,
+          status: row.status,
+          version: row.version,
+          definition: null,
+          runtime: null,
+          configurationBinding: null,
+          incompleteReason: "workflow_not_reviewed_out_of_declared_scope"
+        });
+        continue;
+      }
+      hit = session.boundary();
+      if (hit) {
+        addWarning(hit, "run", "boundary_during_workflows");
+        return finish({
+          stage: "workflows",
+          reason: hit,
+          workflowRoster: sealedRoster,
+          workflows
+        });
+      }
+      const record = await collectWorkflow({
+        session,
+        workflowId,
+        row,
+        manifest,
+        coverage,
+        windowMs,
+        // Sent OUTBOUND and echoed back under `filters.stepIds`, so a requested step id
+        // carries the same id vocabulary as every other retained identifier.
+        stepIds: Array.isArray(stepRequests[workflowId]) ? stepRequests[workflowId].filter(isOpaqueId) : []
+      });
+      if (record.definitionFailed) addWarning(CODES.WORKFLOW, workflowId, record.incompleteReason);
+      else if (record.complete !== true) addWarning(CODES.RUNTIME, workflowId, record.incompleteReason);
+      workflows.push(record.record);
+    }
+    hit = session.boundary();
+    if (hit) {
+      addWarning(hit, "run", "boundary_before_ai");
+      return finish({
+        stage: "ai",
+        reason: hit,
+        workflowRoster: sealedRoster,
+        workflows
+      });
+    }
+    const bundleArguments = { locationId: expectedLocationId };
+    if (expectedCompanyId !== null) bundleArguments.companyId = expectedCompanyId;
+    const aiResponse = await session.dispatch("get_ai_configuration_bundle", bundleArguments);
+    let aiConfiguration;
+    if (aiResponse.status !== "ok") {
+      addWarning(CODES.AI, "ai_configuration", "ai_bundle_read_failed");
+      aiConfiguration = {
+        components: Object.fromEntries(AI_SURFACES.map((surface) => [surface, emptyAiComponent(surface)])),
+        complete: false
+      };
+    } else {
+      assertContractVersion(aiResponse.data, expectedContractVersion);
+      assertBoundLocation(aiResponse.data, expectedLocationId);
+      const reconciled = reconcileAiBundle(aiResponse.data, { manifest, coverage });
+      for (const surface of AI_SURFACES) {
+        const component = reconciled.components[surface];
+        if (component.complete !== true) addWarning(CODES.AI, surface, component.reason);
+      }
+      for (const reason of reconciled.reasons) {
+        if (!AI_SURFACES.some((surface) => reconciled.components[surface].reason === reason)) {
+          addWarning(CODES.AI, "ai_configuration", reason);
+        }
+      }
+      aiConfiguration = { components: reconciled.components, complete: reconciled.complete };
+      for (const surface of AI_SURFACES) {
+        const declared = isPlainObject3(aiResponse.data.components) ? aiResponse.data.components[surface] : null;
+        if (isPlainObject3(declared)) session.recordRoutes(declared.sourceRoutes);
+      }
+    }
+    const workflowsComplete = workflows.length === sealedRoster.workflowIds.length && workflows.every((entry) => entry.complete === true);
+    const complete = coverageProven && sealedRoster.complete === true && workflowsComplete && aiConfiguration.complete === true && warnings.length === 0;
+    return finish({
+      stage: "complete",
+      reason: null,
+      workflowRoster: sealedRoster,
+      workflows,
+      aiConfiguration,
+      complete
+    });
+  }
+  async function collectWorkflow({
+    session,
+    workflowId,
+    row,
+    manifest,
+    coverage,
+    windowMs,
+    stepIds
+  }) {
+    const base = {
+      workflowId,
+      applicable: true,
+      reviewed: true,
+      complete: false,
+      status: row.status,
+      version: row.version,
+      definition: null,
+      runtime: null,
+      configurationBinding: null,
+      incompleteReason: null
+    };
+    const exported = await session.dispatch("export_workflow", {
+      locationId: expectedLocationId,
+      workflowId
+    });
+    if (exported.status !== "ok") {
+      return {
+        record: { ...base, incompleteReason: "definition_read_failed" },
+        complete: false,
+        definitionFailed: true,
+        incompleteReason: "definition_read_failed"
+      };
+    }
+    assertResponseLocation(exported.data, expectedLocationId);
+    const definitionBinding = definitionLocationBinding(exported.data, workflowId, manifest);
+    if (definitionBinding !== null) {
+      return {
+        record: { ...base, incompleteReason: definitionBinding },
+        complete: false,
+        definitionFailed: true,
+        incompleteReason: definitionBinding
+      };
+    }
+    const exportTriple = {
+      workflow: exported.data.workflow,
+      triggers: exported.data.triggers,
+      stickyNotes: exported.data.stickyNotes
+    };
+    let exportedHash = null;
+    try {
+      exportedHash = sha256(exportTriple);
+    } catch {
+      exportedHash = null;
+    }
+    if (exportedHash === null) {
+      return {
+        record: { ...base, incompleteReason: "definition_payload_invalid" },
+        complete: false,
+        definitionFailed: true,
+        incompleteReason: "definition_payload_invalid"
+      };
+    }
+    const runtimeResponse = await session.dispatch("get_workflow_runtime_window", {
+      locationId: expectedLocationId,
+      workflowId,
+      fromDate: windowMs.fromDate,
+      toDate: windowMs.toDate,
+      stepIds
+    });
+    if (runtimeResponse.status !== "ok") {
+      return {
+        record: { ...base, incompleteReason: "runtime_read_failed" },
+        complete: false,
+        definitionFailed: false,
+        incompleteReason: "runtime_read_failed"
+      };
+    }
+    const data = runtimeResponse.data;
+    assertContractVersion(data, expectedContractVersion);
+    assertBoundLocation(data, expectedLocationId);
+    session.recordRoutes(data.sourceRoutes);
+    if (data.workflowId !== workflowId) {
+      return {
+        record: { ...base, incompleteReason: "runtime_workflow_mismatch" },
+        complete: false,
+        definitionFailed: false,
+        incompleteReason: "runtime_workflow_mismatch"
+      };
+    }
+    const definitionBlock = data.workflowDefinition;
+    const definitionIntegrity = definitionIsSound(definitionBlock, exportedHash);
+    const definitionRoutes = projectRoutes(
+      data.sourceRoutes,
+      manifest,
+      (route) => DEFINITION_CAPABILITIES.includes(route.capabilityId)
+    );
+    if (definitionIntegrity.reason !== null) {
+      return {
+        record: { ...base, incompleteReason: definitionIntegrity.reason },
+        complete: false,
+        definitionFailed: true,
+        incompleteReason: definitionIntegrity.reason
+      };
+    }
+    const definition = {
+      version: definitionBlock.version,
+      definitionHash: definitionBlock.canonicalHash,
+      hashAlgorithm: definitionBlock.hashAlgorithm,
+      // BLOCKER E — `'exact'` when this adapter reproduced the server's declared digest;
+      // `'scrub_explained'` when it provably could not because the payload was scrubbed after
+      // the digest was taken, and the definition was instead verified against the independent
+      // `export_workflow` read. Never absent, so the weaker verdict cannot pass as the stronger.
+      hashVerification: definitionIntegrity.hashVerification,
+      capturedAt: isoOrNullString(definitionBlock.capturedAt),
+      sourceRoutes: definitionRoutes
+    };
+    const observedEvents = (Array.isArray(data.runtimeEvents) ? data.runtimeEvents : []).map(
+      (event) => ({
+        id: isOpaqueId(event?.id) ? event.id : null,
+        timestamp: Number.isInteger(event?.timestamp) ? event.timestamp : null,
+        timestampField: inVocabularyOrNull(isTimestampField, event?.timestampField),
+        // PROJECTED, never copied: an execution-log row carries message bodies, contact emails
+        // and whatever else the upstream chose to include. Each retained field additionally
+        // has to be in its own vocabulary — an expected key is not a licence for free text.
+        event: projectEventDetail(event?.event)
+      })
+    );
+    const historical = bindEventsToDefinition(definitionBlock.validity, observedEvents, {
+      currentDefinitionHash: definitionBlock.canonicalHash,
+      compositeBinding: data.configurationBinding,
+      governingCapabilityProven: DEFINITION_CAPABILITIES.every(
+        (capabilityId) => coverage?.[capabilityId]?.proven === true
+      ),
+      // R6-M1: a `scrub_explained` definition may not support a claim that requires an exactly
+      // verified one.
+      definitionHashVerification: definitionIntegrity.hashVerification
+    });
+    const configurationBinding = {
+      currentDefinitionHash: definitionBlock.canonicalHash,
+      ...historical.binding
+    };
+    const reconciled = reconcileRuntime(data, {
+      manifest,
+      requestedWindow: windowMs,
+      requestedStepIds: stepIds
+    });
+    const runtimeRecord = {
+      workflowId,
+      boundLocationId: expectedLocationId,
+      capabilityVersion: typeof data.capabilityVersion === "string" && INTERNAL_DIGEST.test(data.capabilityVersion) ? data.capabilityVersion : null,
+      capturedAt: isoOrNullString(data.capturedAt),
+      requestedWindow: projectTyped(data.requestedWindow, REQUESTED_WINDOW_SPEC),
+      appliedWindow: projectTyped(data.appliedWindow, APPLIED_WINDOW_SPEC),
+      filters: projectRuntimeFilters(data.filters, { stepIds, contactId: null }, pseudonymize),
+      events: historical.events,
+      enrollments: projectEnrollments(data.enrollments, pseudonymize),
+      enrollmentCursor: extractEnrollmentCursor(data.appliedQueries),
+      enrollmentTotals: projectTyped(data.enrollmentTotals, ENROLLMENT_TOTAL_SPEC),
+      perStepCounts: projectTypedList(data.perStepCounts, PER_STEP_COUNT_SPEC),
+      stepRosters: projectStepRosters(data.stepRosters, pseudonymize),
+      componentCompleteness: projectTyped(data.componentCompleteness, COMPLETENESS_SPEC),
+      pagination: projectPagination(data.pagination),
+      sourceRoutes: projectRoutes(data.sourceRoutes, manifest),
+      complete: reconciled.ok
+    };
+    return {
+      record: {
+        ...base,
+        complete: reconciled.ok,
+        definition,
+        runtime: runtimeRecord,
+        configurationBinding,
+        incompleteReason: reconciled.ok ? null : reconciled.reason
+      },
+      complete: reconciled.ok,
+      definitionFailed: false,
+      incompleteReason: reconciled.reason
+    };
+  }
+  async function collect(request = {}) {
+    if (!isPlainObject3(request)) throw codedError6(CODES.REQUEST, TypeError);
+    const { capability, window, cursor = null, signal } = request;
+    const { requestedWindow, manifest } = preflight(window);
+    if (!isPlainObject3(capability) || capability.capabilityId !== "workflow_roster_list") {
+      throw codedError6(CODES.UNPROVEN);
+    }
+    const session = makeSession({ signal, manifest });
+    const operationId = isNonEmptyString(capability.operationId) ? capability.operationId : "internal_ghl.workflow_roster_list";
+    const envelope = (reason, items, reportedCount) => incompleteCollection({
+      source: SOURCE,
+      operationId,
+      boundLocationId: expectedLocationId,
+      requestedWindow,
+      appliedWindow: requestedWindow,
+      capturedAt: capturedAt(runtime),
+      items,
+      cursor,
+      nextCursor: null,
+      reportedCount,
+      reason,
+      truncated: true
+    });
+    const hit = session.boundary();
+    if (hit) return envelope(hit, [], 0);
+    let listing;
+    try {
+      listing = await session.listTools();
+    } catch {
+      throw codedError6(CODES.HANDSHAKE);
+    }
+    const toolProfileHash = assertHandshake(listing);
+    const now = nowMs(runtime);
+    const requested = evaluateCapabilityProofs({
+      capabilityProofIndex,
+      capabilityIds: [capability.capabilityId],
+      manifest,
+      toolProfileHash,
+      now
+    });
+    if (!requested.proven) {
+      return envelope(requested.reasons[0] ?? CODES.UNPROVEN, [], 0);
+    }
+    const response = await session.dispatch("list_workflows_complete", {
+      locationId: expectedLocationId
+    });
+    if (response.status !== "ok") return envelope(CODES.ROSTER, [], 0);
+    assertBoundLocation(response.data, expectedLocationId);
+    const roster = reconcileRoster(response.data, manifest);
+    if (!roster.ok) {
+      return envelope(
+        CODES.ROSTER,
+        roster.workflowIds.map((workflowId) => ({ workflowId })),
+        Number.isInteger(response.data.reportedTotal) ? response.data.reportedTotal : 0
+      );
+    }
+    session.recordRoutes(response.data.sourceRoutes);
+    const exercised = [...new Set(
+      session.exercisedCapabilityIds.filter(
+        (capabilityId) => capabilityId !== capability.capabilityId
+      )
+    )].sort();
+    if (exercised.length > 0) {
+      const exercisedProofs = evaluateCapabilityProofs({
+        capabilityProofIndex,
+        capabilityIds: exercised,
+        manifest,
+        toolProfileHash,
+        now
+      });
+      if (!exercisedProofs.proven) {
+        return envelope(
+          exercisedProofs.reasons[0] ?? CODES.UNPROVEN,
+          roster.rows,
+          Number.isInteger(response.data.reportedTotal) ? response.data.reportedTotal : 0
+        );
+      }
+    }
+    return completeCollection({
+      source: SOURCE,
+      operationId,
+      boundLocationId: expectedLocationId,
+      requestedWindow,
+      appliedWindow: requestedWindow,
+      capturedAt: capturedAt(runtime),
+      items: roster.rows,
+      cursor,
+      reportedCount: response.data.reportedTotal
+    });
+  }
+  return Object.freeze({
+    source: SOURCE,
+    collect,
+    collectAuditEvidence
+  });
+}
+function credentialIsUsable(data) {
+  if (!isPlainObject3(data)) return false;
+  if (!isNonEmptyString(data.tokenFile)) return false;
+  const jwt = data.jwtClaims;
+  const tokenId = data.tokenIdClaims;
+  if (!isPlainObject3(jwt) || jwt.present !== true) return false;
+  if (!isPlainObject3(tokenId) || tokenId.present !== true) return false;
+  const remaining = [jwt.secondsRemaining, tokenId.secondsRemaining];
+  for (const seconds of remaining) {
+    if (!Number.isFinite(seconds)) return false;
+    if (Number(seconds) * 1e3 < SHORT_LIVED_CREDENTIAL_MS) return false;
+  }
+  return true;
+}
+function definitionLocationBinding(exportData, workflowId, manifest) {
+  if (!isPlainObject3(exportData)) return "definition_payload_invalid";
+  if (manifest === null) return "definition_location_unbound";
+  for (const capabilityId of DEFINITION_CAPABILITIES) {
+    const sealed = manifest.descriptors.get(capabilityId);
+    if (!sealed) return "definition_location_unbound";
+    const spec = sealed.descriptor;
+    if (spec.locationBinding !== "path" && spec.locationBinding !== "query") {
+      return "definition_location_unbound";
+    }
+    if (capabilityId === DEFINITION_PRIMARY_CAPABILITY) {
+      if (spec.locationBinding !== "path") return "definition_location_unbound";
+      if (!isPlainObject3(spec.pathBindings)) return "definition_location_unbound";
+      if (spec.pathBindings.locationId !== "locationId") return "definition_location_unbound";
+      if (spec.pathBindings.workflowId !== "workflowId") return "definition_location_unbound";
+    }
+  }
+  const workflow = exportData.workflow;
+  if (!isPlainObject3(workflow)) return "definition_payload_invalid";
+  const declaredId = rosterRowId(workflow);
+  if (declaredId !== workflowId) return "definition_identity_unbound";
+  return null;
+}
+function carriesScrubSentinel(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (typeof value === "string") return value.includes(SCRUB_SENTINEL);
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) return value.some((entry) => carriesScrubSentinel(entry, seen));
+  return Object.entries(value).some(
+    ([key, nested]) => key.includes(SCRUB_SENTINEL) || carriesScrubSentinel(nested, seen)
+  );
+}
+function definitionIsSound(block, exportedHash) {
+  const bad = (reason) => ({ reason, hashVerification: null });
+  if (!isPlainObject3(block)) return bad("definition_block_missing");
+  if (!Number.isInteger(block.version)) return bad("definition_version_invalid");
+  if (block.hashAlgorithm !== "sha256") return bad("definition_hash_algorithm_invalid");
+  if (typeof block.canonicalHash !== "string" || !BARE_DIGEST.test(block.canonicalHash)) {
+    return bad("definition_hash_invalid");
+  }
+  if (!isNonEmptyString(block.capturedAt)) return bad("definition_capture_time_invalid");
+  const triple = {
+    workflow: block.workflow,
+    triggers: block.triggers,
+    stickyNotes: block.stickyNotes
+  };
+  let recomputed;
+  try {
+    recomputed = sha256(triple);
+  } catch {
+    return bad("definition_payload_invalid");
+  }
+  if (recomputed !== block.canonicalHash) {
+    if (!carriesScrubSentinel(triple)) return bad("definition_hash_mismatch");
+    if (exportedHash !== recomputed) return bad("definition_export_mismatch");
+    return { reason: null, hashVerification: "scrub_explained" };
+  }
+  if (exportedHash !== block.canonicalHash) return bad("definition_export_mismatch");
+  return { reason: null, hashVerification: "exact" };
+}
+var SOURCE, SCHEMA_VERSION, SUPPORTED_CONTRACT_VERSIONS, MANIFEST_SCHEMA_VERSION, MANIFEST_PROFILE, MANIFEST_PROOF_MODEL, PROOF_INDEX_SCHEMA_VERSION, LIVE_RUNTIME, INTERNAL_DIGEST, BARE_DIGEST, PROVENANCE_TOKEN, ISO_INSTANT, MAX_ID_LENGTH, PROVIDER_ID, UUID_ID, BARE_DIGIT_RUN, MAX_TOKEN_LENGTH, MACHINE_TOKEN, INTERVAL_NOTATION, ROUTE_HOSTS, NORMALIZED_PATH, MAX_PATH_LENGTH, FAILURE_CLASSES, HTTP_FAILURE_CLASS, WORKFLOW_STATUSES, RUNTIME_EVENT_TYPES, RUNTIME_EVENT_CLAIM_FIELDS, TOMBSTONE_SURFACES, LOG_PARTITION_STREAMS, ROSTER_TERMINAL_REASONS, ENROLLMENT_TOTAL_SOURCES, ENROLLMENT_TOTAL_SCOPES, QUERY_BOUNDARIES, TIMESTAMP_FIELDS, DEFINITION_VALIDITY_SOURCES, SEALED_CAPABILITY_IDS, PROOF_INDEX_KEYS, SHORT_LIVED_CREDENTIAL_MS, MAXIMUM_PROOF_VALIDITY_MS, AUDIT_TOOL_NAMES, AUDIT_TOOL_INPUT_KEYS, FORBIDDEN_SURFACE_TOKENS, EXCLUDED_PORTAL_TOKENS, AI_SURFACES, AI_SURFACE_CAPABILITIES, DEFINITION_CAPABILITIES, DEFINITION_PRIMARY_CAPABILITY, CODES, oneOf, isOpaqueId, isBoundedToken, isProvenanceToken, isRouteHost, isNormalizedPath, isFailureClass, isKnownRuntimeEventType, isRosterTerminalReason, isEnrollmentTotalSource, isEnrollmentTotalScope, isQueryBoundaries, isTimestampField, isDefinitionValiditySource, isSealedCapabilityId, isBoolean, isInteger, isCount, isIsoInstant, isIntervalNotation, nullable, either, EPOCH_MS_FLOOR, EPOCH_MS_CEILING, EPOCH_DIGITS, PSEUDONYM_KEY_BYTES, RUNTIME_EVENT_DETAIL_SPEC, ENROLLMENT_ROW_SPEC, ENROLLMENT_SPEC, ENROLLMENT_TOTAL_SPEC, PER_STEP_COUNT_SPEC, STEP_ROSTER_SPEC, STEP_ROSTER_CONTACT_SPEC, COMPLETENESS_SPEC, REQUESTED_WINDOW_SPEC, APPLIED_WINDOW_SPEC, LOG_PARTITION_SPEC, PAGE_LEDGER_SPEC, ENROLLMENT_CURSOR_KEYS, ENROLLMENT_CURSOR_SPEC, LOCATION_INDICATOR_KEYS, ATTESTATION_BOUND_FIELDS2, RECEIPT_FIELDS, ROSTER_ID_WRAPPER_KEYS, SCRUB_SENTINEL;
+var init_internal_ghl = __esm({
+  "lib/adapters/internal-ghl.mjs"() {
+    init_canonical();
+    init_collection();
+    SOURCE = "internal_ghl";
+    SCHEMA_VERSION = "1.0.0";
+    SUPPORTED_CONTRACT_VERSIONS = Object.freeze(["1.0.0"]);
+    MANIFEST_SCHEMA_VERSION = "1.0";
+    MANIFEST_PROFILE = "audit";
+    MANIFEST_PROOF_MODEL = "external_capability_receipts_v1";
+    PROOF_INDEX_SCHEMA_VERSION = "1.0";
+    LIVE_RUNTIME = "live_runtime";
+    INTERNAL_DIGEST = /^sha256:[a-f0-9]{64}$/u;
+    BARE_DIGEST = /^[a-f0-9]{64}$/u;
+    PROVENANCE_TOKEN = /^[a-z][a-z0-9_]{2,63}$/u;
+    ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
+    MAX_ID_LENGTH = 36;
+    PROVIDER_ID = /^[A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)?$/u;
+    UUID_ID = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/u;
+    BARE_DIGIT_RUN = /^\d{7,}$/u;
+    MAX_TOKEN_LENGTH = 24;
+    MACHINE_TOKEN = /^[A-Za-z][A-Za-z0-9]*(?:[_-][A-Za-z0-9]+)?$/u;
+    INTERVAL_NOTATION = /^[[(][)\]]$/u;
+    ROUTE_HOSTS = Object.freeze(["backend", "services"]);
+    NORMALIZED_PATH = /^(?:\/(?:[a-z0-9][a-z0-9-]*|\{[A-Za-z][A-Za-z0-9]*\})){1,8}$/u;
+    MAX_PATH_LENGTH = 128;
+    FAILURE_CLASSES = Object.freeze([
+      "AUTH_REJECTED",
+      "RATE_LIMITED",
+      "LOCATION_RATE_LIMITED",
+      "INVALID_RESPONSE_BODY",
+      "IDENTITY_CONFLICT",
+      "IDENTITY_UNREADABLE",
+      "IDENTITY_INSPECTION_CAPPED",
+      "IDENTITY_DEPTH_CAPPED",
+      "TRANSPORT_FAILED"
+    ]);
+    HTTP_FAILURE_CLASS = /^HTTP_\d{3}$/u;
+    WORKFLOW_STATUSES = Object.freeze(["published", "draft"]);
+    RUNTIME_EVENT_TYPES = Object.freeze([
+      "added_to_workflow",
+      "waiting_on_action",
+      "action_skipped_by_filter"
+    ]);
+    RUNTIME_EVENT_CLAIM_FIELDS = Object.freeze(["eventType", "status", "outcome"]);
+    TOMBSTONE_SURFACES = Object.freeze(["voice_ai"]);
+    LOG_PARTITION_STREAMS = 1;
+    ROSTER_TERMINAL_REASONS = Object.freeze(["unique_count_equals_reported_total"]);
+    ENROLLMENT_TOTAL_SOURCES = Object.freeze(["workflow_enroll_stats_cache", "workflow_enroll_stats"]);
+    ENROLLMENT_TOTAL_SCOPES = Object.freeze(["workflow_all_time"]);
+    QUERY_BOUNDARIES = Object.freeze(["upstream-defined"]);
+    TIMESTAMP_FIELDS = Object.freeze(["startedExecutionAt", "createdAt", "updatedAt"]);
+    DEFINITION_VALIDITY_SOURCES = Object.freeze(["workflow_version_history"]);
+    SEALED_CAPABILITY_IDS = Object.freeze([
+      "workflow_roster_list",
+      "workflow_detail",
+      "workflow_triggers",
+      "workflow_sticky_notes",
+      "workflow_execution_logs",
+      "workflow_count_per_step",
+      "workflow_enrollment_search",
+      "workflow_step_details",
+      "workflow_enroll_stats_cache",
+      "workflow_enroll_stats",
+      "conversation_ai_agent_discovery",
+      "conversation_ai_agent_detail",
+      "voice_ai_agent_discovery",
+      "voice_ai_agent_detail",
+      "agent_studio_agent_discovery",
+      "agent_studio_agent_detail"
+    ]);
+    PROOF_INDEX_KEYS = Object.freeze(["attestations", "bundleHash", "index", "manifest"]);
+    SHORT_LIVED_CREDENTIAL_MS = 3e5;
+    MAXIMUM_PROOF_VALIDITY_MS = 30 * 24 * 60 * 60 * 1e3;
+    AUDIT_TOOL_NAMES = Object.freeze([
+      "auth_status",
+      "list_workflows_complete",
+      "get_workflow",
+      "export_workflow",
+      "get_workflow_runtime_window",
+      "get_ai_configuration_bundle"
+    ]);
+    AUDIT_TOOL_INPUT_KEYS = Object.freeze({
+      auth_status: Object.freeze([]),
+      list_workflows_complete: Object.freeze(["locationId", "pageSize", "maxPages"]),
+      get_workflow: Object.freeze(["locationId", "workflowId"]),
+      export_workflow: Object.freeze(["locationId", "workflowId"]),
+      get_workflow_runtime_window: Object.freeze([
+        "locationId",
+        "workflowId",
+        "fromDate",
+        "toDate",
+        "contactId",
+        "eventTypes",
+        "stepIds",
+        "pageSize",
+        "maxLogPartitions",
+        "minPartitionMs",
+        "maxEnrollmentPages",
+        "maxStepRosterPages"
+      ]),
+      get_ai_configuration_bundle: Object.freeze(["locationId", "companyId", "maxPages"])
+    });
+    FORBIDDEN_SURFACE_TOKENS = Object.freeze([
+      "rawrequest",
+      "settokenfile",
+      "confirm",
+      "write",
+      "send",
+      "publish",
+      "trigger",
+      "fastforward",
+      "delete",
+      "remove",
+      "course",
+      "community",
+      "membership"
+    ]);
+    EXCLUDED_PORTAL_TOKENS = Object.freeze([
+      "course",
+      "courses",
+      "lesson",
+      "lessons",
+      "offer",
+      "offers",
+      "membership",
+      "memberships",
+      "community",
+      "communities",
+      "assessment",
+      "assessments",
+      "certificate",
+      "certificates",
+      "credential"
+    ]);
+    AI_SURFACES = Object.freeze(["conversation_ai", "voice_ai", "agent_studio"]);
+    AI_SURFACE_CAPABILITIES = Object.freeze({
+      conversation_ai: Object.freeze({
+        discovery: "conversation_ai_agent_discovery",
+        detail: "conversation_ai_agent_detail"
+      }),
+      voice_ai: Object.freeze({
+        discovery: "voice_ai_agent_discovery",
+        detail: "voice_ai_agent_detail"
+      }),
+      agent_studio: Object.freeze({
+        discovery: "agent_studio_agent_discovery",
+        detail: "agent_studio_agent_detail"
+      })
+    });
+    DEFINITION_CAPABILITIES = Object.freeze([
+      "workflow_detail",
+      "workflow_triggers",
+      "workflow_sticky_notes"
+    ]);
+    DEFINITION_PRIMARY_CAPABILITY = "workflow_detail";
+    CODES = Object.freeze({
+      HANDSHAKE: "INTERNAL_AUDIT_HANDSHAKE_INVALID",
+      READ_ONLY: "INTERNAL_AUDIT_READ_ONLY_VIOLATION",
+      CONTRACT: "INTERNAL_AUDIT_CONTRACT_UNSUPPORTED",
+      PROFILE: "INTERNAL_AUDIT_PROFILE_MISMATCH",
+      MANIFEST: "INTERNAL_AUDIT_MANIFEST_INVALID",
+      PROOF_INVALID: "INTERNAL_AUDIT_PROOF_INVALID",
+      PROOF_EXPIRED: "INTERNAL_AUDIT_PROOF_EXPIRED",
+      UNPROVEN: "INTERNAL_AUDIT_CAPABILITY_UNPROVEN",
+      LOCATION: "INTERNAL_AUDIT_LOCATION_MISMATCH",
+      QUARANTINED: "AUDIT_QUARANTINED",
+      ROSTER: "INTERNAL_AUDIT_ROSTER_INCOMPLETE",
+      WORKFLOW: "INTERNAL_AUDIT_WORKFLOW_INCOMPLETE",
+      RUNTIME: "INTERNAL_AUDIT_RUNTIME_INCOMPLETE",
+      AI: "INTERNAL_AUDIT_AI_INCOMPLETE",
+      AUTH: "INTERNAL_AUDIT_AUTH_REQUIRED",
+      ABORTED: "INTERNAL_AUDIT_COLLECTION_ABORTED",
+      DEADLINE: "INTERNAL_AUDIT_COLLECTION_DEADLINE",
+      BUDGET: "INTERNAL_AUDIT_COLLECTION_BUDGET_EXHAUSTED",
+      WINDOW: "INTERNAL_AUDIT_WINDOW_INVALID",
+      REQUEST: "INTERNAL_AUDIT_REQUEST_INVALID"
+    });
+    oneOf = (values) => {
+      const allowed = new Set(values);
+      return (value) => typeof value === "string" && allowed.has(value);
+    };
+    isOpaqueId = (value) => typeof value === "string" && value.length > 0 && value.length <= MAX_ID_LENGTH && !BARE_DIGIT_RUN.test(value) && (PROVIDER_ID.test(value) || UUID_ID.test(value));
+    isBoundedToken = (value) => typeof value === "string" && value.length <= MAX_TOKEN_LENGTH && MACHINE_TOKEN.test(value);
+    isProvenanceToken = (value) => typeof value === "string" && PROVENANCE_TOKEN.test(value);
+    isRouteHost = oneOf(ROUTE_HOSTS);
+    isNormalizedPath = (value) => typeof value === "string" && value.length <= MAX_PATH_LENGTH && NORMALIZED_PATH.test(value);
+    isFailureClass = (value) => typeof value === "string" && (FAILURE_CLASSES.includes(value) || HTTP_FAILURE_CLASS.test(value));
+    isKnownRuntimeEventType = oneOf(RUNTIME_EVENT_TYPES);
+    isRosterTerminalReason = oneOf(ROSTER_TERMINAL_REASONS);
+    isEnrollmentTotalSource = oneOf(ENROLLMENT_TOTAL_SOURCES);
+    isEnrollmentTotalScope = oneOf(ENROLLMENT_TOTAL_SCOPES);
+    isQueryBoundaries = oneOf(QUERY_BOUNDARIES);
+    isTimestampField = oneOf(TIMESTAMP_FIELDS);
+    isDefinitionValiditySource = oneOf(DEFINITION_VALIDITY_SOURCES);
+    isSealedCapabilityId = oneOf(SEALED_CAPABILITY_IDS);
+    isBoolean = (value) => value === true || value === false;
+    isInteger = (value) => Number.isInteger(value);
+    isCount = (value) => Number.isInteger(value) && value >= 0;
+    isIsoInstant = (value) => typeof value === "string" && ISO_INSTANT.test(value) && isoOrNull(value) !== null;
+    isIntervalNotation = (value) => typeof value === "string" && INTERVAL_NOTATION.test(value);
+    nullable = (check) => (value) => value === null || check(value);
+    either = (...checks) => (value) => checks.some((check) => check(value));
+    EPOCH_MS_FLOOR = Date.UTC(2e3, 0, 1);
+    EPOCH_MS_CEILING = Date.UTC(2100, 0, 1);
+    EPOCH_DIGITS = /^\d{10,13}$/u;
+    PSEUDONYM_KEY_BYTES = 32;
+    RUNTIME_EVENT_DETAIL_SPEC = Object.freeze({
+      _id: isOpaqueId,
+      stepId: isOpaqueId,
+      // SILENT DROP 1 — the sealed vocabulary FIRST, then the narrow machine-token grammar. See
+      // `RUNTIME_EVENT_TYPES` for the per-entry provenance and for why the grammar itself is not
+      // widened. A value that satisfies neither is dropped AND named in `unrecognisedFields`.
+      eventType: either(isKnownRuntimeEventType, isBoundedToken),
+      status: isBoundedToken,
+      // NOT pseudonymised, deliberately, and this is the one contact identifier that may not be.
+      // `lib/modes/weekly.mjs` `EVENT_ENTITY_KEYS` joins this value against the PUBLIC rail's raw
+      // contact ids to detect an internal claim contradicting a public-owned outcome. A pseudonym
+      // joins as well as the raw id only when BOTH sides carry it, and the public rail does not,
+      // so pseudonymising here would silently switch that contradiction detector off. It is bound
+      // to the id vocabulary instead.
+      contactId: isOpaqueId,
+      outcome: isBoundedToken
+    });
+    ENROLLMENT_ROW_SPEC = Object.freeze({ createdAt: isIsoInstant });
+    ENROLLMENT_SPEC = Object.freeze({
+      complete: isBoolean,
+      windowScoped: isBoolean,
+      contactFiltered: isBoolean
+    });
+    ENROLLMENT_TOTAL_SPEC = Object.freeze({
+      total: nullable(isCount),
+      finished: nullable(isCount),
+      source: nullable(isEnrollmentTotalSource),
+      scope: nullable(isEnrollmentTotalScope)
+    });
+    PER_STEP_COUNT_SPEC = Object.freeze({ stepId: isOpaqueId, count: nullable(isCount) });
+    STEP_ROSTER_SPEC = Object.freeze({
+      stepId: isOpaqueId,
+      total: nullable(isCount),
+      complete: isBoolean,
+      pages: nullable(isCount)
+    });
+    STEP_ROSTER_CONTACT_SPEC = Object.freeze({});
+    COMPLETENESS_SPEC = Object.freeze({
+      workflowDefinition: isBoolean,
+      runtimeEvents: isBoolean,
+      perStepCounts: isBoolean,
+      enrollments: isBoolean,
+      stepRosters: isBoolean,
+      enrollmentTotals: isBoolean
+    });
+    REQUESTED_WINDOW_SPEC = Object.freeze({
+      fromDate: isInteger,
+      toDate: isInteger,
+      boundaries: isIntervalNotation
+    });
+    APPLIED_WINDOW_SPEC = Object.freeze({
+      fromDate: isInteger,
+      toDate: isInteger,
+      queryBoundaries: isQueryBoundaries,
+      analyticalFilter: isIntervalNotation,
+      expansionMs: isCount
+    });
+    LOG_PARTITION_SPEC = Object.freeze({
+      attempted: nullable(isCount),
+      terminal: nullable(isCount),
+      exhausted: isBoolean,
+      budget: nullable(isCount)
+    });
+    PAGE_LEDGER_SPEC = Object.freeze({
+      fetched: nullable(isCount),
+      exhausted: isBoolean,
+      budget: nullable(isCount)
+    });
+    ENROLLMENT_CURSOR_KEYS = Object.freeze([
+      "referenceId",
+      "referenceCreatedAt",
+      "referenceSid",
+      "referenceSequence"
+    ]);
+    ENROLLMENT_CURSOR_SPEC = Object.freeze({
+      referenceId: isOpaqueId,
+      referenceCreatedAt: (value) => normalizeCursorInstant(value) !== null,
+      referenceSid: isOpaqueId,
+      referenceSequence: isOpaqueId
+    });
+    LOCATION_INDICATOR_KEYS = Object.freeze([
+      "locationid",
+      "boundlocationid",
+      "ghllocationid",
+      "ghllocation",
+      "sublocationid",
+      "subaccountid"
+    ]);
+    ATTESTATION_BOUND_FIELDS2 = Object.freeze([
+      "toolProfileHash",
+      "capabilityManifestHash",
+      "bundleHash",
+      "targetHash",
+      "provenAt",
+      "expiresAt",
+      "callTraceHashes",
+      "approver"
+    ]);
+    RECEIPT_FIELDS = Object.freeze([
+      "attestationHash",
+      "capabilityDescriptorHash",
+      "capabilityId",
+      "expiresAt",
+      "proofClass",
+      "provenAt"
+    ]);
+    ROSTER_ID_WRAPPER_KEYS = Object.freeze(["$oid", "_id", "id"]);
+    SCRUB_SENTINEL = "<redacted>";
+  }
+});
+
 // lib/kernel.mjs
 import {
   chmodSync,
@@ -8147,7 +11573,9 @@ import {
 import {
   createCipheriv,
   createDecipheriv,
-  randomBytes as randomBytes2
+  createHmac as createHmac2,
+  randomBytes as randomBytes3,
+  timingSafeEqual
 } from "node:crypto";
 import {
   basename as basename2,
@@ -8157,7 +11585,7 @@ import {
   resolve as resolve3,
   sep as sep3
 } from "node:path";
-function codedError6(code, ErrorType = Error) {
+function codedError7(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function deepFreeze4(value, seen = /* @__PURE__ */ new WeakSet()) {
@@ -8168,16 +11596,16 @@ function deepFreeze4(value, seen = /* @__PURE__ */ new WeakSet()) {
 }
 function assertObject(value, code) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw codedError6(code, TypeError);
+    throw codedError7(code, TypeError);
   }
 }
 function assertSafeCollected(value, seen = /* @__PURE__ */ new WeakSet()) {
   if (!value || typeof value !== "object") return;
-  if (seen.has(value)) throw codedError6("AUDIT_INTEGRITY_FAILURE_CYCLE");
+  if (seen.has(value)) throw codedError7("AUDIT_INTEGRITY_FAILURE_CYCLE");
   seen.add(value);
   for (const [key, child] of Object.entries(value)) {
     const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
-    if (["rawrequest", "mutationtool", "authorization", "cookie"].includes(normalized) || normalized === "method" && WRITE_METHODS.has(String(child).toUpperCase())) throw codedError6("AUDIT_INTEGRITY_FAILURE_WRITE_OR_RAW_TRACE");
+    if (["rawrequest", "mutationtool", "authorization", "cookie"].includes(normalized) || normalized === "method" && WRITE_METHODS2.has(String(child).toUpperCase())) throw codedError7("AUDIT_INTEGRITY_FAILURE_WRITE_OR_RAW_TRACE");
     assertSafeCollected(child, seen);
   }
   seen.delete(value);
@@ -8189,18 +11617,18 @@ function eventKey(event) {
   if (typeof event?.stableEventKey === "string" && event.stableEventKey.length > 0) {
     return `stable:${event.stableEventKey}`;
   }
-  throw codedError6("AUDIT_INTEGRITY_FAILURE_EVENT_IDENTITY");
+  throw codedError7("AUDIT_INTEGRITY_FAILURE_EVENT_IDENTITY");
 }
 function mergeExactEvents({ priorEvents = [], collectedEvents = [] } = {}) {
   if (!Array.isArray(priorEvents) || !Array.isArray(collectedEvents)) {
-    throw codedError6("AUDIT_INTEGRITY_FAILURE_EVENT_SET", TypeError);
+    throw codedError7("AUDIT_INTEGRITY_FAILURE_EVENT_SET", TypeError);
   }
   const events = /* @__PURE__ */ new Map();
   for (const event of [...priorEvents, ...collectedEvents]) {
     const key = eventKey(event);
     const prior = events.get(key);
     if (prior && sha256(prior) !== sha256(event)) {
-      throw codedError6("AUDIT_INTEGRITY_FAILURE_EVENT_CONFLICT");
+      throw codedError7("AUDIT_INTEGRITY_FAILURE_EVENT_CONFLICT");
     }
     events.set(key, structuredClone(event));
   }
@@ -8213,7 +11641,62 @@ function zeroKeys(keys) {
   }
 }
 function validateKeys(keys) {
-  if (!keys || !Buffer.isBuffer(keys.encryptionKey) || keys.encryptionKey.length !== 32 || !Buffer.isBuffer(keys.pseudonymKey) || keys.pseudonymKey.length !== 32) throw codedError6("AUDIT_PREFLIGHT_FAILED_KEY_MATERIAL");
+  if (!keys || !Buffer.isBuffer(keys.encryptionKey) || keys.encryptionKey.length !== 32 || !Buffer.isBuffer(keys.pseudonymKey) || keys.pseudonymKey.length !== 32) throw codedError7("AUDIT_PREFLIGHT_FAILED_KEY_MATERIAL");
+}
+function frozenInputSealMac(anchorDigest, keys) {
+  const sealKey = createHmac2("sha256", Buffer.concat([keys.encryptionKey, keys.pseudonymKey])).update(FROZEN_INPUT_SEAL_DOMAIN).digest();
+  return createHmac2("sha256", sealKey).update(canonicalJson({
+    anchorDigest,
+    domain: FROZEN_INPUT_SEAL_DOMAIN,
+    kind: FROZEN_INPUT_SEAL_KIND
+  })).digest("hex");
+}
+function frozenInputMacMatches(expected, actual) {
+  if (typeof actual !== "string" || actual.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(actual, "utf8"));
+  } catch {
+    return false;
+  }
+}
+function sealFrozenInputs({ frozenInputs, keys } = {}) {
+  validateKeys(keys);
+  const anchorDigest = frozenInputAnchorDigest(frozenInputs);
+  if (typeof anchorDigest !== "string" || anchorDigest.length === 0) {
+    throw codedError7("AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS");
+  }
+  return {
+    kind: FROZEN_INPUT_SEAL_KIND,
+    frozenInputs,
+    mac: frozenInputSealMac(anchorDigest, keys)
+  };
+}
+function acceptFrozenInputs(returned, keys) {
+  assertObject(returned, "AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS");
+  if (!Object.hasOwn(returned, "kind") || returned.kind !== FROZEN_INPUT_SEAL_KIND) {
+    return { frozenInputs: returned, provenance: null };
+  }
+  const fail = () => {
+    throw codedError7("AUDIT_PREFLIGHT_FAILED_FROZEN_INPUT_SEAL");
+  };
+  const present = Object.keys(returned).sort();
+  if (present.length !== FROZEN_INPUT_SEAL_FIELDS.length) fail();
+  if (present.some((key, index) => key !== FROZEN_INPUT_SEAL_FIELDS[index])) fail();
+  const inner = returned.frozenInputs;
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) fail();
+  const anchorDigest = frozenInputAnchorDigest(inner);
+  if (typeof anchorDigest !== "string" || anchorDigest.length === 0) fail();
+  if (!frozenInputMacMatches(frozenInputSealMac(anchorDigest, keys), returned.mac)) fail();
+  return {
+    frozenInputs: inner,
+    // Bound to the anchors it authenticated. A provenance minted for one anchor block can never
+    // license a different one, so re-writing the anchors after minting is not a seal either.
+    provenance: Object.freeze({
+      authenticated: true,
+      method: FROZEN_INPUT_PROVENANCE_METHOD2,
+      anchorDigest
+    })
+  };
 }
 function phaseArtifactPath(state, runId, phase) {
   const logicalPhase = phase.split("@", 1)[0];
@@ -8242,13 +11725,13 @@ function directoryIdentity(pathname, code) {
   try {
     metadata = lstatSync4(pathname, { bigint: true });
   } catch {
-    throw codedError6(code);
+    throw codedError7(code);
   }
-  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw codedError6(code);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw codedError7(code);
   return filesystemIdentity(metadata);
 }
 function openPhaseDirectory({ state, runId, create, expectedBinding }) {
-  if (!Number.isInteger(constants.O_NOFOLLOW) || !Number.isInteger(constants.O_DIRECTORY)) throw codedError6("AUDIT_CHECKPOINT_INVALID_FS_UNSUPPORTED");
+  if (!Number.isInteger(constants.O_NOFOLLOW) || !Number.isInteger(constants.O_DIRECTORY)) throw codedError7("AUDIT_CHECKPOINT_INVALID_FS_UNSUPPORTED");
   const root = resolve3(state.paths.privateCheckpoints);
   const authorizedRoot = state.pathBindings?.privateCheckpoints;
   const runDirectory = join2(root, runId);
@@ -8256,18 +11739,18 @@ function openPhaseDirectory({ state, runId, create, expectedBinding }) {
   let canonicalRoot;
   const assertDirectory = (pathname, expected, code) => {
     const identity = directoryIdentity(pathname, code);
-    if (expected && !sameIdentity(identity, expected)) throw codedError6(code);
+    if (expected && !sameIdentity(identity, expected)) throw codedError7(code);
     let canonical;
     try {
       canonical = realpathSync4(pathname);
     } catch {
-      throw codedError6(code);
+      throw codedError7(code);
     }
     if (resolve3(pathname) === root) {
-      if (expected?.realpath && canonical !== expected.realpath) throw codedError6(code);
+      if (expected?.realpath && canonical !== expected.realpath) throw codedError7(code);
       canonicalRoot = canonical;
       return Object.freeze({ ...identity, realpath: canonical });
-    } else if (canonical === canonicalRoot || !canonical.startsWith(`${canonicalRoot}${sep3}`)) throw codedError6(code);
+    } else if (canonical === canonicalRoot || !canonical.startsWith(`${canonicalRoot}${sep3}`)) throw codedError7(code);
     return identity;
   };
   const rootIdentity = assertDirectory(
@@ -8278,11 +11761,11 @@ function openPhaseDirectory({ state, runId, create, expectedBinding }) {
   const ensureChild = (parent, pathname) => {
     assertDirectory(parent, void 0, "AUDIT_CHECKPOINT_INVALID_DIRECTORY");
     if (!existsSync2(pathname)) {
-      if (!create) throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
+      if (!create) throw codedError7("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
       try {
         mkdirSync3(pathname, { mode: 448 });
       } catch {
-        throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
+        throw codedError7("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
       }
     }
   };
@@ -8304,7 +11787,7 @@ function openPhaseDirectory({ state, runId, create, expectedBinding }) {
     phases: phasesIdentity
   });
   if (expectedBinding && canonicalJson(binding) !== canonicalJson(expectedBinding)) {
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY_BINDING");
+    throw codedError7("AUDIT_CHECKPOINT_INVALID_DIRECTORY_BINDING");
   }
   let descriptor;
   try {
@@ -8313,7 +11796,7 @@ function openPhaseDirectory({ state, runId, create, expectedBinding }) {
       constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW
     );
   } catch {
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_PHASES_DIRECTORY");
+    throw codedError7("AUDIT_CHECKPOINT_INVALID_PHASES_DIRECTORY");
   }
   const assertSame = () => {
     assertDirectory(root, binding.root, "AUDIT_CHECKPOINT_INVALID_ROOT_DIRECTORY");
@@ -8325,7 +11808,7 @@ function openPhaseDirectory({ state, runId, create, expectedBinding }) {
     );
     const opened = filesystemIdentity(fstatSync(descriptor, { bigint: true }));
     if (!sameIdentity(opened, binding.phases)) {
-      throw codedError6("AUDIT_CHECKPOINT_INVALID_DIRECTORY_BINDING");
+      throw codedError7("AUDIT_CHECKPOINT_INVALID_DIRECTORY_BINDING");
     }
   };
   assertSame();
@@ -8353,7 +11836,7 @@ function readPhaseEnvelope(pathname, guard) {
     return envelope;
   } catch (error) {
     if (error?.code?.startsWith?.("AUDIT_CHECKPOINT_INVALID")) throw error;
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_ARTIFACT");
+    throw codedError7("AUDIT_CHECKPOINT_INVALID_ARTIFACT");
   } finally {
     if (descriptor !== void 0) closeSync(descriptor);
   }
@@ -8367,7 +11850,7 @@ function phaseAad({ runId, phase, inputHash: inputHash2 }) {
   }), "utf8");
 }
 function decryptPhaseArtifact({ envelope, runId, phase, inputHash: inputHash2, keys }) {
-  if (!envelope || envelope.schemaVersion !== "1.0.0" || envelope.runId !== runId || envelope.phase !== phase || envelope.inputHash !== inputHash2 || typeof envelope.iv !== "string" || typeof envelope.tag !== "string" || typeof envelope.ciphertext !== "string") throw codedError6("AUDIT_CHECKPOINT_INVALID_ARTIFACT");
+  if (!envelope || envelope.schemaVersion !== "1.0.0" || envelope.runId !== runId || envelope.phase !== phase || envelope.inputHash !== inputHash2 || typeof envelope.iv !== "string" || typeof envelope.tag !== "string" || typeof envelope.ciphertext !== "string") throw codedError7("AUDIT_CHECKPOINT_INVALID_ARTIFACT");
   try {
     const decipher = createDecipheriv(
       "aes-256-gcm",
@@ -8382,13 +11865,13 @@ function decryptPhaseArtifact({ envelope, runId, phase, inputHash: inputHash2, k
     ]);
     const output = JSON.parse(plaintext.toString("utf8"));
     if (canonicalJson(output) !== plaintext.toString("utf8")) {
-      throw codedError6("AUDIT_CHECKPOINT_INVALID_CANONICAL");
+      throw codedError7("AUDIT_CHECKPOINT_INVALID_CANONICAL");
     }
     plaintext.fill(0);
     return output;
   } catch (error) {
     if (error?.code?.startsWith?.("AUDIT_CHECKPOINT_INVALID")) throw error;
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_DECRYPT");
+    throw codedError7("AUDIT_CHECKPOINT_INVALID_DECRYPT");
   }
 }
 function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output, keys }) {
@@ -8415,7 +11898,7 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
         keys
       });
       if (canonicalJson(restored) !== canonicalJson(output)) {
-        throw codedError6("AUDIT_CHECKPOINT_INVALID_OUTPUT_CONFLICT");
+        throw codedError7("AUDIT_CHECKPOINT_INVALID_OUTPUT_CONFLICT");
       }
       return {
         artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
@@ -8446,10 +11929,10 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
         };
       } catch (error) {
         if (error?.code?.startsWith?.("AUDIT_CHECKPOINT_INVALID")) throw error;
-        throw codedError6("AUDIT_CHECKPOINT_INVALID_ORPHAN");
+        throw codedError7("AUDIT_CHECKPOINT_INVALID_ORPHAN");
       }
     }
-    const iv = randomBytes2(12);
+    const iv = randomBytes3(12);
     const cipher = createCipheriv("aes-256-gcm", keys.encryptionKey, iv);
     cipher.setAAD(phaseAad({ runId, phase, inputHash: inputHash2 }));
     const plaintext = Buffer.from(canonicalJson(output), "utf8");
@@ -8498,7 +11981,7 @@ function restorePhase({ state, runId, phase, input, keys }) {
   const checkpoint = state.getCheckpoint({ runId, phase });
   if (!checkpoint) return void 0;
   const inputHash2 = sha256(input ?? null);
-  if (checkpoint.inputHash !== inputHash2 || !checkpoint.payload || checkpoint.payload.schemaVersion !== "1.0.0" || typeof checkpoint.payload.artifactRef !== "string" || typeof checkpoint.payload.artifactHash !== "string" || checkpoint.payload.outputHash !== checkpoint.outputHash || !checkpoint.payload.phaseDirectoryBinding) throw codedError6("AUDIT_CHECKPOINT_INVALID_BINDING");
+  if (checkpoint.inputHash !== inputHash2 || !checkpoint.payload || checkpoint.payload.schemaVersion !== "1.0.0" || typeof checkpoint.payload.artifactRef !== "string" || typeof checkpoint.payload.artifactHash !== "string" || checkpoint.payload.outputHash !== checkpoint.outputHash || !checkpoint.payload.phaseDirectoryBinding) throw codedError7("AUDIT_CHECKPOINT_INVALID_BINDING");
   const guard = openPhaseDirectory({
     state,
     runId,
@@ -8513,12 +11996,12 @@ function restorePhase({ state, runId, phase, input, keys }) {
   );
   if (!pathname.startsWith(`${checkpointRoot}${sep3}`) || pathname !== expectedPathname) {
     guard.close();
-    throw codedError6("AUDIT_CHECKPOINT_INVALID_PATH");
+    throw codedError7("AUDIT_CHECKPOINT_INVALID_PATH");
   }
   try {
     const envelope = readPhaseEnvelope(pathname, guard);
     if (sha256(envelope) !== checkpoint.payload.artifactHash) {
-      throw codedError6("AUDIT_CHECKPOINT_INVALID_HASH");
+      throw codedError7("AUDIT_CHECKPOINT_INVALID_HASH");
     }
     const output = decryptPhaseArtifact({
       envelope,
@@ -8528,7 +12011,7 @@ function restorePhase({ state, runId, phase, input, keys }) {
       keys
     });
     if (sha256(output) !== checkpoint.outputHash) {
-      throw codedError6("AUDIT_CHECKPOINT_INVALID_OUTPUT_HASH");
+      throw codedError7("AUDIT_CHECKPOINT_INVALID_OUTPUT_HASH");
     }
     guard.assertSame();
     return output;
@@ -8561,7 +12044,7 @@ function savePhase(state, runId, phase, input, output, keys) {
 }
 function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) {
   const requestId = request.requestId;
-  if (typeof requestId !== "string" || !OPAQUE_ID.test(requestId) || !["conversation", "mechanism"].includes(kind)) throw codedError6("REVIEW_REQUEST_STATE_INVALID_ID");
+  if (typeof requestId !== "string" || !OPAQUE_ID.test(requestId) || !["conversation", "mechanism"].includes(kind)) throw codedError7("REVIEW_REQUEST_STATE_INVALID_ID");
   const directory = join2(state.paths.privateCheckpoints, runId, "reviews");
   mkdirSync3(directory, { recursive: true, mode: 448 });
   for (const candidate of [
@@ -8571,7 +12054,7 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
   ]) {
     const metadata = lstatSync4(candidate);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
+      throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
     }
     chmodSync(candidate, 448);
   }
@@ -8579,7 +12062,7 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
   const expectedRoot = resolve3(state.paths.root);
   const resolvedDestination = resolve3(destination);
   if (!resolvedDestination.startsWith(`${expectedRoot}${sep3}`)) {
-    throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
+    throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
   }
   const bytes = Buffer.from(`${canonicalJson({
     schemaVersion: "1.0.0",
@@ -8591,14 +12074,14 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
 `, "utf8");
   if (existsSync2(destination)) {
     const metadata = lstatSync4(destination);
-    if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync2(destination).equals(bytes)) throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
+    if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync2(destination).equals(bytes)) throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
   } else {
     const temporary = `${destination}.tmp`;
     let descriptor;
     try {
       if (existsSync2(temporary)) {
         const metadata = lstatSync4(temporary);
-        if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync2(temporary).equals(bytes)) throw codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
+        if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync2(temporary).equals(bytes)) throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
       } else {
         descriptor = openSync(
           temporary,
@@ -8614,7 +12097,7 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
       chmodSync(destination, 384);
     } catch (error) {
       if (descriptor !== void 0) closeSync(descriptor);
-      throw error?.code?.startsWith?.("AUDIT_") ? error : codedError6("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
+      throw error?.code?.startsWith?.("AUDIT_") ? error : codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
     }
   }
   return relative3(state.paths.root, destination).split(sep3).join("/");
@@ -8666,8 +12149,8 @@ function persistNotRequiredReviews(state, runId, now) {
 }
 function normalizeStartArgs(args) {
   assertObject(args, "AUDIT_COMMAND_INVALID_ARGS");
-  if (args.mode !== "weekly") throw codedError6("AUDIT_MODE_UNSUPPORTED");
-  if (typeof args.projectRoot !== "string" || typeof args.providerId !== "string" || typeof args.profile !== "string" || typeof args.vaultKeyReference !== "string" || args.vaultKeyReference.length === 0) throw codedError6("AUDIT_COMMAND_INVALID_ARGS");
+  if (args.mode !== "weekly") throw codedError7("AUDIT_MODE_UNSUPPORTED");
+  if (typeof args.projectRoot !== "string" || typeof args.providerId !== "string" || typeof args.profile !== "string" || typeof args.vaultKeyReference !== "string" || args.vaultKeyReference.length === 0) throw codedError7("AUDIT_COMMAND_INVALID_ARGS");
   assertObject(args.target, "AUDIT_COMMAND_INVALID_TARGET");
   assertObject(args.providerConfig ?? {}, "AUDIT_COMMAND_INVALID_PROVIDER_CONFIG");
   return args;
@@ -8684,12 +12167,12 @@ function createAuditKernel({
   providerConfigLoader,
   faultInjector
 } = {}) {
-  if (typeof clock !== "function" || typeof idFactory !== "function" || typeof stateStore?.open !== "function" || !adapters || !analyzer || typeof verifier !== "function" || typeof publisher !== "function" || typeof keyResolver !== "function") throw codedError6("AUDIT_COMMAND_INVALID_KERNEL", TypeError);
+  if (typeof clock !== "function" || typeof idFactory !== "function" || typeof stateStore?.open !== "function" || !adapters || !analyzer || typeof verifier !== "function" || typeof publisher !== "function" || typeof keyResolver !== "function") throw codedError7("AUDIT_COMMAND_INVALID_KERNEL", TypeError);
   const loadProviderConfig = async (invocation, projectRoot) => {
     const descriptor = invocation.providerDescriptor;
     if (descriptor.kind === "inline_safe") return structuredClone(descriptor.config);
     if (typeof providerConfigLoader !== "function") {
-      throw codedError6("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+      throw codedError7("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
     }
     const config = await providerConfigLoader({ descriptor, projectRoot });
     assertObject(config, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -8702,7 +12185,16 @@ function createAuditKernel({
     }
     return saved;
   }
-  async function execute({ args, runId, frozenInputs, state, keys }) {
+  async function execute({
+    args,
+    runId,
+    frozenInputs,
+    // Finding R7-C1. `null` is the honest UNKNOWN: the host stated nothing about how the
+    // anchoring half of `frozenInputs` was authenticated, so gate 2 anchors nothing.
+    frozenInputProvenance = null,
+    state,
+    keys
+  }) {
     let phase = "queued";
     const runPhase = async (phaseName, input, compute) => {
       const storedPhase = checkpointPhase(phaseName, input);
@@ -8774,14 +12266,86 @@ function createAuditKernel({
         } : collectedPublic;
       });
       assertSafeCollected(publicEvidence);
+      let internalEvidence = null;
+      let internalMerge = null;
+      {
+        const internalInput = {
+          publicHash: sha256(publicEvidence),
+          collectionPlan
+        };
+        const restoredInternal = restorePhase({
+          state,
+          runId,
+          phase: checkpointPhase("collecting_internal", internalInput),
+          input: internalInput,
+          keys
+        });
+        if (restoredInternal !== void 0) {
+          phase = "collecting_internal";
+          internalEvidence = restoredInternal.internalEvidence;
+          internalMerge = restoredInternal.merge;
+          assertSafeCollected(internalEvidence);
+        } else if (typeof adapters.collectInternal === "function") {
+          const internalPhase = await collectInternalEvidencePhase({
+            adapter: await adapters.collectInternal({ ...args, runId, context, collectionPlan }),
+            target: args.target,
+            window: {
+              from: new Date(collectionPlan.collectionStart).toISOString(),
+              to: new Date(collectionPlan.cutoff).toISOString()
+            },
+            applicability: args.providerConfig?.internalApplicability ?? {},
+            stepRosterRequests: args.providerConfig?.stepRosterRequests ?? {},
+            publicEvidence,
+            checkpoint: { schemaVersion: "1.0.0", phase: "collecting_public" }
+          });
+          if (internalPhase.phase === "awaiting_internal_auth") {
+            phase = "awaiting_internal_auth";
+            await runPhase(phase, internalInput, async () => ({
+              limitations: [...internalPhase.limitations]
+            }));
+            state.updateRunStatus({ runId, status: phase, now: clock() });
+            return deepFreeze4({ status: phase, runId });
+          }
+          if (internalPhase.internalEvidence !== null) {
+            phase = "collecting_internal";
+            const collected = await runPhase(phase, internalInput, async () => {
+              const evidence = internalPhase.internalEvidence;
+              const merged = await mergeInternalEvidence({
+                publicEvidence,
+                internalEvidence: evidence,
+                coveragePolicy: args.providerConfig?.coveragePolicy ?? {},
+                checkpoint: internalPhase.checkpoint,
+                refreshPublicEvidence: typeof adapters.refreshPublic === "function" ? (request) => adapters.refreshPublic({ ...args, runId, ...request }) : void 0,
+                refreshLedger: null
+              });
+              return { internalEvidence: evidence, merge: merged };
+            });
+            internalEvidence = collected.internalEvidence;
+            internalMerge = collected.merge;
+            assertSafeCollected(internalEvidence);
+          }
+        }
+      }
       phase = "normalizing";
-      const normalized = await runPhase(phase, {
+      const publicOnlyNormalizingInput = {
         contextHash: sha256(context),
         publicHash: sha256(publicEvidence),
         collectionPlan
-      }, async () => typeof analyzer.normalize === "function" ? analyzer.normalize({
+      };
+      let normalizingInput = publicOnlyNormalizingInput;
+      if (internalEvidence !== null) {
+        const stored = state.getCheckpoint({ runId, phase: "normalizing" });
+        normalizingInput = stored !== void 0 && stored.inputHash === sha256(publicOnlyNormalizingInput) ? publicOnlyNormalizingInput : {
+          ...publicOnlyNormalizingInput,
+          internalHash: sha256(internalEvidence),
+          mergeHash: sha256(internalMerge ?? null)
+        };
+      }
+      const normalized = await runPhase(phase, normalizingInput, async () => typeof analyzer.normalize === "function" ? analyzer.normalize({
         context,
         publicEvidence,
+        internalEvidence,
+        merge: internalMerge,
         frozenInputs,
         runId,
         collectionPlan
@@ -8833,7 +12397,7 @@ function createAuditKernel({
             providerConfig: args.providerConfig
           }) : [];
           if (!Array.isArray(created)) {
-            throw codedError6("REVIEW_REQUEST_STATE_INVALID_SHAPE");
+            throw codedError7("REVIEW_REQUEST_STATE_INVALID_SHAPE");
           }
           return created;
         });
@@ -8882,6 +12446,10 @@ function createAuditKernel({
         runId
       }) : { discovery, falsification });
       phase = "compiling";
+      const runBinding = {
+        runId,
+        frozenInputsHash: sha256(frozenInputs)
+      };
       const compiled = await runPhase(phase, {
         prioritizedHash: sha256(prioritized),
         memoryHash: sha256(memory)
@@ -8893,8 +12461,66 @@ function createAuditKernel({
           frozenInputs,
           runId
         }) : { status: "complete_partial", findings: [] };
+        let fullEligibility = null;
+        if (internalEvidence !== null) {
+          const trustedCarrier = Boolean(
+            compiledRaw?.payloadArtifacts && compiledRaw?.projections && compiledRaw?.manifestInput
+          );
+          fullEligibility = await evaluateFullEligibility({
+            internalEvidence,
+            merge: internalMerge,
+            trace: internalEvidence.trace ?? null,
+            claimSupport: typeof analyzer.describeClaimSupport === "function" ? await analyzer.describeClaimSupport({
+              compiled: compiledRaw,
+              normalized,
+              merge: internalMerge,
+              frozenInputs,
+              runId
+            }) : null,
+            privacyScan: scanPublicationPrivacy(compiledRaw),
+            // Not an assertion that the verifier already ran: an assertion that this payload is
+            // bound to a publication path where the verifier MUST pass before anything is
+            // published. `null` (no such binding) is UNKNOWN and fails gate 10 closed without
+            // being read as a verifier FAILURE, which would quarantine.
+            verification: trustedCarrier ? { passed: true, code: null, boundTo: "trusted_publication_gate" } : null,
+            requiredWindows: [{
+              windowId: "analytical",
+              from: new Date(collectionPlan.collectionStart).toISOString(),
+              to: new Date(collectionPlan.cutoff).toISOString()
+            }],
+            expected: {
+              ...args.providerConfig?.internalIdentities ?? {},
+              locationId: args.target.locationId
+            },
+            // ---- finding R3-C2: the anchor is the SEALED frozen inputs --------------------
+            // `providerConfig.internalIdentities` is minted by the same actor, and in the
+            // shipped composition root the same configuration record, as the proof index it
+            // was supposed to vouch for — so anchoring against it (or against the evidence's
+            // own self-declared identity fields) was circular and a wholly self-minted proof
+            // chain reached `complete_full` with no live canary. Decision D3's frozen inputs
+            // are sealed at run creation, hashed into `frozenInputsHash` and
+            // `RESUME_INPUT_MISMATCH`-protected: they are the only identity statement this run
+            // cannot rewrite. `expected` above is retained ONLY as a mismatch discriminator.
+            frozenInputs,
+            // ---- finding R7-C1: HOW the anchoring half was authenticated ------------------
+            // Round 6 authenticated the anchors in the shipped composition root; the kernel
+            // still accepted any `analyzer.freezeInputs` return with no provenance at all, so
+            // a library host running its own analyzer sealed its own forgery. This token is
+            // emitted by `acceptFrozenInputs` ONLY after a host MAC keyed by this run's vault
+            // key material verified against the digest of exactly these anchors. Absent — the
+            // default for every host that seals nothing — no identity is anchored, gate 2
+            // fails, and the run is capped at `complete_partial` rather than quarantined.
+            frozenInputProvenance,
+            run: runBinding
+          });
+          if (NON_PUBLISHING_STATUSES2.has(fullEligibility.status)) {
+            throw codedError7("AUDIT_QUARANTINED");
+          }
+        }
         return enforcePublicOnlyPublication(compiledRaw, {
-          firstBaseline: collectionPlan.mode === "first"
+          firstBaseline: collectionPlan.mode === "first",
+          fullEligibility,
+          expectedRun: fullEligibility === null ? null : runBinding
         });
       });
       phase = "verifying";
@@ -8906,9 +12532,10 @@ function createAuditKernel({
         verifierInputHash: sha256(compiled)
       } : verifier({ compiled, runId, frozenInputs }));
       if (!trustedPublication && verification?.result !== "pass") {
-        throw codedError6("AUDIT_INTEGRITY_FAILURE_VERIFIER");
+        throw codedError7("AUDIT_INTEGRITY_FAILURE_VERIFIER");
       }
       phase = "persisting";
+      const derivedStatus = compiled?.status === "complete_full" ? "complete_full" : "complete_partial";
       const revisionHash = sha256({
         runId,
         frozenInputsHash: sha256(frozenInputs),
@@ -8935,7 +12562,7 @@ function createAuditKernel({
           paths: state.paths,
           runManifest: {
             ...compiled.manifestInput,
-            status: "complete_partial",
+            status: derivedStatus,
             publicationId: prepared.publicationId
           },
           payloadArtifacts: compiled.payloadArtifacts,
@@ -8954,7 +12581,7 @@ function createAuditKernel({
           frozenInputs
         });
         if (trustedPublication && publication?.attestation?.result !== "pass") {
-          throw codedError6("AUDIT_INTEGRITY_FAILURE_VERIFIER");
+          throw codedError7("AUDIT_INTEGRITY_FAILURE_VERIFIER");
         }
         const manifestHash = publication?.manifestHash ?? publication?.attestation?.manifestHash ?? sha256({ publicationId: prepared.publicationId, compiled });
         const publicationRoot = publication?.publicationRoot ?? publication?.manifest?.publicationRoot ?? sha256({ publicationId: prepared.publicationId, verification });
@@ -8971,7 +12598,7 @@ function createAuditKernel({
           publicationRoot
         };
       });
-      phase = "complete_partial";
+      phase = derivedStatus;
       await runPhase(phase, persisted, async () => ({
         publicationId: persisted.publicationId
       }));
@@ -8983,16 +12610,16 @@ function createAuditKernel({
         publicationId: persisted.publicationId
       });
     } catch (error) {
-      const integrity = typeof error?.code === "string" && (error.code.startsWith("AUDIT_INTEGRITY_FAILURE") || error.code.startsWith("AUDIT_CHECKPOINT_INVALID") || error.code.startsWith("VERIFIER_"));
+      const integrity = typeof error?.code === "string" && (error.code.startsWith("AUDIT_INTEGRITY_FAILURE") || error.code.startsWith("AUDIT_CHECKPOINT_INVALID") || error.code.startsWith("VERIFIER_") || QUARANTINING_CODES.has(error.code));
       const status = integrity ? "quarantined" : "failed";
       try {
         state.updateRunStatus({ runId, status, now: clock() });
         state.releaseLease({ runId });
       } catch {
       }
-      if (integrity) throw codedError6("AUDIT_QUARANTINED");
+      if (integrity) throw codedError7("AUDIT_QUARANTINED");
       if (error?.code) throw error;
-      throw codedError6(`AUDIT_PHASE_INVALID_${phase.toUpperCase()}`);
+      throw codedError7(`AUDIT_PHASE_INVALID_${phase.toUpperCase()}`);
     }
   }
   async function start(input) {
@@ -9002,11 +12629,16 @@ function createAuditKernel({
     try {
       keys = await keyResolver(args.vaultKeyReference);
       validateKeys(keys);
-      const frozenInputs = await analyzer.freezeInputs(args);
+      const returnedInputs = await analyzer.freezeInputs(args);
+      assertObject(returnedInputs, "AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS");
+      const { frozenInputs, provenance: frozenInputProvenance } = acceptFrozenInputs(
+        returnedInputs,
+        keys
+      );
       assertObject(frozenInputs, "AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS");
       const runId = idFactory("run");
       if (typeof runId !== "string" || !OPAQUE_ID.test(runId)) {
-        throw codedError6("AUDIT_PREFLIGHT_FAILED_RUN_ID");
+        throw codedError7("AUDIT_PREFLIGHT_FAILED_RUN_ID");
       }
       state = stateStore.open({
         projectRoot: args.projectRoot,
@@ -9032,10 +12664,10 @@ function createAuditKernel({
         now: clock(),
         ttlMs: 3e5
       });
-      return await execute({ args, runId, frozenInputs, state, keys });
+      return await execute({ args, runId, frozenInputs, frozenInputProvenance, state, keys });
     } catch (error) {
       if (error?.code) throw error;
-      throw codedError6("AUDIT_PREFLIGHT_FAILED");
+      throw codedError7("AUDIT_PREFLIGHT_FAILED");
     } finally {
       zeroKeys(keys);
       state?.close();
@@ -9043,7 +12675,7 @@ function createAuditKernel({
   }
   async function resume(input) {
     assertObject(input, "AUDIT_COMMAND_INVALID_ARGS");
-    if (typeof input.projectRoot !== "string" || typeof input.locationId !== "string" || typeof input.runId !== "string" || typeof input.vaultKeyReference !== "string") throw codedError6("AUDIT_COMMAND_INVALID_ARGS");
+    if (typeof input.projectRoot !== "string" || typeof input.locationId !== "string" || typeof input.runId !== "string" || typeof input.vaultKeyReference !== "string") throw codedError7("AUDIT_COMMAND_INVALID_ARGS");
     let keys;
     let state;
     try {
@@ -9071,7 +12703,12 @@ function createAuditKernel({
         providerDescriptor: currentProviderDescriptor,
         vaultKeyReference: input.vaultKeyReference
       };
-      const currentInputs = await analyzer.freezeInputs(args);
+      const returnedInputs = await analyzer.freezeInputs(args);
+      assertObject(returnedInputs, "AUDIT_PREFLIGHT_FAILED_FROZEN_INPUTS");
+      const {
+        frozenInputs: currentInputs,
+        provenance: frozenInputProvenance
+      } = acceptFrozenInputs(returnedInputs, keys);
       let resumeMismatch = currentProviderDescriptor.configHash !== invocation.providerDescriptor.configHash;
       try {
         state.assertResumeInputs(input.runId, currentInputs);
@@ -9105,6 +12742,7 @@ function createAuditKernel({
         args,
         runId: input.runId,
         frozenInputs: currentInputs,
+        frozenInputProvenance,
         state,
         keys
       });
@@ -9121,7 +12759,7 @@ function createAuditKernel({
     terminalStates: [...TERMINAL]
   });
 }
-var PHASES, TERMINAL, WRITE_METHODS, REVISION_PHASES, OPAQUE_ID;
+var PHASES, TERMINAL, QUARANTINING_CODES, NON_PUBLISHING_STATUSES2, WRITE_METHODS2, REVISION_PHASES, OPAQUE_ID, FROZEN_INPUT_SEAL_KIND, FROZEN_INPUT_SEAL_DOMAIN, FROZEN_INPUT_PROVENANCE_METHOD2, FROZEN_INPUT_SEAL_FIELDS;
 var init_kernel = __esm({
   "lib/kernel.mjs"() {
     init_canonical();
@@ -9141,19 +12779,50 @@ var init_kernel = __esm({
       "compiling",
       "verifying",
       "persisting",
-      "complete_partial"
+      "complete_partial",
+      // Task 11 / controller decision D1. APPENDED, never inserted: `phaseArtifactPath()` bakes
+      // `PHASES.indexOf(phase)` into the on-disk checkpoint filename and `restorePhase()` refuses
+      // any other pathname, so renumbering an existing phase would break every in-flight resume.
+      // Array position is STORAGE identity; EXECUTION position is the source order inside
+      // `execute()`, where these two run between `collecting_public` and `normalizing`.
+      "awaiting_internal_auth",
+      "collecting_internal",
+      // The DERIVED terminal phase (finding I7). Appended for the same storage-identity reason as
+      // the two above. Unreachable today because gate 2 has no live_runtime receipt to satisfy it.
+      "complete_full"
     ]);
-    TERMINAL = /* @__PURE__ */ new Set(["blocked", "failed", "quarantined", "complete_partial"]);
-    WRITE_METHODS = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
+    TERMINAL = /* @__PURE__ */ new Set([
+      "blocked",
+      "failed",
+      "quarantined",
+      "complete_partial",
+      "complete_full"
+    ]);
+    QUARANTINING_CODES = /* @__PURE__ */ new Set([
+      "AUDIT_QUARANTINED",
+      "INTERNAL_AUDIT_LOCATION_MISMATCH",
+      "INTERNAL_AUDIT_MANIFEST_INVALID",
+      "INTERNAL_AUDIT_PROFILE_MISMATCH",
+      "INTERNAL_AUDIT_READ_ONLY_VIOLATION"
+    ]);
+    NON_PUBLISHING_STATUSES2 = /* @__PURE__ */ new Set(["blocked", "failed", "quarantined"]);
+    WRITE_METHODS2 = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
     REVISION_PHASES = /* @__PURE__ */ new Set([
       "awaiting_model_review",
       "prioritizing",
       "compiling",
       "verifying",
       "persisting",
-      "complete_partial"
+      "complete_partial",
+      // Finding R2-M3: `complete_full` was omitted while its sibling terminal phase was present, so
+      // a second revision of a Full run would collide on the single `16-complete_full.json` path.
+      "complete_full"
     ]);
     OPAQUE_ID = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
+    FROZEN_INPUT_SEAL_KIND = "host_sealed_frozen_inputs";
+    FROZEN_INPUT_SEAL_DOMAIN = "grom.audit.kernel.frozen-input-provenance.v1";
+    FROZEN_INPUT_PROVENANCE_METHOD2 = "host_key_mac";
+    FROZEN_INPUT_SEAL_FIELDS = Object.freeze(["frozenInputs", "kind", "mac"]);
   }
 });
 
@@ -9161,7 +12830,8 @@ var init_kernel = __esm({
 var local_runtime_exports = {};
 __export(local_runtime_exports, {
   createLocalAuditKernel: () => createLocalAuditKernel,
-  localProviderDescriptor: () => localProviderDescriptor
+  localProviderDescriptor: () => localProviderDescriptor,
+  mintFrozenInputSeal: () => mintFrozenInputSeal
 });
 import {
   chmodSync as chmodSync2,
@@ -9173,10 +12843,11 @@ import {
   mkdirSync as mkdirSync4,
   openSync as openSync2,
   readFileSync as readFileSync3,
+  realpathSync as realpathSync5,
   renameSync as renameSync2,
   writeFileSync as writeFileSync3
 } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHmac as createHmac3, randomUUID, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import {
   dirname as dirname2,
   isAbsolute as isAbsolute2,
@@ -9185,10 +12856,10 @@ import {
   resolve as resolve4,
   sep as sep4
 } from "node:path";
-function codedError7(code, ErrorType = Error) {
+function codedError8(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject3(value) {
+function isPlainObject4(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -9197,6 +12868,18 @@ function isWithin2(parent, candidate) {
   const fromParent = relative4(parent, candidate);
   return fromParent === "" || !isAbsolute2(fromParent) && fromParent !== ".." && !fromParent.startsWith(`..${sep4}`);
 }
+function realWithin(parent, candidate, code) {
+  let realParent;
+  let realCandidate;
+  try {
+    realParent = realpathSync5(parent);
+    realCandidate = realpathSync5(candidate);
+  } catch {
+    throw codedError8(code);
+  }
+  if (!isWithin2(realParent, realCandidate)) throw codedError8(code);
+  return realCandidate;
+}
 function readRegularJson(pathname, code) {
   let descriptor;
   try {
@@ -9204,27 +12887,236 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync2(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync3(descriptor, "utf8"));
-    if (!isPlainObject3(parsed)) throw new Error();
+    if (!isPlainObject4(parsed)) throw new Error();
     return parsed;
   } catch {
-    throw codedError7(code);
+    throw codedError8(code);
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
   }
 }
 function validateLocalConfig(config) {
-  if (!isPlainObject3(config) || config.schemaVersion !== LOCAL_SCHEMA || config.adapterKind !== "local_fixture" || typeof config.providerId !== "string" || config.providerId.length === 0 || !Number.isSafeInteger(config.cutoff) || typeof config.timezone !== "string" || config.timezone.length === 0 || !isPlainObject3(config.frozenInputs) || !isPlainObject3(config.context) || !isPlainObject3(config.publicEvidence) || !Array.isArray(config.reviews)) throw codedError7("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject4(config) || config.schemaVersion !== LOCAL_SCHEMA || config.adapterKind !== "local_fixture" || typeof config.providerId !== "string" || config.providerId.length === 0 || !Number.isSafeInteger(config.cutoff) || typeof config.timezone !== "string" || config.timezone.length === 0 || !isPlainObject4(config.frozenInputs) || !isPlainObject4(config.context) || !isPlainObject4(config.publicEvidence) || !Array.isArray(config.reviews)) throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (Object.hasOwn(config, "internalRail") && config.internalRail !== null) {
+    validateInternalRailConfig(config.internalRail);
+  }
   return config;
 }
+function validateInternalRailConfig(rail) {
+  const transport = rail?.transport;
+  if (!isPlainObject4(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject4(rail.capabilityProofIndex) || !isPlainObject4(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject4(transport.responses) || !isPlainObject4(transport.toolsList))) throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  for (const key of ["capabilityManifestHash", "bundleHash"]) {
+    if (typeof rail[key] !== "string" || rail[key].length === 0) {
+      throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    }
+  }
+  return rail;
+}
+function inlineResponseClient({ toolsList, responses }) {
+  const body = (name) => name === "tools/list" ? { ok: true, data: structuredClone(toolsList) } : Object.hasOwn(responses, name) ? structuredClone(responses[name]) : { ok: false, code: "INTERNAL_AUDIT_RESPONSE_UNAVAILABLE" };
+  return {
+    async listTools() {
+      return structuredClone(toolsList);
+    },
+    async callTool(request) {
+      return {
+        content: [{ type: "text", text: JSON.stringify(body(request?.name)) }]
+      };
+    }
+  };
+}
+function sealedDigestSet(frozenInputs, sealedList) {
+  return new Set(
+    (Array.isArray(frozenInputs?.[sealedList]) ? frozenInputs[sealedList] : []).filter((entry) => typeof entry === "string" && entry.length > 0)
+  );
+}
+function assertSealedRailIdentities(rail, frozenInputs) {
+  const fail = () => {
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  };
+  if (!isPlainObject4(frozenInputs)) fail();
+  const sealedProfile = frozenInputs.providerToolProfileHash;
+  if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail();
+  if (rail.toolProfileHash !== sealedProfile) fail();
+  const manifests = sealedDigestSet(frozenInputs, "capabilityManifestHashes");
+  const proofDigests = /* @__PURE__ */ new Set([
+    ...sealedDigestSet(frozenInputs, "capabilityAttestationHashes"),
+    ...sealedDigestSet(frozenInputs, "capabilityReceiptHashes"),
+    ...typeof frozenInputs.capabilityProofIndexHash === "string" && frozenInputs.capabilityProofIndexHash.length > 0 ? [frozenInputs.capabilityProofIndexHash] : []
+  ]);
+  const identities = [
+    rail.toolProfileHash,
+    rail.capabilityManifestHash,
+    rail.bundleHash
+  ];
+  if (new Set(identities).size !== identities.length) fail();
+  for (const identity of identities) {
+    if (proofDigests.has(identity)) fail();
+  }
+  for (const identity of [rail.capabilityManifestHash, rail.bundleHash]) {
+    if (!manifests.has(identity)) fail();
+  }
+}
+function localKeyMaterial(keyReference) {
+  if (keyReference !== LOCAL_KEY_REFERENCE) {
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
+  }
+  const material = Buffer.concat([
+    Buffer.alloc(LOCAL_KEY_BYTES, 49),
+    Buffer.alloc(LOCAL_KEY_BYTES, 50)
+  ]);
+  return {
+    encryptionKey: Buffer.from(material.subarray(0, LOCAL_KEY_BYTES)),
+    pseudonymKey: Buffer.from(material.subarray(LOCAL_KEY_BYTES))
+  };
+}
+function sealAuthenticationKey(vaultKeyReference) {
+  const { encryptionKey, pseudonymKey } = localKeyMaterial(vaultKeyReference);
+  return createHmac3("sha256", Buffer.concat([encryptionKey, pseudonymKey])).update(SEAL_DOMAIN).digest();
+}
+function sealMacFor({ locationId, anchors, canaryTargetHashes }, vaultKeyReference) {
+  return createHmac3("sha256", sealAuthenticationKey(vaultKeyReference)).update(canonicalJson({
+    anchors,
+    canaryTargetHashes,
+    domain: SEAL_DOMAIN,
+    kind: SEAL_KIND,
+    locationId,
+    schemaVersion: LOCAL_SCHEMA
+  })).digest("hex");
+}
+function mintFrozenInputSeal({
+  locationId,
+  anchors,
+  canaryTargetHashes,
+  vaultKeyReference
+} = {}) {
+  const document = {
+    schemaVersion: LOCAL_SCHEMA,
+    kind: SEAL_KIND,
+    locationId,
+    anchors: Object.fromEntries(SEALED_ANCHOR_FIELDS.map((field) => [field, anchors?.[field]])),
+    canaryTargetHashes: Array.isArray(canaryTargetHashes) ? [...canaryTargetHashes] : []
+  };
+  assertSealDocumentShape(document);
+  return { ...document, mac: sealMacFor(document, vaultKeyReference) };
+}
+function assertSealDocumentShape(document) {
+  const fail = () => {
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  };
+  if (!isPlainObject4(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject4(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail();
+  const documentKeys = Object.keys(document).sort();
+  const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
+  if (documentKeys.length !== documentExpected.length) fail();
+  if (documentKeys.some((key, index) => key !== documentExpected[index])) fail();
+  const anchorKeys = Object.keys(document.anchors).sort();
+  const expected = [...SEALED_ANCHOR_FIELDS].sort();
+  if (anchorKeys.length !== expected.length) fail();
+  if (anchorKeys.some((key, index) => key !== expected[index])) fail();
+  for (const field of ["providerToolProfileHash", "capabilityProofIndexHash"]) {
+    if (typeof document.anchors[field] !== "string" || document.anchors[field].length === 0) {
+      fail();
+    }
+  }
+  for (const field of [
+    "capabilityManifestHashes",
+    "capabilityReceiptHashes",
+    "capabilityAttestationHashes"
+  ]) {
+    const value = document.anchors[field];
+    if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
+      fail();
+    }
+  }
+  if (!Array.isArray(document.anchors.capabilityProofExpiries) || document.anchors.capabilityProofExpiries.some(
+    (entry) => !Number.isSafeInteger(entry) || entry < 0
+  )) fail();
+  if (document.canaryTargetHashes.some(
+    (entry) => typeof entry !== "string" || entry.length === 0
+  )) fail();
+  return document;
+}
+function macMatches(expected, actual) {
+  if (typeof actual !== "string" || actual.length !== expected.length) return false;
+  try {
+    return timingSafeEqual2(Buffer.from(expected, "utf8"), Buffer.from(actual, "utf8"));
+  } catch {
+    return false;
+  }
+}
+function loadFrozenInputSeal(config, { projectRoot, vaultKeyReference, providerDescriptor }) {
+  const fail = () => {
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  };
+  const declaration = config.frozenInputSeal;
+  if (declaration === void 0 || declaration === null) return null;
+  if (!isPlainObject4(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail();
+  const project = resolve4(projectRoot);
+  const pathname = resolve4(project, declaration.relativePath);
+  if (!isWithin2(project, pathname)) fail();
+  const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  const declaredConfigPath = typeof providerDescriptor?.relativePath === "string" ? providerDescriptor.relativePath : null;
+  if (declaredConfigPath !== null) {
+    let realConfigPath;
+    try {
+      realConfigPath = realpathSync5(resolve4(project, declaredConfigPath));
+    } catch {
+      realConfigPath = null;
+    }
+    if (realConfigPath !== null && realConfigPath === realPathname) fail();
+  }
+  const document = readRegularJson(realPathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  const { mac, ...body } = document;
+  assertSealDocumentShape(body);
+  if (!macMatches(sealMacFor(body, vaultKeyReference), mac)) fail();
+  if (body.locationId !== config.internalRail?.locationId) fail();
+  return Object.freeze({
+    anchors: Object.freeze({ ...body.anchors }),
+    canaryTargetHashes: Object.freeze([...body.canaryTargetHashes]),
+    locationId: body.locationId
+  });
+}
+function effectiveFrozenInputs(config, context) {
+  const declared = structuredClone(config.frozenInputs);
+  if (config.internalRail === void 0 || config.internalRail === null) return declared;
+  const seal = loadFrozenInputSeal(config, context);
+  if (seal === null) return { ...declared, ...structuredClone(UNSEALED_ANCHOR) };
+  return sealFrozenInputs({
+    frozenInputs: { ...declared, ...structuredClone(seal.anchors) },
+    keys: localKeyMaterial(context.vaultKeyReference)
+  });
+}
+function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudonymKey = null, seal = null) {
+  if (rail === void 0 || rail === null) return null;
+  validateInternalRailConfig(rail);
+  assertSealedRailIdentities(rail, seal === null ? frozenInputs : { ...frozenInputs, ...seal.anchors });
+  const client = rail.transport.kind === "host_injected" ? internalClient : inlineResponseClient(rail.transport);
+  if (!client || typeof client.callTool !== "function") {
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  }
+  const options = {
+    client,
+    expectedContractVersion: rail.contractVersion,
+    expectedLocationId: rail.locationId,
+    expectedToolProfileHash: rail.toolProfileHash,
+    capabilityProofIndex: structuredClone(rail.capabilityProofIndex)
+  };
+  if (pseudonymKey !== null) options.pseudonymKey = pseudonymKey;
+  options.expectedCapabilityManifestHash = rail.capabilityManifestHash;
+  options.expectedBundleHash = rail.bundleHash;
+  if (seal !== null) options.authorizedCanaryTargetHashes = [...seal.canaryTargetHashes];
+  return createInternalGhlAdapter(options);
+}
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject3(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError7("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject4(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
-    throw codedError7("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
+  const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const config = validateLocalConfig(readRegularJson(
-    pathname,
+    realPathname,
     "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG"
   ));
   return config;
@@ -9238,10 +13130,10 @@ function writeImmutable(pathname, value) {
   if (existsSync3(pathname)) {
     const metadata = lstatSync5(pathname);
     if (metadata.isSymbolicLink() || !metadata.isFile()) {
-      throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+      throw codedError8("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
     if (!readFileSync3(pathname).equals(bytes)) {
-      throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+      throw codedError8("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
     return;
   }
@@ -9252,7 +13144,7 @@ function writeImmutable(pathname, value) {
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
     const metadata = existsSync3(temporary) ? lstatSync5(temporary) : void 0;
-    if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync3(temporary).equals(bytes)) throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+    if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync3(temporary).equals(bytes)) throw codedError8("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
   }
   renameSync2(temporary, pathname);
   chmodSync2(pathname, 256);
@@ -9269,7 +13161,7 @@ function localPublisher({
   if (existsSync3(publicationRoot)) {
     const metadata = lstatSync5(publicationRoot);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      throw codedError7("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+      throw codedError8("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
   } else {
     mkdirSync4(publicationRoot, { mode: 448 });
@@ -9310,8 +13202,9 @@ function localProviderDescriptor({ projectRoot, providerConfigPath, config }) {
   const project = resolve4(projectRoot);
   const pathname = resolve4(providerConfigPath);
   if (!isWithin2(project, pathname)) {
-    throw codedError7("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError8("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
+  realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   validateLocalConfig(config);
   return Object.freeze({
     kind: "project_file",
@@ -9319,7 +13212,7 @@ function localProviderDescriptor({ projectRoot, providerConfigPath, config }) {
     relativePath: relative4(project, pathname).split(sep4).join("/")
   });
 }
-function createLocalAuditKernel({ initialRunId } = {}) {
+function createLocalAuditKernel({ initialRunId, internalClient = null } = {}) {
   let nextRunId = initialRunId;
   return createAuditKernel({
     clock: () => Date.now(),
@@ -9328,15 +13221,7 @@ function createLocalAuditKernel({ initialRunId } = {}) {
       nextRunId = void 0;
       return selected;
     },
-    keyResolver: (reference) => {
-      if (reference !== "test-only:key") {
-        throw codedError7("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
-      }
-      return {
-        encryptionKey: Buffer.alloc(32, 49),
-        pseudonymKey: Buffer.alloc(32, 50)
-      };
-    },
+    keyResolver: (reference) => localKeyMaterial(reference),
     stateStore: { open: openState },
     providerConfigLoader: loadProjectConfig,
     adapters: {
@@ -9347,10 +13232,44 @@ function createLocalAuditKernel({ initialRunId } = {}) {
       collectPublic: async ({ providerConfig }) => {
         validateLocalConfig(providerConfig);
         return structuredClone(providerConfig.publicEvidence);
+      },
+      // Finding R2-M4. Returns `null` — the byte-identical public-only path — unless the
+      // configuration declares an internal rail. No live call, credential read, network access
+      // or scheduler is introduced by this wiring.
+      collectInternal: async ({
+        providerConfig,
+        vaultKeyReference,
+        projectRoot,
+        providerDescriptor
+      }) => {
+        const config = validateLocalConfig(providerConfig);
+        const seal = config.internalRail ? loadFrozenInputSeal(config, { projectRoot, vaultKeyReference, providerDescriptor }) : null;
+        return buildInternalAdapter(
+          config.internalRail,
+          internalClient,
+          config.frozenInputs,
+          // R4-I2 — the vault's own pseudonym key, derived exactly as `lib/vault.mjs:78`
+          // derives it and stable across every run of this location. The kernel does not hand
+          // the resolved keys to `collectInternal`, so it is re-derived from the same
+          // reference rather than being carried in the phase arguments.
+          config.internalRail ? localKeyMaterial(vaultKeyReference).pseudonymKey : null,
+          seal
+        );
       }
     },
     analyzer: {
-      freezeInputs: ({ providerConfig }) => structuredClone(validateLocalConfig(providerConfig).frozenInputs),
+      // R6-C3 — the run is sealed with the INDEPENDENT anchors, or with none at all. This is
+      // the value the kernel hashes into `frozenInputsHash`, checkpoints, resume-checks and
+      // hands to `evaluateFullEligibility` as the anchor, so it is the one that decides.
+      freezeInputs: ({
+        providerConfig,
+        projectRoot,
+        vaultKeyReference,
+        providerDescriptor
+      }) => effectiveFrozenInputs(
+        validateLocalConfig(providerConfig),
+        { projectRoot, vaultKeyReference, providerDescriptor }
+      ),
       normalize: async ({ context, publicEvidence }) => ({
         contextHash: sha256(context),
         publicEvidenceHash: sha256(publicEvidence)
@@ -9384,10 +13303,11 @@ function createLocalAuditKernel({ initialRunId } = {}) {
     publisher: localPublisher
   });
 }
-var LOCAL_SCHEMA, INTERNAL_LIMITATIONS2;
+var LOCAL_SCHEMA, INTERNAL_LIMITATIONS2, LOCAL_KEY_REFERENCE, LOCAL_KEY_BYTES, SEAL_DOMAIN, SEAL_KIND, SEALED_ANCHOR_FIELDS, UNSEALED_ANCHOR;
 var init_local_runtime = __esm({
   "lib/local-runtime.mjs"() {
     init_canonical();
+    init_internal_ghl();
     init_kernel();
     init_state();
     LOCAL_SCHEMA = "1.0.0";
@@ -9395,6 +13315,26 @@ var init_local_runtime = __esm({
       "INTERNAL_WORKFLOW_DEFINITION_MISSING",
       "INTERNAL_WORKFLOW_RUNTIME_MISSING"
     ]);
+    LOCAL_KEY_REFERENCE = "test-only:key";
+    LOCAL_KEY_BYTES = 32;
+    SEAL_DOMAIN = "grom.audit.frozen-input-seal.v1";
+    SEAL_KIND = "frozen_input_seal";
+    SEALED_ANCHOR_FIELDS = Object.freeze([
+      "providerToolProfileHash",
+      "capabilityManifestHashes",
+      "capabilityProofIndexHash",
+      "capabilityReceiptHashes",
+      "capabilityAttestationHashes",
+      "capabilityProofExpiries"
+    ]);
+    UNSEALED_ANCHOR = Object.freeze({
+      providerToolProfileHash: "unsealed:no-independent-frozen-input-seal",
+      capabilityManifestHashes: Object.freeze([]),
+      capabilityProofIndexHash: "unsealed:no-independent-frozen-input-seal",
+      capabilityReceiptHashes: Object.freeze([]),
+      capabilityAttestationHashes: Object.freeze([]),
+      capabilityProofExpiries: Object.freeze([])
+    });
   }
 });
 
@@ -9432,37 +13372,37 @@ var REQUIRED_FLAGS = Object.freeze({
   resume: ["project", "location", "run-id"]
 });
 var LOCATION = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
-function codedError8(code, ErrorType = Error) {
+function codedError9(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function parseAuditCliArgs(argv) {
   if (!Array.isArray(argv) || argv.length < 1) {
-    throw codedError8("AUDIT_COMMAND_INVALID_MISSING");
+    throw codedError9("AUDIT_COMMAND_INVALID_MISSING");
   }
   const [command, ...tokens] = argv;
   const allowed = COMMAND_FLAGS[command];
-  if (!allowed) throw codedError8("AUDIT_COMMAND_INVALID_UNKNOWN");
-  if (tokens.length % 2 !== 0) throw codedError8("AUDIT_COMMAND_INVALID_VALUE");
+  if (!allowed) throw codedError9("AUDIT_COMMAND_INVALID_UNKNOWN");
+  if (tokens.length % 2 !== 0) throw codedError9("AUDIT_COMMAND_INVALID_VALUE");
   const flags = {};
   for (let index = 0; index < tokens.length; index += 2) {
     const token = tokens[index];
     const value = tokens[index + 1];
-    if (typeof token !== "string" || !token.startsWith("--") || token.length < 3 || !allowed.has(token.slice(2)) || typeof value !== "string" || value.length === 0 || value.startsWith("--")) throw codedError8("AUDIT_COMMAND_INVALID_FLAG");
+    if (typeof token !== "string" || !token.startsWith("--") || token.length < 3 || !allowed.has(token.slice(2)) || typeof value !== "string" || value.length === 0 || value.startsWith("--")) throw codedError9("AUDIT_COMMAND_INVALID_FLAG");
     const name = token.slice(2);
-    if (Object.hasOwn(flags, name)) throw codedError8("AUDIT_COMMAND_INVALID_DUPLICATE");
+    if (Object.hasOwn(flags, name)) throw codedError9("AUDIT_COMMAND_INVALID_DUPLICATE");
     flags[name] = value;
   }
   for (const required of REQUIRED_FLAGS[command]) {
-    if (!Object.hasOwn(flags, required)) throw codedError8("AUDIT_COMMAND_INVALID_MISSING");
+    if (!Object.hasOwn(flags, required)) throw codedError9("AUDIT_COMMAND_INVALID_MISSING");
   }
   if (flags.location !== void 0 && !LOCATION.test(flags.location)) {
-    throw codedError8("AUDIT_COMMAND_INVALID_LOCATION");
+    throw codedError9("AUDIT_COMMAND_INVALID_LOCATION");
   }
   if (flags["run-id"] !== void 0 && !LOCATION.test(flags["run-id"])) {
-    throw codedError8("AUDIT_COMMAND_INVALID_RUN");
+    throw codedError9("AUDIT_COMMAND_INVALID_RUN");
   }
   if (command === "run" && flags.mode !== "weekly") {
-    throw codedError8("AUDIT_MODE_UNSUPPORTED");
+    throw codedError9("AUDIT_MODE_UNSUPPORTED");
   }
   return Object.freeze({ command, flags: Object.freeze(flags) });
 }
@@ -9476,7 +13416,7 @@ function readRegularJson2(pathname, code) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     return value;
   } catch {
-    throw codedError8(code);
+    throw codedError9(code);
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
   }
@@ -9547,7 +13487,7 @@ async function runAuditCli({
       const pending = state.listReviewRequests(flags["run-id"]).filter(({ status: status2 }) => status2 === "pending");
       const requestId = response.requestId;
       const request = pending.find((candidate) => candidate.requestId === requestId);
-      if (!request) throw codedError8("REVIEW_RESPONSE_MISMATCH_REQUEST");
+      if (!request) throw codedError9("REVIEW_RESPONSE_MISMATCH_REQUEST");
       const validate = request.kind === "conversation" ? validateConversationReview2 : validateMechanismReview2;
       state.validateAndConsumeReviewRequest({
         requestId,
@@ -9588,7 +13528,7 @@ async function runAuditCli({
           config: providerConfig
         });
       }
-      if (!runtimeKernel) throw codedError8("AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS");
+      if (!runtimeKernel) throw codedError9("AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS");
       result = await runtimeKernel.start({
         mode: flags.mode,
         target: {
@@ -9611,7 +13551,7 @@ async function runAuditCli({
         runId: flags["run-id"]
       });
       if (typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) {
-        throw codedError8("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
+        throw codedError9("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
       }
       if (!runtimeKernel) {
         const { createLocalAuditKernel: createLocalAuditKernel2 } = await Promise.resolve().then(() => (init_local_runtime(), local_runtime_exports));

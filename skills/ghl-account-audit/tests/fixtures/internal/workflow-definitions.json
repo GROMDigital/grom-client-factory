@@ -1,0 +1,175 @@
+{
+  "note": "export_workflow `data` bodies ({workflow, triggers, stickyNotes}) plus the bare-hex canonicalHash the runtime window publishes for the same triple. canonicalHash is a FROZEN LITERAL captured once at fixture-authoring time, never recomputed by the harness at run time, so `wrong-hash` below can genuinely disagree with its payload. Bare hex, no `sha256:` prefix — see core/workflow-runtime-window.mjs sha256Canonical.",
+  "WF1": {
+    "version": 4,
+    "capturedAt": "2026-07-20T00:05:00.000Z",
+    "canonicalHash": "7bcfee660a20be7d1e9f280ef02211ee9502811754c67f2482b966eed12611d1",
+    "workflow": {
+      "_id": "WF1",
+      "name": "01 Meta Lead Intake",
+      "status": "published",
+      "version": 4,
+      "workflowData": {
+        "templates": [
+          {
+            "id": "S1"
+          },
+          {
+            "id": "S2"
+          },
+          {
+            "id": "S3"
+          }
+        ]
+      }
+    },
+    "triggers": [
+      {
+        "id": "T1",
+        "type": "facebook_lead_form"
+      }
+    ],
+    "stickyNotes": []
+  },
+  "WF2": {
+    "version": 2,
+    "capturedAt": "2026-07-20T00:05:02.000Z",
+    "canonicalHash": "03b26c265883359a93a3fef9f309501cec733d173152dc73a55f406b61a6583e",
+    "workflow": {
+      "_id": "WF2",
+      "name": "02 Nurture",
+      "status": "published",
+      "version": 2,
+      "workflowData": {
+        "templates": [
+          {
+            "id": "S1"
+          },
+          {
+            "id": "S2"
+          }
+        ]
+      }
+    },
+    "triggers": [
+      {
+        "id": "T2",
+        "type": "tag_added"
+      }
+    ],
+    "stickyNotes": [
+      {
+        "id": "N1",
+        "text": "owner: grom"
+      }
+    ]
+  },
+  "WF3": {
+    "version": 1,
+    "capturedAt": "2026-07-20T00:05:04.000Z",
+    "canonicalHash": "9a088bdfbefd1b5c685f0c939b4814236096537bd410b8a83cb44195f01fe07a",
+    "workflow": {
+      "_id": "WF3",
+      "name": "03 No Show",
+      "status": "published",
+      "version": 1,
+      "workflowData": {
+        "templates": [
+          {
+            "id": "S1"
+          }
+        ]
+      }
+    },
+    "triggers": [
+      {
+        "id": "T3",
+        "type": "appointment_status"
+      }
+    ],
+    "stickyNotes": []
+  },
+  "WF4": {
+    "version": 1,
+    "capturedAt": "2026-07-20T00:05:06.000Z",
+    "canonicalHash": "093383650efcc40b16bd00a05efb450bdc27f93c514b2241a8344007a8d789c6",
+    "workflow": {
+      "_id": "WF4",
+      "name": "04 Reactivation",
+      "status": "draft",
+      "version": 1,
+      "workflowData": {
+        "templates": [
+          {
+            "id": "S1"
+          }
+        ]
+      }
+    },
+    "triggers": [],
+    "stickyNotes": []
+  },
+  "WF5": {
+    "version": 7,
+    "capturedAt": "2026-07-20T00:05:08.000Z",
+    "canonicalHash": "c2ad3aeeb07e00c6ca5ae17a5057e76178458c8e7c15258212de33a2b3aabda9",
+    "workflow": {
+      "_id": "WF5",
+      "name": "05 Internal Ops",
+      "status": "published",
+      "version": 7,
+      "workflowData": {
+        "templates": [
+          {
+            "id": "S1"
+          },
+          {
+            "id": "S2"
+          }
+        ]
+      }
+    },
+    "triggers": [
+      {
+        "id": "T5",
+        "type": "contact_changed"
+      }
+    ],
+    "stickyNotes": []
+  },
+  "WF1_V5": {
+    "note": "The version-5 definition of WF1, used by the historical-binding scenarios as the definition that took effect mid-window.",
+    "version": 5,
+    "capturedAt": "2026-07-20T00:05:00.000Z",
+    "canonicalHash": "b4100c95b30d04cd7738867898a5aa8240428db3a3f332f4ed3a19f32915890e",
+    "workflow": {
+      "_id": "WF1",
+      "name": "01 Meta Lead Intake",
+      "status": "published",
+      "version": 5,
+      "workflowData": {
+        "templates": [
+          {
+            "id": "S1"
+          },
+          {
+            "id": "S2"
+          },
+          {
+            "id": "S3"
+          },
+          {
+            "id": "S4"
+          }
+        ]
+      }
+    },
+    "triggers": [
+      {
+        "id": "T1",
+        "type": "facebook_lead_form"
+      }
+    ],
+    "stickyNotes": []
+  }
+}

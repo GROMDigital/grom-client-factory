@@ -1,0 +1,423 @@
+{
+  "note": "get_workflow_runtime_window `data` bodies, minus the boilerplate the harness stamps on (contractVersion, boundLocationId, workflowId, appliedQueries, filters, workflowDefinition, sourceRoutes, capabilityVersion, capturedAt, configurationBinding, locationBinding, truncated). ANTI-ORACLE RULE: enrollmentTotals.total, every pagination ledger, every stepRosters[].total/pages, componentCompleteness and `complete` are INDEPENDENT literals. None is derived from enrollments.rows / runtimeEvents / perStepCounts by the fixture or by the harness, so a declared total is free to contradict the rows served. `liar-*` scenarios declare complete:true while contradicting themselves.",
+
+  "window": {
+    "fromDate": 1783900800000,
+    "toDate": 1784505600000,
+    "fromIso": "2026-07-13T00:00:00.000Z",
+    "toIso": "2026-07-20T00:00:00.000Z",
+    "expansionMs": 1
+  },
+
+  "complete": {
+    "expect": "complete",
+    "runtimeEvents": [
+      { "id": "E1", "timestamp": 1784019600000, "timestampField": "startedExecutionAt", "unreadableTimestampFields": [], "event": { "_id": "E1", "stepId": "S1" } },
+      { "id": "E2", "timestamp": 1784365200000, "timestampField": "startedExecutionAt", "unreadableTimestampFields": [], "event": { "_id": "E2", "stepId": "S2" } }
+    ],
+    "enrollments": { "rows": [{ "_id": "EN1", "createdAt": "2026-07-14T09:00:00.000Z" }], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN1", "referenceCreatedAt": "2026-07-14T09:00:00.000Z", "referenceSequence": "1" },
+    "perStepCounts": [{ "stepId": "S1", "count": 2 }, { "stepId": "S2", "count": 1 }],
+    "stepRosters": [{ "stepId": "S1", "contacts": [{ "id": "C1" }], "total": 1, "complete": true, "pages": 1 }],
+    "enrollmentTotals": { "total": 12, "finished": 9, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 1, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "complete-no-step-rosters": {
+    "expect": "complete",
+    "note": "stepIds: [] means stepRosters is [] and `[].every(...)` is vacuously true. A workflow with no requested roster must still be Complete.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "declared-incomplete": {
+    "expect": "incomplete",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": null,
+    "stepRosters": [],
+    "enrollmentTotals": null,
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": false, "perStepCounts": false, "enrollments": false, "stepRosters": true, "enrollmentTotals": false },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 0, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 0, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "COMPONENT_READ_FAILED", "component": "per_step_counts", "detail": "the count-per-step read did not return a usable body", "occurrences": 1, "detailSamples": ["workflow_count_per_step"] }
+    ]
+  },
+
+  "truncated": {
+    "expect": "incomplete",
+    "runtimeEvents": [{ "id": "E1", "timestamp": 1784019600000, "timestampField": "createdAt", "unreadableTimestampFields": [], "event": { "_id": "E1" } }],
+    "enrollments": { "rows": [{ "_id": "EN1", "createdAt": "2026-07-14T09:00:00.000Z" }], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN1", "referenceCreatedAt": "2026-07-14T09:00:00.000Z" },
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 12, "finished": 9, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": false, "perStepCounts": true, "enrollments": false, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 256, "terminal": 200, "exhausted": true, "budget": 256 },
+      "enrollmentPages": { "fetched": 3, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "LOG_PARTITION_BUDGET_EXHAUSTED", "component": "runtime_events", "detail": "the log partition budget was spent before every partition terminated", "occurrences": 1, "detailSamples": ["budget 256"] }
+    ]
+  },
+
+  "saturated": {
+    "expect": "incomplete",
+    "runtimeEvents": [{ "id": "E1", "timestamp": 1784019600000, "timestampField": "createdAt", "unreadableTimestampFields": [], "event": { "_id": "E1" } }],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": false, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 41, "terminal": 40, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "LOG_PARTITION_SATURATED_AT_FLOOR", "component": "runtime_events", "detail": "a partition stayed saturated at the minimum partition width", "occurrences": 3, "detailSamples": ["1783900800000-1783900801000"] }
+    ]
+  },
+
+  "cursor-loop": {
+    "expect": "incomplete",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [{ "_id": "EN1", "createdAt": "2026-07-14T09:00:00.000Z" }], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN1", "referenceCreatedAt": "2026-07-14T09:00:00.000Z" },
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 12, "finished": 9, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": false, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 2, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "ENROLLMENT_CURSOR_REPEATED", "component": "enrollments", "detail": "the enrollment walk was handed a cursor it had already spent", "occurrences": 1, "detailSamples": ["page 2"] }
+    ]
+  },
+
+  "enrollment-budget-exhausted": {
+    "expect": "incomplete",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [{ "_id": "EN1", "createdAt": "2026-07-14T09:00:00.000Z" }], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN1", "referenceCreatedAt": "2026-07-14T09:00:00.000Z", "referenceSequence": "40" },
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 4000, "finished": 10, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": false, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 200, "exhausted": true, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "ENROLLMENT_PAGE_BUDGET_EXHAUSTED", "component": "enrollments", "detail": "the enrollment page budget was spent before the walk terminated", "occurrences": 1, "detailSamples": ["budget 200"] }
+    ]
+  },
+
+  "enrollment-total-mismatch": {
+    "expect": "incomplete",
+    "note": "The server itself caught rows > total and retro-set enrollments.complete false.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [{ "_id": "EN1" }, { "_id": "EN2" }, { "_id": "EN3" }], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN3" },
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 2, "finished": 2, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": false, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "ENROLLMENT_TOTAL_MISMATCH", "component": "enrollments", "detail": "more window-scoped enrollment rows were retained than the all-time total admits", "occurrences": 1, "detailSamples": ["3 > 2"] }
+    ]
+  },
+
+  "rate-limited": {
+    "expect": "incomplete",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": null,
+    "stepRosters": [],
+    "enrollmentTotals": null,
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": false, "perStepCounts": false, "enrollments": false, "stepRosters": true, "enrollmentTotals": false },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 0, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 0, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": true, "retryAfterMs": 30000 },
+    "complete": false,
+    "warnings": [
+      { "code": "RATE_LIMITED", "component": "run", "detail": "the audit rail was throttled mid-run", "occurrences": 1, "detailSamples": ["429"] }
+    ],
+    "sourceRouteFailureClass": "RATE_LIMITED",
+    "sourceRouteStatus": 429
+  },
+
+  "entitlement-refused": {
+    "expect": "incomplete",
+    "note": "A 403 latches nothing, so the run finishes with one refused component. failureClass HTTP_403 appears on the sourceRoute, not as a top-level code.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": false, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": null,
+    "stepRosters": [],
+    "enrollmentTotals": null,
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": false, "enrollments": false, "stepRosters": true, "enrollmentTotals": false },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 0, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "COMPONENT_READ_FAILED", "component": "enrollments", "detail": "the enrollment search was refused", "occurrences": 1, "detailSamples": ["workflow_enrollment_search"] }
+    ],
+    "sourceRouteFailureClass": "HTTP_403",
+    "sourceRouteStatus": 403
+  },
+
+  "step-roster-unsealed": {
+    "expect": "incomplete",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [{ "stepId": "S9", "contacts": null, "total": null, "complete": false, "pages": 0 }],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": false, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": false,
+    "warnings": [
+      { "code": "STEP_ROSTER_UNSEALED", "component": "step_rosters", "detail": "S9 is not a step of the captured definition, so no roster read was issued", "occurrences": 1, "detailSamples": ["S9"] }
+    ]
+  },
+
+  "liar-complete-rows-exceed-total": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. complete:true and componentCompleteness all true while three window-scoped enrollment rows sit above an all-time total of 2 with no warning filed. The adapter must reconcile the two independent ledgers itself.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [{ "_id": "EN1" }, { "_id": "EN2" }, { "_id": "EN3" }], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN3" },
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 2, "finished": 2, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-enrollments-without-totals": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE + the documented consumer rule: enrollments:true is never skippable unless enrollmentTotals:true also holds. Here enrollmentTotals is null and its flag is false, yet the body still claims complete:true.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [{ "_id": "EN1" }], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": { "referenceId": "EN1" },
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": null,
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": false },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-with-warnings": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. complete:true with a non-empty warnings array contradicts the server's own `complete = warnings.length === 0 && !rateLimit.limited`.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": [
+      { "code": "LOG_EVENT_ID_MISSING", "component": "runtime_events", "detail": "a log row carried no id", "occurrences": 1, "detailSamples": ["partition 1"] }
+    ]
+  },
+
+  "liar-complete-rate-limited": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. rateLimit.limited true forbids complete:true.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": true, "retryAfterMs": 5000 },
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-complete-step-roster-incomplete": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. One requested roster reports complete:false and pages 0 while componentCompleteness.stepRosters claims true.",
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [
+      { "stepId": "S1", "contacts": [{ "id": "C1" }], "total": 1, "complete": true, "pages": 1 },
+      { "stepId": "S2", "contacts": [], "total": null, "complete": false, "pages": 0 }
+    ],
+    "enrollmentTotals": { "total": 3, "finished": 1, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 1, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-window-expansion": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. appliedWindow.fromDate must equal requested fromDate minus expansionMs. Here the body claims an expansion of 1 while moving the lower bound by 3600000.",
+    "windowOverride": {
+      "requestedWindow": { "fromDate": 1783900800000, "toDate": 1784505600000, "boundaries": "[)" },
+      "appliedWindow": { "fromDate": 1783897200000, "toDate": 1784505600000, "queryBoundaries": "upstream-defined", "analyticalFilter": "[)", "expansionMs": 1 }
+    },
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-window-wrong-request": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. requestedWindow echoed back does not equal the window the adapter asked for, so the evidence covers a different period than the run claims.",
+    "windowOverride": {
+      "requestedWindow": { "fromDate": 1783296000000, "toDate": 1784505600000, "boundaries": "[)" },
+      "appliedWindow": { "fromDate": 1783295999999, "toDate": 1784505600000, "queryBoundaries": "upstream-defined", "analyticalFilter": "[)", "expansionMs": 1 }
+    },
+    "runtimeEvents": [],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 0, "finished": 0, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  },
+
+  "liar-half-open-violation": {
+    "expect": "incomplete",
+    "note": "ANTI-ORACLE. A retained event sits exactly on toDate. `[fromDate, toDate)` excludes it, so a body that retains it as in-window is not reconcilable.",
+    "runtimeEvents": [
+      { "id": "E1", "timestamp": 1784505600000, "timestampField": "startedExecutionAt", "unreadableTimestampFields": [], "event": { "_id": "E1" } }
+    ],
+    "enrollments": { "rows": [], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollmentCursor": null,
+    "perStepCounts": [],
+    "stepRosters": [],
+    "enrollmentTotals": { "total": 1, "finished": 1, "source": "workflow_enroll_stats_cache", "scope": "workflow_all_time" },
+    "componentCompleteness": { "workflowDefinition": true, "runtimeEvents": true, "perStepCounts": true, "enrollments": true, "stepRosters": true, "enrollmentTotals": true },
+    "pagination": {
+      "logPartitions": { "attempted": 1, "terminal": 1, "exhausted": false, "budget": 256 },
+      "enrollmentPages": { "fetched": 1, "exhausted": false, "budget": 200 },
+      "stepRosterPages": { "fetched": 0, "exhausted": false, "budget": 200 }
+    },
+    "rateLimit": { "limited": false, "retryAfterMs": null },
+    "complete": true,
+    "warnings": []
+  }
+}
