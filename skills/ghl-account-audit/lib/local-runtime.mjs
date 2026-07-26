@@ -23,6 +23,10 @@ import {
 } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { createInternalGhlAdapter } from './adapters/internal-ghl.mjs';
+import {
+  assertTranslatableCapabilities,
+  createGhlTranslatingConnect,
+} from './adapters/ghl-public-translator.mjs';
 import { connectMcp } from './adapters/mcp-transport.mjs';
 import { createPublicGhlAdapter } from './adapters/public-ghl.mjs';
 import { loadTrustedPublicReadPolicy } from './adapters/trusted-public-policy.mjs';
@@ -1199,6 +1203,7 @@ async function collectPublicEvidence({
   projectRoot,
   vaultKeyReference,
   transportConnect,
+  ghlNativeConnect,
   credentialResolver,
   keyProvider,
   signal,
@@ -1206,6 +1211,27 @@ async function collectPublicEvidence({
 }) {
   validatePublicConfig(config);
   const locationId = config.expectedLocationId;
+  /**
+   * The GHL TRANSLATION seam.
+   *
+   * `transportConnect` keeps its exact existing meaning: a host-owned connect whose delegate
+   * ALREADY speaks the bounded adapter's normalised dialect. `ghlNativeConnect` is the new one: a
+   * host-owned connect whose delegate is a RAW GHL MCP client, which is what a real sub-account is
+   * actually reachable through. Only the second is wrapped in the translator, so nothing that
+   * exists today changes shape, and a host must say explicitly which kind of client it owns rather
+   * than the runtime guessing from a response it has not received yet.
+   *
+   * The capability preflight runs HERE, before any transport is connected, so a configuration that
+   * names an approved-but-untranslated read (`payments-v3__*`) or one that cannot be driven from
+   * `{locationId, fromDate, toDate}` alone fails with a clear code and makes no live call at all.
+   */
+  if (transportConnect !== null && ghlNativeConnect !== null) {
+    throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  }
+  if (ghlNativeConnect !== null) assertTranslatableCapabilities(config.capabilities);
+  const effectiveConnect = ghlNativeConnect === null
+    ? transportConnect
+    : createGhlTranslatingConnect({ connect: ghlNativeConnect, runtime });
   const capabilities = approvedPublicCapabilities(config);
   const plan = publicCollectionPlan(config);
   const window = Object.freeze({
@@ -1234,9 +1260,9 @@ async function collectPublicEvidence({
   try {
     if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
     client = await connectMcp({
-      transport: transportConnect === null
+      transport: effectiveConnect === null
         ? structuredClone(config.transport)
-        : { ...structuredClone(config.transport), connect: transportConnect },
+        : { ...structuredClone(config.transport), connect: effectiveConnect },
       // EXACTLY the six keys `lib/adapters/mcp-transport.mjs` accepts. `credentialRef` is copied
       // through as the reference it is; its VALUE is resolved inside the transport and never
       // returned to, held by, or logged by this runtime.
@@ -1407,6 +1433,9 @@ export function createPublicAuditKernel({
   // resumed — the kernel does not pass a run id to `freezeInputs`.
   resumeRunId = null,
   transportConnect = null,
+  // A host-owned connect whose delegate is a RAW GHL MCP client. Mutually exclusive with
+  // `transportConnect`; see `collectPublicEvidence`.
+  ghlNativeConnect = null,
   credentialResolver = null,
   keyProvider = null,
   signal = null,
@@ -1435,6 +1464,7 @@ export function createPublicAuditKernel({
           projectRoot: args.projectRoot,
           vaultKeyReference: args.vaultKeyReference,
           transportConnect,
+          ghlNativeConnect,
           credentialResolver,
           keyProvider,
           signal,

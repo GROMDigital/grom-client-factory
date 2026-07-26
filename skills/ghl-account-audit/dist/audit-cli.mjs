@@ -9996,10 +9996,10 @@ function rosterRowFingerprint(row) {
   return canonicalJson(normalized);
 }
 function reconcileRoster(data, manifest) {
-  const fail = (reason) => ({ ok: false, reason, workflowIds: [] });
-  if (!isPlainObject3(data)) return fail("roster_body_invalid");
+  const fail2 = (reason) => ({ ok: false, reason, workflowIds: [] });
+  if (!isPlainObject3(data)) return fail2("roster_body_invalid");
   const rows = data.workflows;
-  if (!Array.isArray(rows)) return fail("roster_page_never_read");
+  if (!Array.isArray(rows)) return fail2("roster_page_never_read");
   const identified = [];
   const seen = /* @__PURE__ */ new Map();
   let rowsMalformed = null;
@@ -10129,13 +10129,13 @@ function reconcileRuntime(data, {
   requestedWindow,
   requestedStepIds
 }) {
-  const fail = (reason) => ({ ok: false, reason });
-  if (!isPlainObject3(data)) return fail("runtime_body_invalid");
-  if (data.complete !== true || data.truncated !== false) return fail("runtime_declared_incomplete");
-  if (!Array.isArray(data.warnings) || data.warnings.length > 0) return fail("runtime_warnings_present");
-  if (!isPlainObject3(data.rateLimit) || data.rateLimit.limited !== false) return fail("runtime_rate_limited");
+  const fail2 = (reason) => ({ ok: false, reason });
+  if (!isPlainObject3(data)) return fail2("runtime_body_invalid");
+  if (data.complete !== true || data.truncated !== false) return fail2("runtime_declared_incomplete");
+  if (!Array.isArray(data.warnings) || data.warnings.length > 0) return fail2("runtime_warnings_present");
+  if (!isPlainObject3(data.rateLimit) || data.rateLimit.limited !== false) return fail2("runtime_rate_limited");
   const completeness = data.componentCompleteness;
-  if (!isPlainObject3(completeness)) return fail("runtime_completeness_invalid");
+  if (!isPlainObject3(completeness)) return fail2("runtime_completeness_invalid");
   for (const component of [
     "workflowDefinition",
     "runtimeEvents",
@@ -10144,72 +10144,72 @@ function reconcileRuntime(data, {
     "stepRosters",
     "enrollmentTotals"
   ]) {
-    if (completeness[component] !== true) return fail("runtime_component_incomplete");
+    if (completeness[component] !== true) return fail2("runtime_component_incomplete");
   }
   const requested = data.requestedWindow;
   const applied = data.appliedWindow;
-  if (!isPlainObject3(requested) || requested.fromDate !== requestedWindow.fromDate || requested.toDate !== requestedWindow.toDate || requested.boundaries !== "[)") return fail("runtime_requested_window_mismatch");
-  if (!isPlainObject3(applied) || !Number.isInteger(applied.expansionMs) || applied.expansionMs < 0 || applied.fromDate !== requested.fromDate - applied.expansionMs || applied.toDate !== requested.toDate || applied.analyticalFilter !== "[)") return fail("runtime_applied_window_mismatch");
+  if (!isPlainObject3(requested) || requested.fromDate !== requestedWindow.fromDate || requested.toDate !== requestedWindow.toDate || requested.boundaries !== "[)") return fail2("runtime_requested_window_mismatch");
+  if (!isPlainObject3(applied) || !Number.isInteger(applied.expansionMs) || applied.expansionMs < 0 || applied.fromDate !== requested.fromDate - applied.expansionMs || applied.toDate !== requested.toDate || applied.analyticalFilter !== "[)") return fail2("runtime_applied_window_mismatch");
   const events = data.runtimeEvents;
-  if (!Array.isArray(events)) return fail("runtime_events_invalid");
+  if (!Array.isArray(events)) return fail2("runtime_events_invalid");
   for (const event of events) {
-    if (!isPlainObject3(event) || !isOpaqueId(event.id)) return fail("runtime_event_invalid");
-    if (!Number.isInteger(event.timestamp)) return fail("runtime_event_timestamp_invalid");
+    if (!isPlainObject3(event) || !isOpaqueId(event.id)) return fail2("runtime_event_invalid");
+    if (!Number.isInteger(event.timestamp)) return fail2("runtime_event_timestamp_invalid");
     if (event.timestamp < requested.fromDate || event.timestamp >= requested.toDate) {
-      return fail("runtime_half_open_violation");
+      return fail2("runtime_half_open_violation");
     }
   }
   const enrollments = data.enrollments;
   if (!isPlainObject3(enrollments) || !Array.isArray(enrollments.rows)) {
-    return fail("runtime_enrollments_invalid");
+    return fail2("runtime_enrollments_invalid");
   }
-  if (enrollments.complete !== true) return fail("runtime_enrollments_incomplete");
+  if (enrollments.complete !== true) return fail2("runtime_enrollments_incomplete");
   const totals = data.enrollmentTotals;
   if (!isPlainObject3(totals) || !Number.isInteger(totals.total) || totals.total < 0) {
-    return fail("runtime_enrollment_totals_missing");
+    return fail2("runtime_enrollment_totals_missing");
   }
-  if (enrollments.rows.length > totals.total) return fail("runtime_enrollment_rows_exceed_total");
-  if (!Array.isArray(data.perStepCounts)) return fail("runtime_per_step_counts_invalid");
+  if (enrollments.rows.length > totals.total) return fail2("runtime_enrollment_rows_exceed_total");
+  if (!Array.isArray(data.perStepCounts)) return fail2("runtime_per_step_counts_invalid");
   const stepRosters = data.stepRosters;
-  if (!Array.isArray(stepRosters)) return fail("runtime_step_rosters_invalid");
+  if (!Array.isArray(stepRosters)) return fail2("runtime_step_rosters_invalid");
   const rosterByStep = /* @__PURE__ */ new Map();
   for (const roster of stepRosters) {
     if (!isPlainObject3(roster) || !isNonEmptyString(roster.stepId)) {
-      return fail("runtime_step_roster_invalid");
+      return fail2("runtime_step_roster_invalid");
     }
     if (roster.complete !== true || !Array.isArray(roster.contacts)) {
-      return fail("runtime_step_roster_unsealed");
+      return fail2("runtime_step_roster_unsealed");
     }
     if (roster.total !== null && !Number.isInteger(roster.total)) {
-      return fail("runtime_step_roster_total_mismatch");
+      return fail2("runtime_step_roster_total_mismatch");
     }
     if (Number.isInteger(roster.total) && roster.contacts.length > roster.total) {
-      return fail("runtime_step_roster_total_mismatch");
+      return fail2("runtime_step_roster_total_mismatch");
     }
     if (!Number.isInteger(roster.pages) || roster.pages < 1) {
-      return fail("runtime_step_roster_pages_invalid");
+      return fail2("runtime_step_roster_pages_invalid");
     }
     rosterByStep.set(roster.stepId, roster);
   }
   for (const stepId of requestedStepIds) {
-    if (!rosterByStep.has(stepId)) return fail("runtime_step_roster_missing");
+    if (!rosterByStep.has(stepId)) return fail2("runtime_step_roster_missing");
   }
   const pagination = data.pagination;
-  if (!isPlainObject3(pagination)) return fail("runtime_pagination_invalid");
+  if (!isPlainObject3(pagination)) return fail2("runtime_pagination_invalid");
   const partitions = pagination.logPartitions;
-  if (!isPlainObject3(partitions) || !Number.isInteger(partitions.attempted) || !Number.isInteger(partitions.terminal) || partitions.exhausted !== false || partitions.terminal < 1 || partitions.attempted !== 2 * partitions.terminal - LOG_PARTITION_STREAMS) return fail("runtime_log_partitions_incomplete");
+  if (!isPlainObject3(partitions) || !Number.isInteger(partitions.attempted) || !Number.isInteger(partitions.terminal) || partitions.exhausted !== false || partitions.terminal < 1 || partitions.attempted !== 2 * partitions.terminal - LOG_PARTITION_STREAMS) return fail2("runtime_log_partitions_incomplete");
   for (const key of ["enrollmentPages", "stepRosterPages"]) {
     const ledger = pagination[key];
-    if (!isPlainObject3(ledger) || !Number.isInteger(ledger.fetched) || ledger.fetched < 0 || ledger.exhausted !== false) return fail("runtime_page_budget_exhausted");
+    if (!isPlainObject3(ledger) || !Number.isInteger(ledger.fetched) || ledger.fetched < 0 || ledger.exhausted !== false) return fail2("runtime_page_budget_exhausted");
   }
   if (!validateSourceRoutes(data.sourceRoutes, manifest)) {
-    return fail("runtime_source_routes_invalid");
+    return fail2("runtime_source_routes_invalid");
   }
   if (!Array.isArray(data.sourceRoutes) || data.sourceRoutes.length === 0) {
-    return fail("runtime_source_routes_missing");
+    return fail2("runtime_source_routes_missing");
   }
   if (!isNonEmptyString(data.capabilityVersion) || !isNonEmptyString(data.capturedAt)) {
-    return fail("runtime_provenance_invalid");
+    return fail2("runtime_provenance_invalid");
   }
   return { ok: true, reason: null };
 }
@@ -10309,32 +10309,32 @@ function reconcileAiComponent(surface, component, { manifest, companyId, coverag
     reportedTotal: Array.isArray(component.totalHistory) && Number.isInteger(component.totalHistory[0]) ? component.totalHistory[0] : null,
     reason: null
   };
-  const fail = (reason) => ({ ...shell, reason });
-  if (items === null) return fail("ai_items_missing");
+  const fail2 = (reason) => ({ ...shell, reason });
+  if (items === null) return fail2("ai_items_missing");
   if (declaredApplicable !== true && declaredApplicable !== false) {
-    return fail("ai_applicability_unknown");
+    return fail2("ai_applicability_unknown");
   }
-  if (component.complete !== true) return fail("ai_component_failed");
+  if (component.complete !== true) return fail2("ai_component_failed");
   if (!Array.isArray(component.errors) || component.errors.length > 0) {
-    return fail("ai_component_errors");
+    return fail2("ai_component_errors");
   }
-  if (mapped.some((item) => item.id === null)) return fail("ai_item_id_missing");
+  if (mapped.some((item) => item.id === null)) return fail2("ai_item_id_missing");
   if (mapped.some((item) => item.declaredTombstone !== item.tombstoneProven)) {
-    return fail("ai_tombstone_unproven");
+    return fail2("ai_tombstone_unproven");
   }
   const pages = component.pages;
-  if (!isPlainObject3(pages) || !Number.isInteger(pages.attempted) || !Number.isInteger(pages.fetched) || pages.fetched < 1 || pages.exhausted !== false) return fail("ai_pagination_incomplete");
+  if (!isPlainObject3(pages) || !Number.isInteger(pages.attempted) || !Number.isInteger(pages.fetched) || pages.fetched < 1 || pages.exhausted !== false) return fail2("ai_pagination_incomplete");
   const totalHistory = component.totalHistory;
-  if (!Array.isArray(totalHistory) || totalHistory.length === 0) return fail("ai_total_history_missing");
-  if (totalHistory.some((total) => total !== totalHistory[0])) return fail("ai_total_unstable");
+  if (!Array.isArray(totalHistory) || totalHistory.length === 0) return fail2("ai_total_history_missing");
+  if (totalHistory.some((total) => total !== totalHistory[0])) return fail2("ai_total_unstable");
   const reportedTotal = totalHistory[0];
-  if (reportedTotal !== null && !Number.isInteger(reportedTotal)) return fail("ai_total_mismatch");
-  if (reportedTotal !== null && reportedTotal !== mapped.length) return fail("ai_total_mismatch");
+  if (reportedTotal !== null && !Number.isInteger(reportedTotal)) return fail2("ai_total_mismatch");
+  if (reportedTotal !== null && reportedTotal !== mapped.length) return fail2("ai_total_mismatch");
   const discoveryTerminal = true;
-  if (component.detailDenominator !== shell.detailDenominator) return fail("ai_detail_denominator_mismatch");
-  if (component.detailsRead !== shell.detailsRead) return fail("ai_details_read_mismatch");
-  if (shell.detailsRead !== shell.detailDenominator) return fail("ai_detail_missing");
-  if (!validateSourceRoutes(component.sourceRoutes, manifest)) return fail("ai_source_routes_invalid");
+  if (component.detailDenominator !== shell.detailDenominator) return fail2("ai_detail_denominator_mismatch");
+  if (component.detailsRead !== shell.detailsRead) return fail2("ai_details_read_mismatch");
+  if (shell.detailsRead !== shell.detailDenominator) return fail2("ai_detail_missing");
+  if (!validateSourceRoutes(component.sourceRoutes, manifest)) return fail2("ai_source_routes_invalid");
   const capabilities = AI_SURFACE_CAPABILITIES[surface];
   if (coverage[capabilities.discovery]?.proven !== true) {
     return { ...shell, discoveryTerminal, reason: "ai_discovery_capability_unproven" };
@@ -24209,125 +24209,6 @@ var init_core2 = __esm({
   }
 });
 
-// node_modules/zod/v4/mini/parse.js
-var init_parse2 = __esm({
-  "node_modules/zod/v4/mini/parse.js"() {
-    init_core2();
-  }
-});
-
-// node_modules/zod/v4/mini/schemas.js
-var init_schemas2 = __esm({
-  "node_modules/zod/v4/mini/schemas.js"() {
-  }
-});
-
-// node_modules/zod/v4/mini/checks.js
-var init_checks2 = __esm({
-  "node_modules/zod/v4/mini/checks.js"() {
-  }
-});
-
-// node_modules/zod/v4/mini/iso.js
-var init_iso = __esm({
-  "node_modules/zod/v4/mini/iso.js"() {
-  }
-});
-
-// node_modules/zod/v4/mini/coerce.js
-var init_coerce = __esm({
-  "node_modules/zod/v4/mini/coerce.js"() {
-  }
-});
-
-// node_modules/zod/v4/mini/external.js
-var init_external = __esm({
-  "node_modules/zod/v4/mini/external.js"() {
-    init_core2();
-    init_parse2();
-    init_schemas2();
-    init_checks2();
-    init_locales();
-    init_iso();
-    init_coerce();
-  }
-});
-
-// node_modules/zod/v4-mini/index.js
-var init_v4_mini = __esm({
-  "node_modules/zod/v4-mini/index.js"() {
-    init_external();
-  }
-});
-
-// node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
-function isZ4Schema(s2) {
-  const schema = s2;
-  return !!schema._zod;
-}
-function safeParse2(schema, data) {
-  if (isZ4Schema(schema)) {
-    const result2 = safeParse(schema, data);
-    return result2;
-  }
-  const v3Schema = schema;
-  const result = v3Schema.safeParse(data);
-  return result;
-}
-function getObjectShape(schema) {
-  if (!schema)
-    return void 0;
-  let rawShape;
-  if (isZ4Schema(schema)) {
-    const v4Schema = schema;
-    rawShape = v4Schema._zod?.def?.shape;
-  } else {
-    const v3Schema = schema;
-    rawShape = v3Schema.shape;
-  }
-  if (!rawShape)
-    return void 0;
-  if (typeof rawShape === "function") {
-    try {
-      return rawShape();
-    } catch {
-      return void 0;
-    }
-  }
-  return rawShape;
-}
-function getLiteralValue(schema) {
-  if (isZ4Schema(schema)) {
-    const v4Schema = schema;
-    const def2 = v4Schema._zod?.def;
-    if (def2) {
-      if (def2.value !== void 0)
-        return def2.value;
-      if (Array.isArray(def2.values) && def2.values.length > 0) {
-        return def2.values[0];
-      }
-    }
-  }
-  const v3Schema = schema;
-  const def = v3Schema._def;
-  if (def) {
-    if (def.value !== void 0)
-      return def.value;
-    if (Array.isArray(def.values) && def.values.length > 0) {
-      return def.values[0];
-    }
-  }
-  const directValue = schema.value;
-  if (directValue !== void 0)
-    return directValue;
-  return void 0;
-}
-var init_zod_compat = __esm({
-  "node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js"() {
-    init_v4_mini();
-  }
-});
-
 // node_modules/zod/v4/classic/checks.js
 var checks_exports2 = {};
 __export(checks_exports2, {
@@ -24361,15 +24242,15 @@ __export(checks_exports2, {
   trim: () => _trim,
   uppercase: () => _uppercase
 });
-var init_checks3 = __esm({
+var init_checks2 = __esm({
   "node_modules/zod/v4/classic/checks.js"() {
     init_core2();
   }
 });
 
 // node_modules/zod/v4/classic/iso.js
-var iso_exports2 = {};
-__export(iso_exports2, {
+var iso_exports = {};
+__export(iso_exports, {
   ZodISODate: () => ZodISODate,
   ZodISODateTime: () => ZodISODateTime,
   ZodISODuration: () => ZodISODuration,
@@ -24392,10 +24273,10 @@ function duration2(params) {
   return _isoDuration(ZodISODuration, params);
 }
 var ZodISODateTime, ZodISODate, ZodISOTime, ZodISODuration;
-var init_iso2 = __esm({
+var init_iso = __esm({
   "node_modules/zod/v4/classic/iso.js"() {
     init_core2();
-    init_schemas3();
+    init_schemas2();
     ZodISODateTime = /* @__PURE__ */ $constructor("ZodISODateTime", (inst, def) => {
       $ZodISODateTime.init(inst, def);
       ZodStringFormat.init(inst, def);
@@ -24464,14 +24345,14 @@ var init_errors2 = __esm({
 });
 
 // node_modules/zod/v4/classic/parse.js
-var parse2, parseAsync2, safeParse3, safeParseAsync2, encode2, decode2, encodeAsync2, decodeAsync2, safeEncode2, safeDecode2, safeEncodeAsync2, safeDecodeAsync2;
-var init_parse3 = __esm({
+var parse2, parseAsync2, safeParse2, safeParseAsync2, encode2, decode2, encodeAsync2, decodeAsync2, safeEncode2, safeDecode2, safeEncodeAsync2, safeDecodeAsync2;
+var init_parse2 = __esm({
   "node_modules/zod/v4/classic/parse.js"() {
     init_core2();
     init_errors2();
     parse2 = /* @__PURE__ */ _parse(ZodRealError);
     parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError);
-    safeParse3 = /* @__PURE__ */ _safeParse(ZodRealError);
+    safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError);
     safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError);
     encode2 = /* @__PURE__ */ _encode(ZodRealError);
     decode2 = /* @__PURE__ */ _decode(ZodRealError);
@@ -24618,7 +24499,7 @@ __export(schemas_exports2, {
   nullable: () => nullable2,
   nullish: () => nullish2,
   number: () => number2,
-  object: () => object2,
+  object: () => object,
   optional: () => optional,
   partialRecord: () => partialRecord,
   pipe: () => pipe,
@@ -24847,7 +24728,7 @@ function keyof(schema) {
   const shape = schema._zod.def.shape;
   return _enum2(Object.keys(shape));
 }
-function object2(shape, params) {
+function object(shape, params) {
   const def = {
     type: "object",
     shape: shape ?? {},
@@ -25167,15 +25048,15 @@ function preprocess(fn2, schema) {
   });
 }
 var _installedGroups, ZodType, _ZodString, ZodString, ZodStringFormat, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodMAC, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodCustomStringFormat, ZodNumber, ZodNumberFormat, ZodBoolean, ZodBigInt, ZodBigIntFormat, ZodSymbol, ZodUndefined, ZodNull, ZodAny, ZodUnknown, ZodNever, ZodVoid, ZodDate, ZodArray, ZodObject, ZodUnion, ZodXor, ZodDiscriminatedUnion, ZodIntersection, ZodTuple, ZodRecord, ZodMap, ZodSet, ZodEnum, ZodLiteral, ZodFile, ZodTransform, ZodOptional, ZodExactOptional, ZodNullable, ZodDefault, ZodPrefault, ZodNonOptional, ZodSuccess, ZodCatch, ZodNaN, ZodPipe, ZodCodec, ZodPreprocess, ZodReadonly, ZodTemplateLiteral, ZodLazy, ZodPromise, ZodFunction, ZodCustom, describe2, meta2, stringbool;
-var init_schemas3 = __esm({
+var init_schemas2 = __esm({
   "node_modules/zod/v4/classic/schemas.js"() {
     init_core2();
     init_core2();
     init_json_schema_processors();
     init_to_json_schema();
-    init_checks3();
-    init_iso2();
-    init_parse3();
+    init_checks2();
+    init_iso();
+    init_parse2();
     _installedGroups = /* @__PURE__ */ new WeakMap();
     ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
       $ZodType.init(inst, def);
@@ -25190,7 +25071,7 @@ var init_schemas3 = __esm({
       inst.type = def.type;
       Object.defineProperty(inst, "_def", { value: def });
       inst.parse = (data, params) => parse2(inst, data, params, { callee: inst.parse });
-      inst.safeParse = (data, params) => safeParse3(inst, data, params);
+      inst.safeParse = (data, params) => safeParse2(inst, data, params);
       inst.parseAsync = async (data, params) => parseAsync2(inst, data, params, { callee: inst.parseAsync });
       inst.safeParseAsync = async (data, params) => safeParseAsync2(inst, data, params);
       inst.spa = inst.safeParseAsync;
@@ -26393,13 +26274,13 @@ var z2, RECOGNIZED_KEYS;
 var init_from_json_schema = __esm({
   "node_modules/zod/v4/classic/from-json-schema.js"() {
     init_registries();
-    init_checks3();
-    init_iso2();
-    init_schemas3();
+    init_checks2();
+    init_iso();
+    init_schemas2();
     z2 = {
       ...schemas_exports2,
       ...checks_exports2,
-      iso: iso_exports2
+      iso: iso_exports
     };
     RECOGNIZED_KEYS = /* @__PURE__ */ new Set([
       // Schema identification
@@ -26476,8 +26357,8 @@ var init_from_json_schema = __esm({
 });
 
 // node_modules/zod/v4/classic/coerce.js
-var coerce_exports2 = {};
-__export(coerce_exports2, {
+var coerce_exports = {};
+__export(coerce_exports, {
   bigint: () => bigint3,
   boolean: () => boolean3,
   date: () => date4,
@@ -26499,10 +26380,10 @@ function bigint3(params) {
 function date4(params) {
   return _coercedDate(ZodDate, params);
 }
-var init_coerce2 = __esm({
+var init_coerce = __esm({
   "node_modules/zod/v4/classic/coerce.js"() {
     init_core2();
-    init_schemas3();
+    init_schemas2();
   }
 });
 
@@ -26606,7 +26487,7 @@ __export(external_exports, {
   cidrv6: () => cidrv62,
   clone: () => clone,
   codec: () => codec,
-  coerce: () => coerce_exports2,
+  coerce: () => coerce_exports,
   config: () => config,
   core: () => core_exports2,
   cuid: () => cuid3,
@@ -26650,7 +26531,7 @@ __export(external_exports, {
   invertCodec: () => invertCodec,
   ipv4: () => ipv42,
   ipv6: () => ipv62,
-  iso: () => iso_exports2,
+  iso: () => iso_exports,
   json: () => json,
   jwt: () => jwt,
   keyof: () => keyof,
@@ -26686,7 +26567,7 @@ __export(external_exports, {
   nullable: () => nullable2,
   nullish: () => nullish2,
   number: () => number2,
-  object: () => object2,
+  object: () => object,
   optional: () => optional,
   overwrite: () => _overwrite,
   parse: () => parse2,
@@ -26709,7 +26590,7 @@ __export(external_exports, {
   safeDecodeAsync: () => safeDecodeAsync2,
   safeEncode: () => safeEncode2,
   safeEncodeAsync: () => safeEncodeAsync2,
-  safeParse: () => safeParse3,
+  safeParse: () => safeParse2,
   safeParseAsync: () => safeParseAsync2,
   set: () => set,
   setErrorMap: () => setErrorMap,
@@ -26748,13 +26629,13 @@ __export(external_exports, {
   xid: () => xid2,
   xor: () => xor
 });
-var init_external2 = __esm({
+var init_external = __esm({
   "node_modules/zod/v4/classic/external.js"() {
     init_core2();
-    init_schemas3();
-    init_checks3();
+    init_schemas2();
+    init_checks2();
     init_errors2();
-    init_parse3();
+    init_parse2();
     init_compat();
     init_core2();
     init_en();
@@ -26762,17 +26643,1047 @@ var init_external2 = __esm({
     init_json_schema_processors();
     init_from_json_schema();
     init_locales();
-    init_iso2();
+    init_iso();
+    init_iso();
+    init_coerce();
+    config(en_default());
+  }
+});
+
+// node_modules/zod/index.js
+var init_zod = __esm({
+  "node_modules/zod/index.js"() {
+    init_external();
+    init_external();
+  }
+});
+
+// schemas/v1.mjs
+import { createHash as createHash2 } from "node:crypto";
+import { readFileSync as readFileSync2 } from "node:fs";
+import { fileURLToPath } from "node:url";
+function canonicalize2(value) {
+  if (Array.isArray(value)) return value.map(canonicalize2);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize2(value[key])]));
+  }
+  return value;
+}
+function canonicalJson2(value) {
+  return JSON.stringify(canonicalize2(value));
+}
+function snapshotHash(snapshot) {
+  const { canonicalSha256: _ignored, ...payload } = snapshot;
+  return createHash2("sha256").update(canonicalJson2(payload)).digest("hex");
+}
+function readProfileFile(filename) {
+  return JSON.parse(readFileSync2(new URL(`../profiles/${filename}`, import.meta.url), "utf8"));
+}
+function loadCollectionBudgets() {
+  return CollectionBudgetsSchema.parse(readProfileFile("collection-budgets.v1.json"));
+}
+function assertAllowedPublicAction(profile, action) {
+  const allowlist = PublicReadAllowlistSchema.parse(profile);
+  const requested = ActionTupleSchema.extend({ sourceSnapshotHash: Sha256Schema }).strict().parse(action);
+  if (requested.risk !== "read") {
+    throw new Error("PUBLIC_ACTION_NOT_ALLOWED: risk must be read");
+  }
+  if (requested.sourceSnapshotHash !== allowlist.sourceSnapshotHash) {
+    throw new Error("PUBLIC_ACTION_NOT_ALLOWED: source snapshot hash differs");
+  }
+  const allowed = allowlist.actions.some((entry) => entry.actionId === requested.actionId && entry.method === requested.method && entry.normalizedPath === requested.normalizedPath && entry.category === requested.category && entry.risk === requested.risk);
+  if (!allowed) throw new Error("PUBLIC_ACTION_NOT_ALLOWED: action tuple differs");
+  return true;
+}
+function loadPublicCatalogSnapshot() {
+  const snapshot = PublicCatalogSnapshotSchema.parse(readProfileFile("public-catalog-snapshot.v1.json"));
+  if (snapshotHash(snapshot) !== snapshot.canonicalSha256) {
+    throw new Error("CATALOG_SNAPSHOT_HASH_MISMATCH");
+  }
+  return snapshot;
+}
+function loadPublicReadAllowlist() {
+  return PublicReadAllowlistSchema.parse(readProfileFile("public-read-allowlist.v1.json"));
+}
+var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, MetricEdgeSchema, MetricContractsSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, schemaSourcePath;
+var init_v1 = __esm({
+  "schemas/v1.mjs"() {
+    init_zod();
+    SCHEMA_VERSION2 = "1.0.0";
+    Sha256Schema = external_exports.string().regex(/^[a-f0-9]{64}$/);
+    PseudonymousSubjectRefSchema = external_exports.string().regex(/^psn_[a-f0-9]{16,64}$/);
+    OpaqueObjectRefSchema = external_exports.string().regex(/^obj_[a-f0-9]{16,64}$/);
+    EvidenceRefSchema = external_exports.string().regex(/^ev_[a-f0-9]{16,64}$/);
+    ActorRefSchema = external_exports.string().regex(/^actor_[a-f0-9]{16,64}$/);
+    JourneyInstanceIdSchema = external_exports.string().regex(/^journey_[a-z][a-z0-9_]{2,127}$/);
+    NonEmptyRecordSchema = external_exports.record(external_exports.string(), external_exports.unknown()).refine((value) => Object.keys(value).length > 0, "must not be empty");
+    JsonRecordSchema = external_exports.record(external_exports.string(), external_exports.unknown());
+    TargetSchema = external_exports.object({
+      targetKind: external_exports.literal("location"),
+      operatingProfile: external_exports.enum(["client", "grom_internal"]),
+      locationId: external_exports.string().min(1),
+      companyId: external_exports.string().min(1).optional()
+    }).strict();
+    JourneySchema = external_exports.object({
+      journeyId: external_exports.string().min(1),
+      journeyInstanceId: JourneyInstanceIdSchema,
+      entryRule: external_exports.string().min(1),
+      denominator: external_exports.string().min(1),
+      outcomes: external_exports.array(external_exports.string().min(1)).min(1)
+    }).strict();
+    CoverageProfileSchema = external_exports.object({
+      profileId: external_exports.enum(["client", "grom_internal"]),
+      version: external_exports.literal(SCHEMA_VERSION2),
+      targetKind: external_exports.literal("location"),
+      excludedCapabilities: external_exports.array(external_exports.string().min(1)),
+      journeys: external_exports.array(JourneySchema).min(1)
+    }).strict().superRefine((profile, ctx) => {
+      const ids = profile.journeys.map(({ journeyId }) => journeyId);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: "journey IDs must be unique" });
+      }
+      const instanceIds = profile.journeys.map(({ journeyInstanceId }) => journeyInstanceId);
+      if (new Set(instanceIds).size !== instanceIds.length) {
+        ctx.addIssue({ code: "custom", message: "journey instance IDs must be unique" });
+      }
+    });
+    RunManifestSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      runId: external_exports.string().min(1),
+      target: TargetSchema,
+      profileId: external_exports.enum(["client", "grom_internal"]),
+      startedAt: external_exports.string().min(1),
+      status: external_exports.enum(["running", "checkpointed", "complete_partial", "complete_full", "quarantined"]),
+      coverageProfileHash: Sha256Schema,
+      metricContractsHash: Sha256Schema,
+      publicCatalogSnapshotHash: Sha256Schema
+    }).strict();
+    EvidenceRecordSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      evidenceRef: EvidenceRefSchema,
+      source: external_exports.enum(["context", "public_ghl", "internal_ghl", "onboarding_portal"]),
+      capturedAt: external_exports.string().min(1),
+      payloadHash: Sha256Schema,
+      classification: external_exports.enum(["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"]),
+      objectRefs: external_exports.array(external_exports.object({
+        objectType: external_exports.string().min(1),
+        objectId: OpaqueObjectRefSchema
+      }).strict())
+    }).strict();
+    FindingSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      findingId: external_exports.string().min(1),
+      state: external_exports.enum(["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"]),
+      severity: external_exports.enum(["critical", "high", "medium", "low"]),
+      journeyId: external_exports.string().min(1),
+      edgeId: external_exports.string().min(1),
+      summary: external_exports.string().min(1),
+      evidenceRefs: external_exports.array(EvidenceRefSchema).min(1)
+    }).strict();
+    ExactStateSchema = external_exports.object({
+      current: external_exports.record(external_exports.string(), external_exports.unknown()),
+      proposed: external_exports.record(external_exports.string(), external_exports.unknown())
+    }).strict();
+    CapturedObjectSchema = external_exports.object({
+      objectType: external_exports.string().min(1),
+      objectId: OpaqueObjectRefSchema,
+      capturedVersion: external_exports.union([external_exports.string().min(1), external_exports.number()]),
+      capturedHash: Sha256Schema
+    }).strict();
+    EvaluationCaseSchema = external_exports.object({
+      caseId: external_exports.string().min(1),
+      version: external_exports.string().min(1),
+      expected: external_exports.string().min(1)
+    }).strict();
+    ChangeSetSchema = external_exports.discriminatedUnion("solutionType", [
+      ExactStateSchema.extend({
+        solutionType: external_exports.literal("workflow_logic"),
+        workflowId: OpaqueObjectRefSchema,
+        capturedVersion: external_exports.union([external_exports.string().min(1), external_exports.number()]),
+        capturedHash: Sha256Schema,
+        currentGraph: NonEmptyRecordSchema,
+        proposedGraph: NonEmptyRecordSchema,
+        triggers: external_exports.array(external_exports.string().min(1)).min(1),
+        reentry: external_exports.string().min(1),
+        branches: external_exports.array(NonEmptyRecordSchema),
+        defaultBranch: external_exports.string().min(1),
+        exits: external_exports.array(external_exports.string()).min(1),
+        waits: external_exports.array(NonEmptyRecordSchema),
+        errorBehavior: external_exports.string().min(1),
+        references: external_exports.object({
+          fields: external_exports.array(external_exports.string().min(1)),
+          tags: external_exports.array(external_exports.string().min(1)),
+          calendars: external_exports.array(OpaqueObjectRefSchema),
+          assignments: external_exports.array(external_exports.string().min(1)),
+          agents: external_exports.array(OpaqueObjectRefSchema)
+        }).strict(),
+        existingEnrollmentHandling: external_exports.string().min(1)
+      }).strict(),
+      ExactStateSchema.extend({
+        solutionType: external_exports.literal("copy"),
+        channel: external_exports.string().min(1),
+        audience: external_exports.string().min(1),
+        locale: external_exports.string().min(1),
+        finalText: external_exports.string().min(1),
+        mergeFields: external_exports.array(external_exports.string()),
+        fallbacks: external_exports.record(external_exports.string(), external_exports.string()),
+        timing: external_exports.string().min(1),
+        stopConditions: external_exports.array(external_exports.string()).min(1),
+        consentCompliance: external_exports.string().min(1),
+        ownership: external_exports.enum(["fixed_copy", "ai_generated"])
+      }).strict(),
+      ExactStateSchema.extend({
+        solutionType: external_exports.literal("wait_timing"),
+        anchor: external_exports.string().min(1),
+        duration: external_exports.number().nonnegative(),
+        unit: external_exports.string().min(1),
+        timezone: external_exports.string().min(1),
+        businessCalendar: OpaqueObjectRefSchema,
+        exits: external_exports.object({
+          response: external_exports.string().min(1),
+          booking: external_exports.string().min(1),
+          optOut: external_exports.string().min(1),
+          stage: external_exports.string().min(1)
+        }).strict(),
+        collisionRisk: external_exports.string().min(1),
+        burstSendRisk: external_exports.string().min(1)
+      }).strict(),
+      ExactStateSchema.extend({
+        solutionType: external_exports.enum(["conversation_ai", "voice_ai"]),
+        agentId: OpaqueObjectRefSchema,
+        capturedVersion: external_exports.union([external_exports.string().min(1), external_exports.number()]),
+        capturedHash: Sha256Schema,
+        promptChanges: external_exports.string().min(1),
+        configurationChanges: NonEmptyRecordSchema,
+        actionChanges: external_exports.array(external_exports.string().min(1)),
+        knowledgeChanges: external_exports.array(external_exports.string().min(1)),
+        routingChanges: external_exports.array(external_exports.string().min(1)),
+        handoffChanges: external_exports.array(external_exports.string().min(1)),
+        allowedTools: external_exports.array(external_exports.string().min(1)),
+        agentGuardrails: external_exports.array(external_exports.string().min(1)).min(1),
+        prohibitedBehavior: external_exports.array(external_exports.string().min(1)).min(1),
+        escalation: external_exports.array(external_exports.string().min(1)).min(1),
+        evaluationCases: external_exports.array(EvaluationCaseSchema).min(1),
+        canaryScope: external_exports.string().min(1)
+      }).strict(),
+      ExactStateSchema.extend({
+        solutionType: external_exports.literal("operating_process"),
+        processOwner: ActorRefSchema,
+        raci: external_exports.record(external_exports.string(), external_exports.string()),
+        action: external_exports.string().min(1),
+        sla: external_exports.string().min(1),
+        trigger: external_exports.string().min(1),
+        completionEvidence: external_exports.array(external_exports.string()).min(1),
+        staffFields: external_exports.array(external_exports.string().min(1)),
+        staffStages: external_exports.array(external_exports.string().min(1)),
+        escalation: external_exports.array(external_exports.string()).min(1),
+        training: external_exports.array(external_exports.string().min(1)).min(1),
+        auditTrail: external_exports.array(external_exports.string().min(1)).min(1),
+        complianceMeasurement: external_exports.array(external_exports.string().min(1)).min(1)
+      }).strict()
+    ]);
+    ProposalSchema = external_exports.object({
+      mode: external_exports.literal("PROPOSAL_ONLY"),
+      executable: external_exports.literal(false),
+      approvalRequired: external_exports.literal(true),
+      solutionId: external_exports.string().min(1),
+      findingId: external_exports.string().min(1),
+      findingFingerprint: external_exports.string().min(1),
+      packHash: Sha256Schema,
+      objectRefs: external_exports.array(CapturedObjectSchema).min(1),
+      changeSet: ChangeSetSchema,
+      prerequisites: external_exports.array(external_exports.string().min(1)),
+      dependencies: external_exports.array(OpaqueObjectRefSchema),
+      blastRadius: external_exports.string().min(1),
+      owner: ActorRefSchema,
+      acceptanceTests: external_exports.array(external_exports.string().min(1)).min(1),
+      monitoring: external_exports.array(external_exports.string()).min(1),
+      rollout: NonEmptyRecordSchema,
+      rollback: NonEmptyRecordSchema,
+      guardrails: external_exports.array(external_exports.string().min(1)).min(1),
+      expectedResult: external_exports.object({
+        lower: external_exports.number().nullable(),
+        upper: external_exports.number().nullable(),
+        unit: external_exports.string().min(1),
+        basis: external_exports.enum(["MEASURED", "BOUNDED", "INFERRED", "UNMEASURED"])
+      }).strict(),
+      evidenceRefs: external_exports.array(EvidenceRefSchema).min(1),
+      evidenceCutoff: external_exports.string().datetime()
+    }).strict();
+    ConversationSampleSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      seed: external_exports.string().min(1),
+      universeCount: external_exports.number().int().nonnegative(),
+      selections: external_exports.array(external_exports.object({
+        subjectRef: PseudonymousSubjectRefSchema,
+        stratum: external_exports.string().min(1),
+        inclusionProbability: external_exports.number().positive().max(1),
+        evidenceRefs: external_exports.array(EvidenceRefSchema),
+        scores: external_exports.record(external_exports.string(), external_exports.number()).optional()
+      }).strict())
+    }).strict();
+    ReceiptSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      receiptId: external_exports.string().min(1),
+      proposalHash: Sha256Schema,
+      approvedAt: external_exports.string().min(1),
+      approvedBy: ActorRefSchema,
+      approvalScope: external_exports.array(external_exports.string().min(1)).min(1),
+      executable: external_exports.literal(false)
+    }).strict();
+    MetricEdgeSchema = external_exports.object({
+      edgeId: external_exports.string().min(1),
+      journeyId: external_exports.string().min(1),
+      journeyInstanceId: JourneyInstanceIdSchema,
+      fromStage: external_exports.string().min(1),
+      toStage: external_exports.string().min(1),
+      eligibilityRule: JsonRecordSchema,
+      fromEventFields: external_exports.array(external_exports.string()),
+      toEventFields: external_exports.array(external_exports.string()),
+      allowedLag: external_exports.object({
+        amount: external_exports.number().nonnegative(),
+        unit: external_exports.string().min(1)
+      }).strict(),
+      maturityRule: JsonRecordSchema,
+      dispositions: external_exports.array(external_exports.string().min(1)).min(1),
+      reentryRule: external_exports.enum(["new_journey_instance", "same_journey_instance"]),
+      outcomeRule: JsonRecordSchema,
+      required: external_exports.boolean(),
+      nativeMapping: external_exports.enum(["MAPPED", "UNKNOWN"])
+    }).strict();
+    MetricContractsSchema = external_exports.object({
+      profileId: external_exports.enum(["client", "grom_internal"]),
+      version: external_exports.literal(SCHEMA_VERSION2),
+      edges: external_exports.array(MetricEdgeSchema).min(1)
+    }).strict().superRefine((contracts, ctx) => {
+      const ids = contracts.edges.map(({ edgeId }) => edgeId);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: "edge IDs must be unique" });
+      }
+    });
+    ActionTupleSchema = external_exports.object({
+      actionId: external_exports.string().min(1),
+      method: external_exports.string().min(1),
+      normalizedPath: external_exports.string().min(1),
+      category: external_exports.string().min(1),
+      risk: external_exports.string().min(1)
+    }).strict();
+    ReadActionTupleSchema = ActionTupleSchema.extend({
+      risk: external_exports.literal("read")
+    }).strict();
+    ApprovalSchema = external_exports.object({
+      provenance: external_exports.string().min(1),
+      reviewedAt: external_exports.string().min(1),
+      reviewedBy: external_exports.string().min(1)
+    }).strict();
+    CatalogCandidateSchema = ActionTupleSchema.extend({
+      approvedSemanticRead: external_exports.boolean(),
+      approval: ApprovalSchema.optional()
+    }).strict().superRefine((candidate, ctx) => {
+      if (candidate.approvedSemanticRead && !candidate.approval) {
+        ctx.addIssue({ code: "custom", message: "approved actions require approval provenance" });
+      }
+      if (candidate.approvedSemanticRead && candidate.risk !== "read") {
+        ctx.addIssue({ code: "custom", message: "approved semantic reads must have read risk" });
+      }
+    });
+    PublicCatalogSnapshotSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      catalogRevision: external_exports.string().min(1),
+      capturedAt: external_exports.string().min(1),
+      sourceServer: external_exports.object({
+        name: external_exports.string().min(1),
+        identity: external_exports.string().min(1),
+        version: external_exports.string().min(1)
+      }).strict(),
+      candidates: external_exports.array(CatalogCandidateSchema),
+      canonicalSha256: Sha256Schema
+    }).strict().superRefine((snapshot, ctx) => {
+      const ids = snapshot.candidates.map(({ actionId }) => actionId);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: "catalog action IDs must be unique" });
+      }
+    });
+    PublicReadAllowlistSchema = external_exports.object({
+      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
+      sourceCatalogRevision: external_exports.string().min(1),
+      sourceSnapshotHash: Sha256Schema,
+      sourceServerIdentity: external_exports.string().min(1),
+      actions: external_exports.array(ReadActionTupleSchema)
+    }).strict().superRefine((allowlist, ctx) => {
+      const ids = allowlist.actions.map(({ actionId }) => actionId);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: "allowlist action IDs must be unique" });
+      }
+    });
+    BudgetSchema = external_exports.object({
+      maximumPages: external_exports.number().int().positive(),
+      maximumRecords: external_exports.number().int().positive(),
+      maximumResponseBytes: external_exports.number().int().positive(),
+      requestTimeoutMs: external_exports.number().int().positive(),
+      retryCount: external_exports.number().int().nonnegative(),
+      maximumTotalRetryDelayMs: external_exports.number().int().nonnegative(),
+      wallClockMs: external_exports.number().int().positive()
+    }).strict();
+    CollectionBudgetsSchema = external_exports.object({
+      version: external_exports.literal(SCHEMA_VERSION2),
+      exhaustionPolicy: external_exports.literal("checkpoint_scope_incomplete"),
+      capabilities: external_exports.record(external_exports.string().min(1), BudgetSchema)
+    }).strict();
+    PROFILE_FILES = Object.freeze({
+      client: "client.v1.json",
+      grom_internal: "grom-internal.v1.json"
+    });
+    METRIC_FILES = Object.freeze({
+      client: "client-metrics.v1.json",
+      grom_internal: "grom-internal-metrics.v1.json"
+    });
+    schemaSourcePath = fileURLToPath(import.meta.url);
+  }
+});
+
+// lib/adapters/ghl-public-translator.mjs
+function isPlainObject5(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  );
+}
+function fail(code) {
+  return codedError6(code);
+}
+function encodeCursor(actionId, state) {
+  return Buffer.from(
+    canonicalJson({ action: actionId, state, version: 1 }),
+    "utf8"
+  ).toString("base64url");
+}
+function decodeCursor(actionId, cursor) {
+  let decoded;
+  try {
+    decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+  } catch {
+    throw fail("GHL_TRANSLATION_CURSOR_INVALID");
+  }
+  if (!isPlainObject5(decoded) || decoded.version !== 1 || decoded.action !== actionId || !isPlainObject5(decoded.state)) throw fail("GHL_TRANSLATION_CURSOR_INVALID");
+  return decoded.state;
+}
+function parseUpstreamResult(response) {
+  let value = response;
+  if (isPlainObject5(response) && isPlainObject5(response.structuredContent)) {
+    value = response.structuredContent;
+  } else if (isPlainObject5(response) && Array.isArray(response.content)) {
+    const text = response.content.find((entry) => entry?.type === "text")?.text;
+    if (typeof text !== "string") throw fail("GHL_UPSTREAM_RESPONSE_INVALID");
+    try {
+      value = JSON.parse(text);
+    } catch {
+      throw fail("GHL_UPSTREAM_RESPONSE_INVALID");
+    }
+  }
+  if (!isPlainObject5(value)) throw fail("GHL_UPSTREAM_RESPONSE_INVALID");
+  return value;
+}
+function pickRecords(body, keys) {
+  for (const container of [body, body.data, body.body, body.result, body.response]) {
+    if (!isPlainObject5(container)) continue;
+    for (const key of keys) {
+      if (Array.isArray(container[key])) return container[key];
+    }
+  }
+  throw fail("GHL_RESPONSE_SHAPE_UNRECOGNISED");
+}
+function pickServerTotal(body) {
+  for (const container of [body, body.data, body.meta, body.data?.meta]) {
+    if (!isPlainObject5(container)) continue;
+    for (const key of ["total", "totalCount", "count"]) {
+      const value = container[key];
+      if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+    }
+  }
+  return null;
+}
+function pickPath(body, key) {
+  for (const container of [body, body.data, body.meta, body.data?.meta]) {
+    if (isPlainObject5(container) && container[key] !== void 0 && container[key] !== null) {
+      return container[key];
+    }
+  }
+  return null;
+}
+function recordId(record2) {
+  if (!isPlainObject5(record2)) return null;
+  for (const key of ["id", "_id", "eventId", "messageId", "conversationId"]) {
+    const value = record2[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
+}
+function toEpochMs(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && /^\d+$/u.test(value)) return numeric;
+  }
+  return null;
+}
+function recordTimestamp(record2) {
+  if (!isPlainObject5(record2)) return { epochMs: null, basis: null };
+  for (const field of CREATED_FIELDS) {
+    const epochMs = toEpochMs(record2[field]);
+    if (epochMs !== null) return { epochMs, basis: "created" };
+  }
+  for (const field of UPDATED_FIELDS) {
+    const epochMs = toEpochMs(record2[field]);
+    if (epochMs !== null) return { epochMs, basis: "updated" };
+  }
+  return { epochMs: null, basis: null };
+}
+function annotateRecord(record2, counters) {
+  if (!isPlainObject5(record2)) return record2;
+  const notes = [];
+  if (Object.hasOwn(record2, "monetaryValue")) {
+    const value = record2.monetaryValue;
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      counters.monetaryValueNotFinite += 1;
+      notes.push({
+        code: "MONETARY_VALUE_NOT_FINITE",
+        field: "monetaryValue",
+        observedType: value === null ? "null" : typeof value
+      });
+    }
+  }
+  if (notes.length === 0) return record2;
+  if (Object.hasOwn(record2, QUALITY_KEY)) return record2;
+  return { ...record2, [QUALITY_KEY]: notes };
+}
+function newCounters() {
+  return {
+    monetaryValueNotFinite: 0,
+    duplicateIdsDropped: 0,
+    outsideWindowDropped: 0,
+    withoutTimestampKept: 0,
+    updatedBasisUsed: 0,
+    serverReportedTotal: null,
+    upstreamRequests: 0,
+    parentCalendarsResolved: null,
+    paginationCursorUnavailable: false
+  };
+}
+function assertTranslatableCapabilities(capabilities) {
+  const offending = [];
+  for (const capability of capabilities ?? []) {
+    const actionId = capability?.actionId;
+    if (typeof actionId !== "string" || !Object.hasOwn(PLANS, actionId)) {
+      offending.push(actionId ?? null);
+    }
+  }
+  if (offending.length > 0) {
+    const error51 = codedError6("AUDIT_PREFLIGHT_FAILED_PUBLIC_CAPABILITY_NOT_TRANSLATED");
+    error51.actionIds = Object.freeze([...new Set(offending)].sort());
+    throw error51;
+  }
+  return true;
+}
+async function calendarEventInitialState(context) {
+  const body = parseUpstreamResult(await context.call({
+    action: PLANS["calendars-v3__get-calendars"].upstreamAction,
+    params: { locationId: context.locationId }
+  }));
+  const calendars = pickRecords(body, PLANS["calendars-v3__get-calendars"].recordKeys);
+  const calendarIds = [...new Set(
+    calendars.map((calendar) => recordId(calendar)).filter((id) => id !== null)
+  )].sort();
+  context.counters.parentCalendarsResolved = calendarIds.length;
+  context.counters.upstreamRequests += 1;
+  if (calendarIds.length === 0) return null;
+  return {
+    calendarIds,
+    calendarIndex: 0,
+    chunks: calendarEventChunks(context.fromMs, context.toMs),
+    chunkIndex: 0
+  };
+}
+function calendarEventChunks(fromMs, toMs, chunkMs = CALENDAR_CHUNK_DAYS * DAY_MS) {
+  const chunks = [];
+  for (let start = fromMs; start < toMs; start += chunkMs) {
+    chunks.push([start, Math.min(start + chunkMs, toMs)]);
+  }
+  return chunks;
+}
+function budgetFor(category) {
+  const budget = loadCollectionBudgets().capabilities[category];
+  if (!budget) throw fail("COLLECTION_BUDGET_MISSING");
+  return budget;
+}
+function byteLength(value) {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+  } catch {
+    throw fail("GHL_UPSTREAM_RESPONSE_INVALID");
+  }
+}
+async function translateScope({ actionId, params, call, options, now }) {
+  const plan = PLANS[actionId];
+  if (!plan) {
+    const reason = NOT_TRANSLATED[actionId] ?? NOT_COLLECTABLE_IN_THIS_SHAPE[actionId] ?? null;
+    const error51 = codedError6(
+      Object.hasOwn(NOT_COLLECTABLE_IN_THIS_SHAPE, actionId) ? "GHL_ACTION_NOT_COLLECTABLE_IN_THIS_SHAPE" : "GHL_ACTION_NOT_TRANSLATED"
+    );
+    if (reason !== null) error51.reason = reason;
+    throw error51;
+  }
+  const locationId = params.locationId;
+  const fromMs = Date.parse(params.fromDate);
+  const toMs = Date.parse(params.toDate);
+  if (typeof locationId !== "string" || locationId.length === 0 || !Number.isFinite(fromMs) || !Number.isFinite(toMs) || fromMs >= toMs) throw fail("GHL_TRANSLATION_REQUEST_INVALID");
+  const budget = budgetFor(plan.category);
+  const counters = newCounters();
+  const context = { locationId, fromMs, toMs, call, counters };
+  const timeout = Number.isFinite(options?.timeout) ? Number(options.timeout) : null;
+  const deadline = timeout === null ? null : now() + Math.max(MINIMUM_DEADLINE_MS, Math.floor(timeout * DEADLINE_FRACTION));
+  const requestedCursor = params.cursor ?? null;
+  let state = requestedCursor === null ? await plan.initialState(context) : decodeCursor(actionId, requestedCursor);
+  const items = [];
+  const seenIds = /* @__PURE__ */ new Set();
+  let bytes = 0;
+  let truncated = false;
+  while (state !== null) {
+    if (options?.signal?.aborted) throw fail("GHL_TRANSLATION_ABORTED");
+    if (counters.upstreamRequests >= budget.maximumPages) {
+      truncated = true;
+      break;
+    }
+    if (deadline !== null && now() >= deadline) {
+      truncated = true;
+      break;
+    }
+    const body = parseUpstreamResult(await call({
+      action: plan.upstreamAction,
+      params: plan.request(state, context)
+    }));
+    counters.upstreamRequests += 1;
+    const records = pickRecords(body, plan.recordKeys);
+    bytes += byteLength(records);
+    const serverTotal = pickServerTotal(body);
+    if (serverTotal !== null && counters.serverReportedTotal === null) {
+      counters.serverReportedTotal = serverTotal;
+    }
+    let recognisedTimestamps = 0;
+    let sawOlderThanFrom = false;
+    for (const record2 of records) {
+      let epochMs = null;
+      if (plan.windowFilter === "client") {
+        const timestamp = recordTimestamp(record2);
+        epochMs = timestamp.epochMs;
+        if (epochMs !== null) {
+          recognisedTimestamps += 1;
+          if (timestamp.basis === "updated") counters.updatedBasisUsed += 1;
+          if (epochMs < fromMs) sawOlderThanFrom = true;
+        }
+      }
+      const id = recordId(record2);
+      if (id !== null) {
+        if (seenIds.has(id)) {
+          counters.duplicateIdsDropped += 1;
+          continue;
+        }
+        seenIds.add(id);
+      }
+      if (plan.windowFilter === "client") {
+        if (epochMs === null) {
+          counters.withoutTimestampKept += 1;
+        } else if (epochMs < fromMs || epochMs >= toMs) {
+          counters.outsideWindowDropped += 1;
+          continue;
+        }
+      }
+      items.push(annotateRecord(record2, counters));
+    }
+    if (plan.windowFilter === "client" && records.length > 0 && recognisedTimestamps === 0) {
+      throw fail("GHL_WINDOW_FIELD_UNRECOGNISED");
+    }
+    const next = plan.advance(state, body, records, context);
+    if (next === "EXHAUSTED_WITHOUT_CURSOR") {
+      counters.paginationCursorUnavailable = true;
+      truncated = true;
+      state = null;
+      break;
+    }
+    if (plan.earlyStopOlderThanFrom === true && sawOlderThanFrom) {
+      state = null;
+      break;
+    }
+    if (items.length >= budget.maximumRecords || bytes >= budget.maximumResponseBytes) {
+      if (next !== null) truncated = true;
+      state = next;
+      break;
+    }
+    state = next;
+  }
+  return {
+    locationId,
+    // The applied window is the REQUESTED window for every plan. Incompleteness is carried by
+    // `truncated` plus the resume cursor, not by narrowing the window, because a fan-out scope
+    // (calendar events across N calendars) has no single interval to narrow TO: different parents
+    // can stop at different points, and a single `{from,to}` cannot say that honestly.
+    appliedWindow: { from: params.fromDate, to: params.toDate },
+    items,
+    page: {
+      cursor: requestedCursor,
+      nextCursor: truncated && state !== null ? encodeCursor(actionId, state) : null,
+      // Equal to `items.length` BY CONSTRUCTION. See the module header: the adapter requires a
+      // count that is constant across pages and exact at the terminal page, and no GHL total
+      // survives our own window filtering, so the scope is exhausted upstream and counted here.
+      reportedCount: items.length,
+      complete: !truncated,
+      truncated
+    },
+    dataQuality: {
+      actionId,
+      upstreamAction: plan.upstreamAction,
+      windowFilter: plan.windowFilter,
+      ...counters
+    }
+  };
+}
+function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
+  if (typeof connect !== "function") throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  const now = typeof runtime.now === "function" ? () => Number(runtime.now()) : () => Date.now();
+  return async function translatingConnect(transportOptions) {
+    const delegate = await connect(transportOptions);
+    if (!delegate || typeof delegate.callTool !== "function") {
+      throw codedError6("MCP_CONNECTION_FAILED");
+    }
+    return Object.freeze({
+      async callTool(request, options) {
+        if (!isPlainObject5(request) || request.name !== "execute_action" || !isPlainObject5(request.arguments) || !isPlainObject5(request.arguments.params)) throw fail("GHL_TRANSLATION_REQUEST_INVALID");
+        const structured = await translateScope({
+          actionId: request.arguments.action,
+          params: request.arguments.params,
+          // Every upstream call carries the caller's own signal and timeout, so the adapter's
+          // budget still governs the wire even though one adapter request is now N of them.
+          call: (upstream) => delegate.callTool(
+            { name: "execute_action", arguments: upstream },
+            options
+          ),
+          options,
+          now
+        });
+        return { structuredContent: structured };
+      },
+      async close() {
+        await delegate.close?.();
+      }
+    });
+  };
+}
+var UPSTREAM_PAGE_LIMIT, CALENDAR_CHUNK_DAYS, DAY_MS, DEADLINE_FRACTION, MINIMUM_DEADLINE_MS, CREATED_FIELDS, UPDATED_FIELDS, QUALITY_KEY, PLANS, NOT_COLLECTABLE_IN_THIS_SHAPE, NOT_TRANSLATED;
+var init_ghl_public_translator = __esm({
+  "lib/adapters/ghl-public-translator.mjs"() {
+    init_canonical();
+    init_collection();
+    init_v1();
+    UPSTREAM_PAGE_LIMIT = 100;
+    CALENDAR_CHUNK_DAYS = 7;
+    DAY_MS = 864e5;
+    DEADLINE_FRACTION = 0.8;
+    MINIMUM_DEADLINE_MS = 1e3;
+    CREATED_FIELDS = Object.freeze([
+      "dateAdded",
+      "createdAt",
+      "dateCreated",
+      "created_at",
+      "addedAt",
+      "startTime",
+      "startAt"
+    ]);
+    UPDATED_FIELDS = Object.freeze([
+      "dateUpdated",
+      "updatedAt",
+      "lastMessageDate",
+      "updated_at"
+    ]);
+    QUALITY_KEY = "$auditDataQuality";
+    PLANS = Object.freeze({
+      "contacts.search": {
+        upstreamAction: "contacts-v3__search-contacts-advanced",
+        category: "contacts",
+        recordKeys: ["contacts"],
+        windowFilter: "client",
+        initialState: () => ({ searchAfter: null }),
+        request: (state, { locationId }) => ({
+          locationId,
+          pageLimit: UPSTREAM_PAGE_LIMIT,
+          ...state.searchAfter === null ? {} : { searchAfter: state.searchAfter }
+        }),
+        advance: (state, body, records) => {
+          if (records.length < UPSTREAM_PAGE_LIMIT) return null;
+          const last = records.at(-1);
+          const searchAfter = Array.isArray(last?.searchAfter) && last.searchAfter.length > 0 ? last.searchAfter : pickPath(body, "searchAfter");
+          if (!Array.isArray(searchAfter) || searchAfter.length === 0) return "EXHAUSTED_WITHOUT_CURSOR";
+          if (canonicalJson(searchAfter) === canonicalJson(state.searchAfter)) return null;
+          return { searchAfter };
+        }
+      },
+      "opportunities.list": {
+        upstreamAction: "opportunities-v3__search-opportunity",
+        category: "opportunities",
+        recordKeys: ["opportunities"],
+        windowFilter: "client",
+        initialState: () => ({ startAfter: null, startAfterId: null }),
+        request: (state, { locationId }) => ({
+          locationId,
+          limit: UPSTREAM_PAGE_LIMIT,
+          // `status` is a VERIFIED enum on this endpoint and `all` is one of its values. Without it
+          // the default is unstated, and a default of `open` would silently exclude every won and
+          // lost opportunity — i.e. every opportunity that carries realised `monetaryValue`.
+          status: "all",
+          ...state.startAfter === null ? {} : { startAfter: state.startAfter },
+          ...state.startAfterId === null ? {} : { startAfterId: state.startAfterId }
+        }),
+        advance: (state, body, records) => {
+          if (records.length < UPSTREAM_PAGE_LIMIT) return null;
+          const startAfter = pickPath(body, "startAfter");
+          const startAfterId = pickPath(body, "startAfterId");
+          if (startAfter === null || startAfterId === null) return "EXHAUSTED_WITHOUT_CURSOR";
+          if (canonicalJson(startAfter) === canonicalJson(state.startAfter) && startAfterId === state.startAfterId) return null;
+          return { startAfter, startAfterId };
+        }
+      },
+      "opportunities-v3__get-pipelines": {
+        upstreamAction: "opportunities-v3__get-pipelines",
+        category: "opportunities",
+        recordKeys: ["pipelines"],
+        windowFilter: "none",
+        initialState: () => ({ single: true }),
+        request: (_state, { locationId }) => ({ locationId }),
+        advance: () => null
+      },
+      "calendars-v3__get-calendars": {
+        upstreamAction: "calendars-v3__get-calendars",
+        category: "appointments",
+        recordKeys: ["calendars"],
+        windowFilter: "none",
+        initialState: () => ({ single: true }),
+        request: (_state, { locationId }) => ({ locationId }),
+        advance: () => null
+      },
+      "conversations-v3__search-conversation": {
+        upstreamAction: "conversations-v3__search-conversation",
+        category: "conversations",
+        recordKeys: ["conversations"],
+        // VERIFIED from the bundled spec: `startDate` and `endDate` are `number`, "Unix timestamp in
+        // milliseconds", filtering `dateAdded`. Unambiguous, so the window goes upstream.
+        windowFilter: "server",
+        initialState: () => ({ startAfterDate: null }),
+        request: (state, { locationId, fromMs, toMs }) => ({
+          locationId,
+          limit: UPSTREAM_PAGE_LIMIT,
+          startDate: fromMs,
+          endDate: toMs,
+          ...state.startAfterDate === null ? {} : { startAfterDate: state.startAfterDate }
+        }),
+        advance: (state, body, records) => {
+          if (records.length < UPSTREAM_PAGE_LIMIT) return null;
+          const last = records.at(-1);
+          const startAfterDate = [last?.sortValue, last?.lastMessageDate, last?.dateUpdated, last?.dateAdded].map((value) => toEpochMs(value)).find((value) => value !== null) ?? null;
+          if (startAfterDate === null) return "EXHAUSTED_WITHOUT_CURSOR";
+          if (startAfterDate === state.startAfterDate) return null;
+          return { startAfterDate };
+        }
+      },
+      "conversations-v3__export-messages-by-location": {
+        upstreamAction: "conversations-v3__export-messages-by-location",
+        category: "conversations",
+        recordKeys: ["messages"],
+        // `startDate`/`endDate` exist here too but the spec types them only as `string` and pins no
+        // format. Sending a guessed format risks a 422 that fails the whole scope, so nothing
+        // unverified is sent; the window is applied here and `sortOrder: desc` (a VERIFIED enum) lets
+        // the walk stop as soon as it passes the start of the window.
+        windowFilter: "client",
+        earlyStopOlderThanFrom: true,
+        initialState: () => ({ cursor: null }),
+        request: (state, { locationId }) => ({
+          locationId,
+          limit: UPSTREAM_PAGE_LIMIT,
+          sortBy: "createdAt",
+          sortOrder: "desc",
+          ...state.cursor === null ? {} : { cursor: state.cursor }
+        }),
+        advance: (state, body, records) => {
+          const nextCursor = pickPath(body, "nextCursor");
+          if (typeof nextCursor !== "string" || nextCursor.length === 0) {
+            return records.length < UPSTREAM_PAGE_LIMIT ? null : "EXHAUSTED_WITHOUT_CURSOR";
+          }
+          if (nextCursor === state.cursor) return null;
+          return { cursor: nextCursor };
+        }
+      },
+      "calendars-v3__get-calendar-events": {
+        upstreamAction: "calendars-v3__get-calendar-events",
+        category: "appointments",
+        recordKeys: ["events"],
+        windowFilter: "chunked",
+        // Resolved parent + chunk walk; see `calendarEventInitialState` / `calendarEventChunks`.
+        initialState: calendarEventInitialState,
+        request: (state, { locationId }) => ({
+          locationId,
+          calendarId: state.calendarIds[state.calendarIndex],
+          startTime: String(state.chunks[state.chunkIndex][0]),
+          // The chunk grid is half-open in millisecond space. GHL does not document whether
+          // `endTime` is inclusive, so the last millisecond is withheld and the grid can never
+          // present the same instant to two chunks. Any residual overlap (recurring instances,
+          // clock skew) is removed by the id de-duplication every plan runs.
+          endTime: String(state.chunks[state.chunkIndex][1] - 1)
+        }),
+        advance: (state) => {
+          const chunkIndex = state.chunkIndex + 1;
+          if (chunkIndex < state.chunks.length) return { ...state, chunkIndex };
+          const calendarIndex = state.calendarIndex + 1;
+          if (calendarIndex < state.calendarIds.length) {
+            return { ...state, calendarIndex, chunkIndex: 0 };
+          }
+          return null;
+        }
+      }
+    });
+    NOT_COLLECTABLE_IN_THIS_SHAPE = Object.freeze({
+      "conversations-v3__get-messages": "requires a conversationId; use conversations-v3__export-messages-by-location, which is location-scoped",
+      "contacts-v3__get-appointments-for-contact": "requires a contactId; use calendars-v3__get-calendar-events, which is location-scoped",
+      "calendars-v3__get-appointment": "requires an eventId; use calendars-v3__get-calendar-events, which is location-scoped"
+    });
+    NOT_TRANSLATED = Object.freeze({
+      "payments-v3__list-orders": "payments is never authoritative for revenue; the canonical basis is opportunity monetaryValue",
+      "payments-v3__list-transactions": "payments is never authoritative for revenue; the canonical basis is opportunity monetaryValue"
+    });
+  }
+});
+
+// node_modules/zod/v4/mini/parse.js
+var init_parse3 = __esm({
+  "node_modules/zod/v4/mini/parse.js"() {
+    init_core2();
+  }
+});
+
+// node_modules/zod/v4/mini/schemas.js
+var init_schemas3 = __esm({
+  "node_modules/zod/v4/mini/schemas.js"() {
+  }
+});
+
+// node_modules/zod/v4/mini/checks.js
+var init_checks3 = __esm({
+  "node_modules/zod/v4/mini/checks.js"() {
+  }
+});
+
+// node_modules/zod/v4/mini/iso.js
+var init_iso2 = __esm({
+  "node_modules/zod/v4/mini/iso.js"() {
+  }
+});
+
+// node_modules/zod/v4/mini/coerce.js
+var init_coerce2 = __esm({
+  "node_modules/zod/v4/mini/coerce.js"() {
+  }
+});
+
+// node_modules/zod/v4/mini/external.js
+var init_external2 = __esm({
+  "node_modules/zod/v4/mini/external.js"() {
+    init_core2();
+    init_parse3();
+    init_schemas3();
+    init_checks3();
+    init_locales();
     init_iso2();
     init_coerce2();
-    config(en_default());
+  }
+});
+
+// node_modules/zod/v4-mini/index.js
+var init_v4_mini = __esm({
+  "node_modules/zod/v4-mini/index.js"() {
+    init_external2();
+  }
+});
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js
+function isZ4Schema(s2) {
+  const schema = s2;
+  return !!schema._zod;
+}
+function safeParse3(schema, data) {
+  if (isZ4Schema(schema)) {
+    const result2 = safeParse(schema, data);
+    return result2;
+  }
+  const v3Schema = schema;
+  const result = v3Schema.safeParse(data);
+  return result;
+}
+function getObjectShape(schema) {
+  if (!schema)
+    return void 0;
+  let rawShape;
+  if (isZ4Schema(schema)) {
+    const v4Schema = schema;
+    rawShape = v4Schema._zod?.def?.shape;
+  } else {
+    const v3Schema = schema;
+    rawShape = v3Schema.shape;
+  }
+  if (!rawShape)
+    return void 0;
+  if (typeof rawShape === "function") {
+    try {
+      return rawShape();
+    } catch {
+      return void 0;
+    }
+  }
+  return rawShape;
+}
+function getLiteralValue(schema) {
+  if (isZ4Schema(schema)) {
+    const v4Schema = schema;
+    const def2 = v4Schema._zod?.def;
+    if (def2) {
+      if (def2.value !== void 0)
+        return def2.value;
+      if (Array.isArray(def2.values) && def2.values.length > 0) {
+        return def2.values[0];
+      }
+    }
+  }
+  const v3Schema = schema;
+  const def = v3Schema._def;
+  if (def) {
+    if (def.value !== void 0)
+      return def.value;
+    if (Array.isArray(def.values) && def.values.length > 0) {
+      return def.values[0];
+    }
+  }
+  const directValue = schema.value;
+  if (directValue !== void 0)
+    return directValue;
+  return void 0;
+}
+var init_zod_compat = __esm({
+  "node_modules/@modelcontextprotocol/sdk/dist/esm/server/zod-compat.js"() {
+    init_v4_mini();
   }
 });
 
 // node_modules/zod/v4/classic/index.js
 var init_classic = __esm({
   "node_modules/zod/v4/classic/index.js"() {
-    init_external2();
+    init_external();
   }
 });
 
@@ -26805,10 +27716,10 @@ var init_types = __esm({
        */
       pollInterval: number2().optional()
     });
-    TaskMetadataSchema = object2({
+    TaskMetadataSchema = object({
       ttl: number2().optional()
     });
-    RelatedTaskMetadataSchema = object2({
+    RelatedTaskMetadataSchema = object({
       taskId: string2()
     });
     RequestMetaSchema = looseObject({
@@ -26821,7 +27732,7 @@ var init_types = __esm({
        */
       [RELATED_TASK_META_KEY]: RelatedTaskMetadataSchema.optional()
     });
-    BaseRequestParamsSchema = object2({
+    BaseRequestParamsSchema = object({
       /**
        * See [General fields: `_meta`](/specification/draft/basic/index#meta) for notes on `_meta` usage.
        */
@@ -26839,18 +27750,18 @@ var init_types = __esm({
       task: TaskMetadataSchema.optional()
     });
     isTaskAugmentedRequestParams = (value) => TaskAugmentedRequestParamsSchema.safeParse(value).success;
-    RequestSchema = object2({
+    RequestSchema = object({
       method: string2(),
       params: BaseRequestParamsSchema.loose().optional()
     });
-    NotificationsParamsSchema = object2({
+    NotificationsParamsSchema = object({
       /**
        * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
        * for notes on _meta usage.
        */
       _meta: RequestMetaSchema.optional()
     });
-    NotificationSchema = object2({
+    NotificationSchema = object({
       method: string2(),
       params: NotificationsParamsSchema.loose().optional()
     });
@@ -26862,18 +27773,18 @@ var init_types = __esm({
       _meta: RequestMetaSchema.optional()
     });
     RequestIdSchema = union([string2(), number2().int()]);
-    JSONRPCRequestSchema = object2({
+    JSONRPCRequestSchema = object({
       jsonrpc: literal(JSONRPC_VERSION),
       id: RequestIdSchema,
       ...RequestSchema.shape
     }).strict();
     isJSONRPCRequest = (value) => JSONRPCRequestSchema.safeParse(value).success;
-    JSONRPCNotificationSchema = object2({
+    JSONRPCNotificationSchema = object({
       jsonrpc: literal(JSONRPC_VERSION),
       ...NotificationSchema.shape
     }).strict();
     isJSONRPCNotification = (value) => JSONRPCNotificationSchema.safeParse(value).success;
-    JSONRPCResultResponseSchema = object2({
+    JSONRPCResultResponseSchema = object({
       jsonrpc: literal(JSONRPC_VERSION),
       id: RequestIdSchema,
       result: ResultSchema
@@ -26889,10 +27800,10 @@ var init_types = __esm({
       ErrorCode2[ErrorCode2["InternalError"] = -32603] = "InternalError";
       ErrorCode2[ErrorCode2["UrlElicitationRequired"] = -32042] = "UrlElicitationRequired";
     })(ErrorCode || (ErrorCode = {}));
-    JSONRPCErrorResponseSchema = object2({
+    JSONRPCErrorResponseSchema = object({
       jsonrpc: literal(JSONRPC_VERSION),
       id: RequestIdSchema.optional(),
-      error: object2({
+      error: object({
         /**
          * The error type that occurred.
          */
@@ -26932,7 +27843,7 @@ var init_types = __esm({
       method: literal("notifications/cancelled"),
       params: CancelledNotificationParamsSchema
     });
-    IconSchema = object2({
+    IconSchema = object({
       /**
        * URL or data URI for the icon.
        */
@@ -26957,7 +27868,7 @@ var init_types = __esm({
        */
       theme: _enum2(["light", "dark"]).optional()
     });
-    IconsSchema = object2({
+    IconsSchema = object({
       /**
        * Optional set of sized icons that the client can display in a user interface.
        *
@@ -26971,7 +27882,7 @@ var init_types = __esm({
        */
       icons: array(IconSchema).optional()
     });
-    BaseMetadataSchema = object2({
+    BaseMetadataSchema = object({
       /** Intended for programmatic or logical use, but used as a display name in past specs or fallback */
       name: string2(),
       /**
@@ -27001,7 +27912,7 @@ var init_types = __esm({
        */
       description: string2().optional()
     });
-    FormElicitationCapabilitySchema = intersection(object2({
+    FormElicitationCapabilitySchema = intersection(object({
       applyDefaults: boolean2().optional()
     }), record(string2(), unknown()));
     ElicitationCapabilitySchema = preprocess((value) => {
@@ -27011,7 +27922,7 @@ var init_types = __esm({
         }
       }
       return value;
-    }, intersection(object2({
+    }, intersection(object({
       form: FormElicitationCapabilitySchema.optional(),
       url: AssertObjectSchema.optional()
     }), record(string2(), unknown()).optional()));
@@ -27063,7 +27974,7 @@ var init_types = __esm({
         }).optional()
       }).optional()
     });
-    ClientCapabilitiesSchema = object2({
+    ClientCapabilitiesSchema = object({
       /**
        * Experimental, non-standard capabilities that the client supports.
        */
@@ -27071,7 +27982,7 @@ var init_types = __esm({
       /**
        * Present if the client supports sampling from an LLM.
        */
-      sampling: object2({
+      sampling: object({
         /**
          * Present if the client supports context inclusion via includeContext parameter.
          * If not declared, servers SHOULD only use `includeContext: "none"` (or omit it).
@@ -27089,7 +28000,7 @@ var init_types = __esm({
       /**
        * Present if the client supports listing roots.
        */
-      roots: object2({
+      roots: object({
         /**
          * Whether the client supports issuing notifications for changes to the roots list.
          */
@@ -27116,7 +28027,7 @@ var init_types = __esm({
       method: literal("initialize"),
       params: InitializeRequestParamsSchema
     });
-    ServerCapabilitiesSchema = object2({
+    ServerCapabilitiesSchema = object({
       /**
        * Experimental, non-standard capabilities that the server supports.
        */
@@ -27132,7 +28043,7 @@ var init_types = __esm({
       /**
        * Present if the server offers any prompt templates.
        */
-      prompts: object2({
+      prompts: object({
         /**
          * Whether this server supports issuing notifications for changes to the prompt list.
          */
@@ -27141,7 +28052,7 @@ var init_types = __esm({
       /**
        * Present if the server offers any resources to read.
        */
-      resources: object2({
+      resources: object({
         /**
          * Whether this server supports clients subscribing to resource updates.
          */
@@ -27154,7 +28065,7 @@ var init_types = __esm({
       /**
        * Present if the server offers any tools to call.
        */
-      tools: object2({
+      tools: object({
         /**
          * Whether this server supports issuing notifications for changes to the tool list.
          */
@@ -27192,7 +28103,7 @@ var init_types = __esm({
       method: literal("ping"),
       params: BaseRequestParamsSchema.optional()
     });
-    ProgressSchema = object2({
+    ProgressSchema = object({
       /**
        * The progress thus far. This should increase every time progress is made, even if the total is unknown.
        */
@@ -27206,7 +28117,7 @@ var init_types = __esm({
        */
       message: optional(string2())
     });
-    ProgressNotificationParamsSchema = object2({
+    ProgressNotificationParamsSchema = object({
       ...NotificationsParamsSchema.shape,
       ...ProgressSchema.shape,
       /**
@@ -27236,7 +28147,7 @@ var init_types = __esm({
       nextCursor: CursorSchema.optional()
     });
     TaskStatusSchema = _enum2(["working", "input_required", "completed", "failed", "cancelled"]);
-    TaskSchema = object2({
+    TaskSchema = object({
       taskId: string2(),
       status: TaskStatusSchema,
       /**
@@ -27293,7 +28204,7 @@ var init_types = __esm({
       })
     });
     CancelTaskResultSchema = ResultSchema.merge(TaskSchema);
-    ResourceContentsSchema = object2({
+    ResourceContentsSchema = object({
       /**
        * The URI of this resource.
        */
@@ -27329,7 +28240,7 @@ var init_types = __esm({
       blob: Base64Schema
     });
     RoleSchema = _enum2(["user", "assistant"]);
-    AnnotationsSchema = object2({
+    AnnotationsSchema = object({
       /**
        * Intended audience(s) for the resource.
        */
@@ -27341,9 +28252,9 @@ var init_types = __esm({
       /**
        * ISO 8601 timestamp for the most recent modification.
        */
-      lastModified: iso_exports2.datetime({ offset: true }).optional()
+      lastModified: iso_exports.datetime({ offset: true }).optional()
     });
-    ResourceSchema = object2({
+    ResourceSchema = object({
       ...BaseMetadataSchema.shape,
       ...IconsSchema.shape,
       /**
@@ -27376,7 +28287,7 @@ var init_types = __esm({
        */
       _meta: optional(looseObject({}))
     });
-    ResourceTemplateSchema = object2({
+    ResourceTemplateSchema = object({
       ...BaseMetadataSchema.shape,
       ...IconsSchema.shape,
       /**
@@ -27455,7 +28366,7 @@ var init_types = __esm({
       method: literal("notifications/resources/updated"),
       params: ResourceUpdatedNotificationParamsSchema
     });
-    PromptArgumentSchema = object2({
+    PromptArgumentSchema = object({
       /**
        * The name of the argument.
        */
@@ -27469,7 +28380,7 @@ var init_types = __esm({
        */
       required: optional(boolean2())
     });
-    PromptSchema = object2({
+    PromptSchema = object({
       ...BaseMetadataSchema.shape,
       ...IconsSchema.shape,
       /**
@@ -27506,7 +28417,7 @@ var init_types = __esm({
       method: literal("prompts/get"),
       params: GetPromptRequestParamsSchema
     });
-    TextContentSchema = object2({
+    TextContentSchema = object({
       type: literal("text"),
       /**
        * The text content of the message.
@@ -27522,7 +28433,7 @@ var init_types = __esm({
        */
       _meta: record(string2(), unknown()).optional()
     });
-    ImageContentSchema = object2({
+    ImageContentSchema = object({
       type: literal("image"),
       /**
        * The base64-encoded image data.
@@ -27542,7 +28453,7 @@ var init_types = __esm({
        */
       _meta: record(string2(), unknown()).optional()
     });
-    AudioContentSchema = object2({
+    AudioContentSchema = object({
       type: literal("audio"),
       /**
        * The base64-encoded audio data.
@@ -27562,7 +28473,7 @@ var init_types = __esm({
        */
       _meta: record(string2(), unknown()).optional()
     });
-    ToolUseContentSchema = object2({
+    ToolUseContentSchema = object({
       type: literal("tool_use"),
       /**
        * The name of the tool to invoke.
@@ -27585,7 +28496,7 @@ var init_types = __esm({
        */
       _meta: record(string2(), unknown()).optional()
     });
-    EmbeddedResourceSchema = object2({
+    EmbeddedResourceSchema = object({
       type: literal("resource"),
       resource: union([TextResourceContentsSchema, BlobResourceContentsSchema]),
       /**
@@ -27608,7 +28519,7 @@ var init_types = __esm({
       ResourceLinkSchema,
       EmbeddedResourceSchema
     ]);
-    PromptMessageSchema = object2({
+    PromptMessageSchema = object({
       role: RoleSchema,
       content: ContentBlockSchema
     });
@@ -27623,7 +28534,7 @@ var init_types = __esm({
       method: literal("notifications/prompts/list_changed"),
       params: NotificationsParamsSchema.optional()
     });
-    ToolAnnotationsSchema = object2({
+    ToolAnnotationsSchema = object({
       /**
        * A human-readable title for the tool.
        */
@@ -27662,7 +28573,7 @@ var init_types = __esm({
        */
       openWorldHint: boolean2().optional()
     });
-    ToolExecutionSchema = object2({
+    ToolExecutionSchema = object({
       /**
        * Indicates the tool's preference for task-augmented execution.
        * - "required": Clients MUST invoke the tool as a task
@@ -27673,7 +28584,7 @@ var init_types = __esm({
        */
       taskSupport: _enum2(["required", "optional", "forbidden"]).optional()
     });
-    ToolSchema = object2({
+    ToolSchema = object({
       ...BaseMetadataSchema.shape,
       ...IconsSchema.shape,
       /**
@@ -27684,7 +28595,7 @@ var init_types = __esm({
        * A JSON Schema 2020-12 object defining the expected parameters for the tool.
        * Must have type: 'object' at the root level per MCP spec.
        */
-      inputSchema: object2({
+      inputSchema: object({
         type: literal("object"),
         properties: record(string2(), AssertObjectSchema).optional(),
         required: array(string2()).optional()
@@ -27694,7 +28605,7 @@ var init_types = __esm({
        * returned in the structuredContent field of a CallToolResult.
        * Must have type: 'object' at the root level per MCP spec.
        */
-      outputSchema: object2({
+      outputSchema: object({
         type: literal("object"),
         properties: record(string2(), AssertObjectSchema).optional(),
         required: array(string2()).optional()
@@ -27770,7 +28681,7 @@ var init_types = __esm({
       method: literal("notifications/tools/list_changed"),
       params: NotificationsParamsSchema.optional()
     });
-    ListChangedOptionsBaseSchema = object2({
+    ListChangedOptionsBaseSchema = object({
       /**
        * If true, the list will be refreshed automatically when a list changed notification is received.
        * The callback will be called with the updated list.
@@ -27819,13 +28730,13 @@ var init_types = __esm({
       method: literal("notifications/message"),
       params: LoggingMessageNotificationParamsSchema
     });
-    ModelHintSchema = object2({
+    ModelHintSchema = object({
       /**
        * A hint for a model name.
        */
       name: string2().optional()
     });
-    ModelPreferencesSchema = object2({
+    ModelPreferencesSchema = object({
       /**
        * Optional hints to use for model selection.
        */
@@ -27843,7 +28754,7 @@ var init_types = __esm({
        */
       intelligencePriority: number2().min(0).max(1).optional()
     });
-    ToolChoiceSchema = object2({
+    ToolChoiceSchema = object({
       /**
        * Controls when tools are used:
        * - "auto": Model decides whether to use tools (default)
@@ -27852,11 +28763,11 @@ var init_types = __esm({
        */
       mode: _enum2(["auto", "required", "none"]).optional()
     });
-    ToolResultContentSchema = object2({
+    ToolResultContentSchema = object({
       type: literal("tool_result"),
       toolUseId: string2().describe("The unique identifier for the corresponding tool call."),
       content: array(ContentBlockSchema).default([]),
-      structuredContent: object2({}).loose().optional(),
+      structuredContent: object({}).loose().optional(),
       isError: boolean2().optional(),
       /**
        * See [MCP specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/47339c03c143bb4ec01a26e721a1b8fe66634ebe/docs/specification/draft/basic/index.mdx#general-fields)
@@ -27872,7 +28783,7 @@ var init_types = __esm({
       ToolUseContentSchema,
       ToolResultContentSchema
     ]);
-    SamplingMessageSchema = object2({
+    SamplingMessageSchema = object({
       role: RoleSchema,
       content: union([SamplingMessageContentBlockSchema, array(SamplingMessageContentBlockSchema)]),
       /**
@@ -27972,13 +28883,13 @@ var init_types = __esm({
        */
       content: union([SamplingMessageContentBlockSchema, array(SamplingMessageContentBlockSchema)])
     });
-    BooleanSchemaSchema = object2({
+    BooleanSchemaSchema = object({
       type: literal("boolean"),
       title: string2().optional(),
       description: string2().optional(),
       default: boolean2().optional()
     });
-    StringSchemaSchema = object2({
+    StringSchemaSchema = object({
       type: literal("string"),
       title: string2().optional(),
       description: string2().optional(),
@@ -27987,7 +28898,7 @@ var init_types = __esm({
       format: _enum2(["email", "uri", "date", "date-time"]).optional(),
       default: string2().optional()
     });
-    NumberSchemaSchema = object2({
+    NumberSchemaSchema = object({
       type: _enum2(["number", "integer"]),
       title: string2().optional(),
       description: string2().optional(),
@@ -27995,24 +28906,24 @@ var init_types = __esm({
       maximum: number2().optional(),
       default: number2().optional()
     });
-    UntitledSingleSelectEnumSchemaSchema = object2({
+    UntitledSingleSelectEnumSchemaSchema = object({
       type: literal("string"),
       title: string2().optional(),
       description: string2().optional(),
       enum: array(string2()),
       default: string2().optional()
     });
-    TitledSingleSelectEnumSchemaSchema = object2({
+    TitledSingleSelectEnumSchemaSchema = object({
       type: literal("string"),
       title: string2().optional(),
       description: string2().optional(),
-      oneOf: array(object2({
+      oneOf: array(object({
         const: string2(),
         title: string2()
       })),
       default: string2().optional()
     });
-    LegacyTitledEnumSchemaSchema = object2({
+    LegacyTitledEnumSchemaSchema = object({
       type: literal("string"),
       title: string2().optional(),
       description: string2().optional(),
@@ -28021,26 +28932,26 @@ var init_types = __esm({
       default: string2().optional()
     });
     SingleSelectEnumSchemaSchema = union([UntitledSingleSelectEnumSchemaSchema, TitledSingleSelectEnumSchemaSchema]);
-    UntitledMultiSelectEnumSchemaSchema = object2({
+    UntitledMultiSelectEnumSchemaSchema = object({
       type: literal("array"),
       title: string2().optional(),
       description: string2().optional(),
       minItems: number2().optional(),
       maxItems: number2().optional(),
-      items: object2({
+      items: object({
         type: literal("string"),
         enum: array(string2())
       }),
       default: array(string2()).optional()
     });
-    TitledMultiSelectEnumSchemaSchema = object2({
+    TitledMultiSelectEnumSchemaSchema = object({
       type: literal("array"),
       title: string2().optional(),
       description: string2().optional(),
       minItems: number2().optional(),
       maxItems: number2().optional(),
-      items: object2({
-        anyOf: array(object2({
+      items: object({
+        anyOf: array(object({
           const: string2(),
           title: string2()
         }))
@@ -28065,7 +28976,7 @@ var init_types = __esm({
        * A restricted subset of JSON Schema.
        * Only top-level properties are allowed, without nesting.
        */
-      requestedSchema: object2({
+      requestedSchema: object({
         type: literal("object"),
         properties: record(string2(), PrimitiveSchemaDefinitionSchema),
         required: array(string2()).optional()
@@ -28121,14 +29032,14 @@ var init_types = __esm({
        */
       content: preprocess((val) => val === null ? void 0 : val, record(string2(), union([string2(), number2(), boolean2(), array(string2())])).optional())
     });
-    ResourceTemplateReferenceSchema = object2({
+    ResourceTemplateReferenceSchema = object({
       type: literal("ref/resource"),
       /**
        * The URI or URI template of the resource.
        */
       uri: string2()
     });
-    PromptReferenceSchema = object2({
+    PromptReferenceSchema = object({
       type: literal("ref/prompt"),
       /**
        * The name of the prompt or prompt template
@@ -28140,7 +29051,7 @@ var init_types = __esm({
       /**
        * The argument's information
        */
-      argument: object2({
+      argument: object({
         /**
          * The name of the argument
          */
@@ -28150,7 +29061,7 @@ var init_types = __esm({
          */
         value: string2()
       }),
-      context: object2({
+      context: object({
         /**
          * Previously-resolved variables in a URI template or prompt.
          */
@@ -28177,7 +29088,7 @@ var init_types = __esm({
         hasMore: optional(boolean2())
       })
     });
-    RootSchema = object2({
+    RootSchema = object({
       /**
        * The URI identifying the root. This *must* start with file:// for now.
        */
@@ -28679,7 +29590,7 @@ function getMethodLiteral(schema) {
   return value;
 }
 function parseWithCompat(schema, data) {
-  const result = safeParse2(schema, data);
+  const result = safeParse3(schema, data);
   if (!result.success) {
     throw result.error;
   }
@@ -28693,7 +29604,7 @@ var init_zod_json_schema_compat = __esm({
 });
 
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/protocol.js
-function isPlainObject5(value) {
+function isPlainObject6(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 function mergeCapabilities(base, additional) {
@@ -28704,7 +29615,7 @@ function mergeCapabilities(base, additional) {
     if (addValue === void 0)
       continue;
     const baseValue = result[k2];
-    if (isPlainObject5(baseValue) && isPlainObject5(addValue)) {
+    if (isPlainObject6(baseValue) && isPlainObject6(addValue)) {
       result[k2] = { ...baseValue, ...addValue };
     } else {
       result[k2] = addValue;
@@ -29309,7 +30220,7 @@ var init_protocol = __esm({
               return reject(response);
             }
             try {
-              const parseResult = safeParse2(resultSchema, response.result);
+              const parseResult = safeParse3(resultSchema, response.result);
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
@@ -36934,7 +37845,7 @@ var init_client2 = __esm({
         const method = methodValue;
         if (method === "elicitation/create") {
           const wrappedHandler = async (request, extra) => {
-            const validatedRequest = safeParse2(ElicitRequestSchema, request);
+            const validatedRequest = safeParse3(ElicitRequestSchema, request);
             if (!validatedRequest.success) {
               const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
               throw new McpError(ErrorCode.InvalidParams, `Invalid elicitation request: ${errorMessage}`);
@@ -36950,14 +37861,14 @@ var init_client2 = __esm({
             }
             const result = await Promise.resolve(handler(request, extra));
             if (params.task) {
-              const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
+              const taskValidationResult = safeParse3(CreateTaskResultSchema, result);
               if (!taskValidationResult.success) {
                 const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
                 throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
               }
               return taskValidationResult.data;
             }
-            const validationResult = safeParse2(ElicitResultSchema, result);
+            const validationResult = safeParse3(ElicitResultSchema, result);
             if (!validationResult.success) {
               const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
               throw new McpError(ErrorCode.InvalidParams, `Invalid elicitation result: ${errorMessage}`);
@@ -36978,7 +37889,7 @@ var init_client2 = __esm({
         }
         if (method === "sampling/createMessage") {
           const wrappedHandler = async (request, extra) => {
-            const validatedRequest = safeParse2(CreateMessageRequestSchema, request);
+            const validatedRequest = safeParse3(CreateMessageRequestSchema, request);
             if (!validatedRequest.success) {
               const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
               throw new McpError(ErrorCode.InvalidParams, `Invalid sampling request: ${errorMessage}`);
@@ -36986,7 +37897,7 @@ var init_client2 = __esm({
             const { params } = validatedRequest.data;
             const result = await Promise.resolve(handler(request, extra));
             if (params.task) {
-              const taskValidationResult = safeParse2(CreateTaskResultSchema, result);
+              const taskValidationResult = safeParse3(CreateTaskResultSchema, result);
               if (!taskValidationResult.success) {
                 const errorMessage = taskValidationResult.error instanceof Error ? taskValidationResult.error.message : String(taskValidationResult.error);
                 throw new McpError(ErrorCode.InvalidParams, `Invalid task creation result: ${errorMessage}`);
@@ -36995,7 +37906,7 @@ var init_client2 = __esm({
             }
             const hasTools = params.tools || params.toolChoice;
             const resultSchema = hasTools ? CreateMessageResultWithToolsSchema : CreateMessageResultSchema;
-            const validationResult = safeParse2(resultSchema, result);
+            const validationResult = safeParse3(resultSchema, result);
             if (!validationResult.success) {
               const errorMessage = validationResult.error instanceof Error ? validationResult.error.message : String(validationResult.error);
               throw new McpError(ErrorCode.InvalidParams, `Invalid sampling result: ${errorMessage}`);
@@ -38196,28 +39107,28 @@ var init_auth = __esm({
       op_tos_uri: SafeUrlSchema.optional(),
       client_id_metadata_document_supported: boolean2().optional()
     });
-    OpenIdProviderDiscoveryMetadataSchema = object2({
+    OpenIdProviderDiscoveryMetadataSchema = object({
       ...OpenIdProviderMetadataSchema.shape,
       ...OAuthMetadataSchema.pick({
         code_challenge_methods_supported: true
       }).shape
     });
-    OAuthTokensSchema = object2({
+    OAuthTokensSchema = object({
       access_token: string2(),
       id_token: string2().optional(),
       // Optional for OAuth 2.1, but necessary in OpenID Connect
       token_type: string2(),
-      expires_in: coerce_exports2.number().optional(),
+      expires_in: coerce_exports.number().optional(),
       scope: string2().optional(),
       refresh_token: string2().optional()
     }).strip();
-    OAuthErrorResponseSchema = object2({
+    OAuthErrorResponseSchema = object({
       error: string2(),
       error_description: string2().optional(),
       error_uri: string2().optional()
     });
     OptionalSafeUrlSchema = SafeUrlSchema.optional().or(literal("").transform(() => void 0));
-    OAuthClientMetadataSchema = object2({
+    OAuthClientMetadataSchema = object({
       redirect_uris: array(SafeUrlSchema),
       token_endpoint_auth_method: string2().optional(),
       grant_types: array(string2()).optional(),
@@ -38235,18 +39146,18 @@ var init_auth = __esm({
       software_version: string2().optional(),
       software_statement: string2().optional()
     }).strip();
-    OAuthClientInformationSchema = object2({
+    OAuthClientInformationSchema = object({
       client_id: string2(),
       client_secret: string2().optional(),
       client_id_issued_at: number2().optional(),
       client_secret_expires_at: number2().optional()
     }).strip();
     OAuthClientInformationFullSchema = OAuthClientMetadataSchema.merge(OAuthClientInformationSchema);
-    OAuthClientRegistrationErrorSchema = object2({
+    OAuthClientRegistrationErrorSchema = object({
       error: string2(),
       error_description: string2().optional()
     }).strip();
-    OAuthTokenRevocationRequestSchema = object2({
+    OAuthTokenRevocationRequestSchema = object({
       token: string2(),
       token_type_hint: string2().optional()
     }).strip();
@@ -39546,398 +40457,6 @@ var init_streamableHttp = __esm({
   }
 });
 
-// node_modules/zod/index.js
-var init_zod = __esm({
-  "node_modules/zod/index.js"() {
-    init_external2();
-    init_external2();
-  }
-});
-
-// schemas/v1.mjs
-import { createHash as createHash2 } from "node:crypto";
-import { readFileSync as readFileSync2 } from "node:fs";
-import { fileURLToPath } from "node:url";
-function canonicalize2(value) {
-  if (Array.isArray(value)) return value.map(canonicalize2);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize2(value[key])]));
-  }
-  return value;
-}
-function canonicalJson2(value) {
-  return JSON.stringify(canonicalize2(value));
-}
-function snapshotHash(snapshot) {
-  const { canonicalSha256: _ignored, ...payload } = snapshot;
-  return createHash2("sha256").update(canonicalJson2(payload)).digest("hex");
-}
-function readProfileFile(filename) {
-  return JSON.parse(readFileSync2(new URL(`../profiles/${filename}`, import.meta.url), "utf8"));
-}
-function loadCollectionBudgets() {
-  return CollectionBudgetsSchema.parse(readProfileFile("collection-budgets.v1.json"));
-}
-function assertAllowedPublicAction(profile, action) {
-  const allowlist = PublicReadAllowlistSchema.parse(profile);
-  const requested = ActionTupleSchema.extend({ sourceSnapshotHash: Sha256Schema }).strict().parse(action);
-  if (requested.risk !== "read") {
-    throw new Error("PUBLIC_ACTION_NOT_ALLOWED: risk must be read");
-  }
-  if (requested.sourceSnapshotHash !== allowlist.sourceSnapshotHash) {
-    throw new Error("PUBLIC_ACTION_NOT_ALLOWED: source snapshot hash differs");
-  }
-  const allowed = allowlist.actions.some((entry) => entry.actionId === requested.actionId && entry.method === requested.method && entry.normalizedPath === requested.normalizedPath && entry.category === requested.category && entry.risk === requested.risk);
-  if (!allowed) throw new Error("PUBLIC_ACTION_NOT_ALLOWED: action tuple differs");
-  return true;
-}
-function loadPublicCatalogSnapshot() {
-  const snapshot = PublicCatalogSnapshotSchema.parse(readProfileFile("public-catalog-snapshot.v1.json"));
-  if (snapshotHash(snapshot) !== snapshot.canonicalSha256) {
-    throw new Error("CATALOG_SNAPSHOT_HASH_MISMATCH");
-  }
-  return snapshot;
-}
-function loadPublicReadAllowlist() {
-  return PublicReadAllowlistSchema.parse(readProfileFile("public-read-allowlist.v1.json"));
-}
-var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, MetricEdgeSchema, MetricContractsSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, schemaSourcePath;
-var init_v1 = __esm({
-  "schemas/v1.mjs"() {
-    init_zod();
-    SCHEMA_VERSION2 = "1.0.0";
-    Sha256Schema = external_exports.string().regex(/^[a-f0-9]{64}$/);
-    PseudonymousSubjectRefSchema = external_exports.string().regex(/^psn_[a-f0-9]{16,64}$/);
-    OpaqueObjectRefSchema = external_exports.string().regex(/^obj_[a-f0-9]{16,64}$/);
-    EvidenceRefSchema = external_exports.string().regex(/^ev_[a-f0-9]{16,64}$/);
-    ActorRefSchema = external_exports.string().regex(/^actor_[a-f0-9]{16,64}$/);
-    JourneyInstanceIdSchema = external_exports.string().regex(/^journey_[a-z][a-z0-9_]{2,127}$/);
-    NonEmptyRecordSchema = external_exports.record(external_exports.string(), external_exports.unknown()).refine((value) => Object.keys(value).length > 0, "must not be empty");
-    JsonRecordSchema = external_exports.record(external_exports.string(), external_exports.unknown());
-    TargetSchema = external_exports.object({
-      targetKind: external_exports.literal("location"),
-      operatingProfile: external_exports.enum(["client", "grom_internal"]),
-      locationId: external_exports.string().min(1),
-      companyId: external_exports.string().min(1).optional()
-    }).strict();
-    JourneySchema = external_exports.object({
-      journeyId: external_exports.string().min(1),
-      journeyInstanceId: JourneyInstanceIdSchema,
-      entryRule: external_exports.string().min(1),
-      denominator: external_exports.string().min(1),
-      outcomes: external_exports.array(external_exports.string().min(1)).min(1)
-    }).strict();
-    CoverageProfileSchema = external_exports.object({
-      profileId: external_exports.enum(["client", "grom_internal"]),
-      version: external_exports.literal(SCHEMA_VERSION2),
-      targetKind: external_exports.literal("location"),
-      excludedCapabilities: external_exports.array(external_exports.string().min(1)),
-      journeys: external_exports.array(JourneySchema).min(1)
-    }).strict().superRefine((profile, ctx) => {
-      const ids = profile.journeys.map(({ journeyId }) => journeyId);
-      if (new Set(ids).size !== ids.length) {
-        ctx.addIssue({ code: "custom", message: "journey IDs must be unique" });
-      }
-      const instanceIds = profile.journeys.map(({ journeyInstanceId }) => journeyInstanceId);
-      if (new Set(instanceIds).size !== instanceIds.length) {
-        ctx.addIssue({ code: "custom", message: "journey instance IDs must be unique" });
-      }
-    });
-    RunManifestSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      runId: external_exports.string().min(1),
-      target: TargetSchema,
-      profileId: external_exports.enum(["client", "grom_internal"]),
-      startedAt: external_exports.string().min(1),
-      status: external_exports.enum(["running", "checkpointed", "complete_partial", "complete_full", "quarantined"]),
-      coverageProfileHash: Sha256Schema,
-      metricContractsHash: Sha256Schema,
-      publicCatalogSnapshotHash: Sha256Schema
-    }).strict();
-    EvidenceRecordSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      evidenceRef: EvidenceRefSchema,
-      source: external_exports.enum(["context", "public_ghl", "internal_ghl", "onboarding_portal"]),
-      capturedAt: external_exports.string().min(1),
-      payloadHash: Sha256Schema,
-      classification: external_exports.enum(["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"]),
-      objectRefs: external_exports.array(external_exports.object({
-        objectType: external_exports.string().min(1),
-        objectId: OpaqueObjectRefSchema
-      }).strict())
-    }).strict();
-    FindingSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      findingId: external_exports.string().min(1),
-      state: external_exports.enum(["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"]),
-      severity: external_exports.enum(["critical", "high", "medium", "low"]),
-      journeyId: external_exports.string().min(1),
-      edgeId: external_exports.string().min(1),
-      summary: external_exports.string().min(1),
-      evidenceRefs: external_exports.array(EvidenceRefSchema).min(1)
-    }).strict();
-    ExactStateSchema = external_exports.object({
-      current: external_exports.record(external_exports.string(), external_exports.unknown()),
-      proposed: external_exports.record(external_exports.string(), external_exports.unknown())
-    }).strict();
-    CapturedObjectSchema = external_exports.object({
-      objectType: external_exports.string().min(1),
-      objectId: OpaqueObjectRefSchema,
-      capturedVersion: external_exports.union([external_exports.string().min(1), external_exports.number()]),
-      capturedHash: Sha256Schema
-    }).strict();
-    EvaluationCaseSchema = external_exports.object({
-      caseId: external_exports.string().min(1),
-      version: external_exports.string().min(1),
-      expected: external_exports.string().min(1)
-    }).strict();
-    ChangeSetSchema = external_exports.discriminatedUnion("solutionType", [
-      ExactStateSchema.extend({
-        solutionType: external_exports.literal("workflow_logic"),
-        workflowId: OpaqueObjectRefSchema,
-        capturedVersion: external_exports.union([external_exports.string().min(1), external_exports.number()]),
-        capturedHash: Sha256Schema,
-        currentGraph: NonEmptyRecordSchema,
-        proposedGraph: NonEmptyRecordSchema,
-        triggers: external_exports.array(external_exports.string().min(1)).min(1),
-        reentry: external_exports.string().min(1),
-        branches: external_exports.array(NonEmptyRecordSchema),
-        defaultBranch: external_exports.string().min(1),
-        exits: external_exports.array(external_exports.string()).min(1),
-        waits: external_exports.array(NonEmptyRecordSchema),
-        errorBehavior: external_exports.string().min(1),
-        references: external_exports.object({
-          fields: external_exports.array(external_exports.string().min(1)),
-          tags: external_exports.array(external_exports.string().min(1)),
-          calendars: external_exports.array(OpaqueObjectRefSchema),
-          assignments: external_exports.array(external_exports.string().min(1)),
-          agents: external_exports.array(OpaqueObjectRefSchema)
-        }).strict(),
-        existingEnrollmentHandling: external_exports.string().min(1)
-      }).strict(),
-      ExactStateSchema.extend({
-        solutionType: external_exports.literal("copy"),
-        channel: external_exports.string().min(1),
-        audience: external_exports.string().min(1),
-        locale: external_exports.string().min(1),
-        finalText: external_exports.string().min(1),
-        mergeFields: external_exports.array(external_exports.string()),
-        fallbacks: external_exports.record(external_exports.string(), external_exports.string()),
-        timing: external_exports.string().min(1),
-        stopConditions: external_exports.array(external_exports.string()).min(1),
-        consentCompliance: external_exports.string().min(1),
-        ownership: external_exports.enum(["fixed_copy", "ai_generated"])
-      }).strict(),
-      ExactStateSchema.extend({
-        solutionType: external_exports.literal("wait_timing"),
-        anchor: external_exports.string().min(1),
-        duration: external_exports.number().nonnegative(),
-        unit: external_exports.string().min(1),
-        timezone: external_exports.string().min(1),
-        businessCalendar: OpaqueObjectRefSchema,
-        exits: external_exports.object({
-          response: external_exports.string().min(1),
-          booking: external_exports.string().min(1),
-          optOut: external_exports.string().min(1),
-          stage: external_exports.string().min(1)
-        }).strict(),
-        collisionRisk: external_exports.string().min(1),
-        burstSendRisk: external_exports.string().min(1)
-      }).strict(),
-      ExactStateSchema.extend({
-        solutionType: external_exports.enum(["conversation_ai", "voice_ai"]),
-        agentId: OpaqueObjectRefSchema,
-        capturedVersion: external_exports.union([external_exports.string().min(1), external_exports.number()]),
-        capturedHash: Sha256Schema,
-        promptChanges: external_exports.string().min(1),
-        configurationChanges: NonEmptyRecordSchema,
-        actionChanges: external_exports.array(external_exports.string().min(1)),
-        knowledgeChanges: external_exports.array(external_exports.string().min(1)),
-        routingChanges: external_exports.array(external_exports.string().min(1)),
-        handoffChanges: external_exports.array(external_exports.string().min(1)),
-        allowedTools: external_exports.array(external_exports.string().min(1)),
-        agentGuardrails: external_exports.array(external_exports.string().min(1)).min(1),
-        prohibitedBehavior: external_exports.array(external_exports.string().min(1)).min(1),
-        escalation: external_exports.array(external_exports.string().min(1)).min(1),
-        evaluationCases: external_exports.array(EvaluationCaseSchema).min(1),
-        canaryScope: external_exports.string().min(1)
-      }).strict(),
-      ExactStateSchema.extend({
-        solutionType: external_exports.literal("operating_process"),
-        processOwner: ActorRefSchema,
-        raci: external_exports.record(external_exports.string(), external_exports.string()),
-        action: external_exports.string().min(1),
-        sla: external_exports.string().min(1),
-        trigger: external_exports.string().min(1),
-        completionEvidence: external_exports.array(external_exports.string()).min(1),
-        staffFields: external_exports.array(external_exports.string().min(1)),
-        staffStages: external_exports.array(external_exports.string().min(1)),
-        escalation: external_exports.array(external_exports.string()).min(1),
-        training: external_exports.array(external_exports.string().min(1)).min(1),
-        auditTrail: external_exports.array(external_exports.string().min(1)).min(1),
-        complianceMeasurement: external_exports.array(external_exports.string().min(1)).min(1)
-      }).strict()
-    ]);
-    ProposalSchema = external_exports.object({
-      mode: external_exports.literal("PROPOSAL_ONLY"),
-      executable: external_exports.literal(false),
-      approvalRequired: external_exports.literal(true),
-      solutionId: external_exports.string().min(1),
-      findingId: external_exports.string().min(1),
-      findingFingerprint: external_exports.string().min(1),
-      packHash: Sha256Schema,
-      objectRefs: external_exports.array(CapturedObjectSchema).min(1),
-      changeSet: ChangeSetSchema,
-      prerequisites: external_exports.array(external_exports.string().min(1)),
-      dependencies: external_exports.array(OpaqueObjectRefSchema),
-      blastRadius: external_exports.string().min(1),
-      owner: ActorRefSchema,
-      acceptanceTests: external_exports.array(external_exports.string().min(1)).min(1),
-      monitoring: external_exports.array(external_exports.string()).min(1),
-      rollout: NonEmptyRecordSchema,
-      rollback: NonEmptyRecordSchema,
-      guardrails: external_exports.array(external_exports.string().min(1)).min(1),
-      expectedResult: external_exports.object({
-        lower: external_exports.number().nullable(),
-        upper: external_exports.number().nullable(),
-        unit: external_exports.string().min(1),
-        basis: external_exports.enum(["MEASURED", "BOUNDED", "INFERRED", "UNMEASURED"])
-      }).strict(),
-      evidenceRefs: external_exports.array(EvidenceRefSchema).min(1),
-      evidenceCutoff: external_exports.string().datetime()
-    }).strict();
-    ConversationSampleSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      seed: external_exports.string().min(1),
-      universeCount: external_exports.number().int().nonnegative(),
-      selections: external_exports.array(external_exports.object({
-        subjectRef: PseudonymousSubjectRefSchema,
-        stratum: external_exports.string().min(1),
-        inclusionProbability: external_exports.number().positive().max(1),
-        evidenceRefs: external_exports.array(EvidenceRefSchema),
-        scores: external_exports.record(external_exports.string(), external_exports.number()).optional()
-      }).strict())
-    }).strict();
-    ReceiptSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      receiptId: external_exports.string().min(1),
-      proposalHash: Sha256Schema,
-      approvedAt: external_exports.string().min(1),
-      approvedBy: ActorRefSchema,
-      approvalScope: external_exports.array(external_exports.string().min(1)).min(1),
-      executable: external_exports.literal(false)
-    }).strict();
-    MetricEdgeSchema = external_exports.object({
-      edgeId: external_exports.string().min(1),
-      journeyId: external_exports.string().min(1),
-      journeyInstanceId: JourneyInstanceIdSchema,
-      fromStage: external_exports.string().min(1),
-      toStage: external_exports.string().min(1),
-      eligibilityRule: JsonRecordSchema,
-      fromEventFields: external_exports.array(external_exports.string()),
-      toEventFields: external_exports.array(external_exports.string()),
-      allowedLag: external_exports.object({
-        amount: external_exports.number().nonnegative(),
-        unit: external_exports.string().min(1)
-      }).strict(),
-      maturityRule: JsonRecordSchema,
-      dispositions: external_exports.array(external_exports.string().min(1)).min(1),
-      reentryRule: external_exports.enum(["new_journey_instance", "same_journey_instance"]),
-      outcomeRule: JsonRecordSchema,
-      required: external_exports.boolean(),
-      nativeMapping: external_exports.enum(["MAPPED", "UNKNOWN"])
-    }).strict();
-    MetricContractsSchema = external_exports.object({
-      profileId: external_exports.enum(["client", "grom_internal"]),
-      version: external_exports.literal(SCHEMA_VERSION2),
-      edges: external_exports.array(MetricEdgeSchema).min(1)
-    }).strict().superRefine((contracts, ctx) => {
-      const ids = contracts.edges.map(({ edgeId }) => edgeId);
-      if (new Set(ids).size !== ids.length) {
-        ctx.addIssue({ code: "custom", message: "edge IDs must be unique" });
-      }
-    });
-    ActionTupleSchema = external_exports.object({
-      actionId: external_exports.string().min(1),
-      method: external_exports.string().min(1),
-      normalizedPath: external_exports.string().min(1),
-      category: external_exports.string().min(1),
-      risk: external_exports.string().min(1)
-    }).strict();
-    ReadActionTupleSchema = ActionTupleSchema.extend({
-      risk: external_exports.literal("read")
-    }).strict();
-    ApprovalSchema = external_exports.object({
-      provenance: external_exports.string().min(1),
-      reviewedAt: external_exports.string().min(1),
-      reviewedBy: external_exports.string().min(1)
-    }).strict();
-    CatalogCandidateSchema = ActionTupleSchema.extend({
-      approvedSemanticRead: external_exports.boolean(),
-      approval: ApprovalSchema.optional()
-    }).strict().superRefine((candidate, ctx) => {
-      if (candidate.approvedSemanticRead && !candidate.approval) {
-        ctx.addIssue({ code: "custom", message: "approved actions require approval provenance" });
-      }
-      if (candidate.approvedSemanticRead && candidate.risk !== "read") {
-        ctx.addIssue({ code: "custom", message: "approved semantic reads must have read risk" });
-      }
-    });
-    PublicCatalogSnapshotSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      catalogRevision: external_exports.string().min(1),
-      capturedAt: external_exports.string().min(1),
-      sourceServer: external_exports.object({
-        name: external_exports.string().min(1),
-        identity: external_exports.string().min(1),
-        version: external_exports.string().min(1)
-      }).strict(),
-      candidates: external_exports.array(CatalogCandidateSchema),
-      canonicalSha256: Sha256Schema
-    }).strict().superRefine((snapshot, ctx) => {
-      const ids = snapshot.candidates.map(({ actionId }) => actionId);
-      if (new Set(ids).size !== ids.length) {
-        ctx.addIssue({ code: "custom", message: "catalog action IDs must be unique" });
-      }
-    });
-    PublicReadAllowlistSchema = external_exports.object({
-      schemaVersion: external_exports.literal(SCHEMA_VERSION2),
-      sourceCatalogRevision: external_exports.string().min(1),
-      sourceSnapshotHash: Sha256Schema,
-      sourceServerIdentity: external_exports.string().min(1),
-      actions: external_exports.array(ReadActionTupleSchema)
-    }).strict().superRefine((allowlist, ctx) => {
-      const ids = allowlist.actions.map(({ actionId }) => actionId);
-      if (new Set(ids).size !== ids.length) {
-        ctx.addIssue({ code: "custom", message: "allowlist action IDs must be unique" });
-      }
-    });
-    BudgetSchema = external_exports.object({
-      maximumPages: external_exports.number().int().positive(),
-      maximumRecords: external_exports.number().int().positive(),
-      maximumResponseBytes: external_exports.number().int().positive(),
-      requestTimeoutMs: external_exports.number().int().positive(),
-      retryCount: external_exports.number().int().nonnegative(),
-      maximumTotalRetryDelayMs: external_exports.number().int().nonnegative(),
-      wallClockMs: external_exports.number().int().positive()
-    }).strict();
-    CollectionBudgetsSchema = external_exports.object({
-      version: external_exports.literal(SCHEMA_VERSION2),
-      exhaustionPolicy: external_exports.literal("checkpoint_scope_incomplete"),
-      capabilities: external_exports.record(external_exports.string().min(1), BudgetSchema)
-    }).strict();
-    PROFILE_FILES = Object.freeze({
-      client: "client.v1.json",
-      grom_internal: "grom-internal.v1.json"
-    });
-    METRIC_FILES = Object.freeze({
-      client: "client-metrics.v1.json",
-      grom_internal: "grom-internal-metrics.v1.json"
-    });
-    schemaSourcePath = fileURLToPath(import.meta.url);
-  }
-});
-
 // lib/adapters/trusted-public-policy.mjs
 function deepFreeze4(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -39978,14 +40497,14 @@ var init_trusted_public_policy = __esm({
 });
 
 // lib/adapters/mcp-transport.mjs
-function isPlainObject6(value) {
+function isPlainObject7(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function validateCredentialRef(reference) {
   if (reference === null) return null;
-  if (!isPlainObject6(reference)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject7(reference)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(reference).sort();
   if (reference.kind === "environment" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof reference.name === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(reference.name)) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (reference.kind === "secret-store" && keys.length === 4 && keys[0] === "kind" && keys[1] === "provenance" && keys[2] === "provider" && keys[3] === "reference" && typeof reference.provider === "string" && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider) && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance && typeof reference.reference === "string" && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference) && !RAW_CREDENTIAL_SHAPE.test(reference.reference) && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
@@ -39999,7 +40518,7 @@ function validateCredentialRef(reference) {
   throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
 }
 function validateProviderConfig(config2) {
-  if (!isPlainObject6(config2)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject7(config2)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(config2).sort();
   if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
   return Object.freeze({
@@ -40040,7 +40559,7 @@ function collectLocationIndicators2(value, indicators = [], stack = /* @__PURE__
   }
 }
 function validateTransport(transport) {
-  if (!isPlainObject6(transport)) throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  if (!isPlainObject7(transport)) throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).some((key) => !["connect", "fetch", "kind", "url"].includes(key))) {
       throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
@@ -40164,10 +40683,10 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     publicCatalogSnapshotHash: trustedPolicy.snapshotHash,
     publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
-      if (!isPlainObject6(request) || !ALLOWED_TOOLS.has(request.name)) {
+      if (!isPlainObject7(request) || !ALLOWED_TOOLS.has(request.name)) {
         throw codedError6("TOOL_NOT_AVAILABLE");
       }
-      if (!isPlainObject6(request.arguments) || containsForbiddenArgument(request.arguments)) {
+      if (!isPlainObject7(request.arguments) || containsForbiddenArgument(request.arguments)) {
         throw codedError6("MUTATION_ARGUMENT_NOT_ALLOWED");
       }
       const policy = request.arguments.policy;
@@ -40177,7 +40696,7 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
         throw codedError6("ACTION_NOT_ALLOWED");
       }
       if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError6("ACTION_NOT_ALLOWED");
-      if (!isPlainObject6(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
+      if (!isPlainObject7(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
         (locationId) => locationId !== config2.expectedLocationId
       )) throw codedError6("LOCATION_MISMATCH");
       try {
@@ -40232,16 +40751,16 @@ var init_mcp_transport = __esm({
 });
 
 // lib/adapters/public-ghl.mjs
-function isPlainObject7(value) {
+function isPlainObject8(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function parseToolResult(response) {
   let value = response;
-  if (isPlainObject7(response) && isPlainObject7(response.structuredContent)) {
+  if (isPlainObject8(response) && isPlainObject8(response.structuredContent)) {
     value = response.structuredContent;
-  } else if (isPlainObject7(response) && Array.isArray(response.content)) {
+  } else if (isPlainObject8(response) && Array.isArray(response.content)) {
     const text = response.content.find((entry) => entry?.type === "text")?.text;
     if (typeof text !== "string") throw codedError6("PUBLIC_RESPONSE_INVALID");
     try {
@@ -40250,7 +40769,7 @@ function parseToolResult(response) {
       throw codedError6("PUBLIC_RESPONSE_INVALID");
     }
   }
-  if (!isPlainObject7(value) || !Array.isArray(value.items) || !isPlainObject7(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError6("PUBLIC_RESPONSE_INVALID");
+  if (!isPlainObject8(value) || !Array.isArray(value.items) || !isPlainObject8(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError6("PUBLIC_RESPONSE_INVALID");
   return cloneJson(value, "PUBLIC_RESPONSE_INVALID");
 }
 function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalSignal) {
@@ -40304,7 +40823,7 @@ function startTime(runtime) {
   return typeof runtime.now === "function" ? runtime.now() : Date.now();
 }
 function normalizeCapability(capability, allowlist, allowlistHash, client) {
-  if (!isPlainObject7(capability) || typeof capability.actionId !== "string") {
+  if (!isPlainObject8(capability) || typeof capability.actionId !== "string") {
     throw codedError6("ACTION_NOT_ALLOWED");
   }
   const listed = allowlist.actions.find(({ actionId }) => actionId === capability.actionId);
@@ -40381,7 +40900,7 @@ function normalizeRawPageSink(rawPageSink) {
   });
 }
 function validateSealedPage(sealed, payloadHash) {
-  if (!isPlainObject7(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError6("RAW_PAGE_SEAL_FAILED");
+  if (!isPlainObject8(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError6("RAW_PAGE_SEAL_FAILED");
   return Object.freeze({
     opaqueRef: sealed.opaqueRef,
     payloadHash: sealed.payloadHash
@@ -40416,7 +40935,7 @@ function validateCheckpointArtifact(artifact, index, expectedCursor, reportedCou
     "reportedCount",
     "responseBytes"
   ];
-  if (!isPlainObject7(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject8(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
   return artifact.nextCursor;
 }
 function validateResumeCheckpoint(checkpoint, {
@@ -40445,7 +40964,7 @@ function validateResumeCheckpoint(checkpoint, {
     "scopeHash",
     "source"
   ];
-  if (!isPlainObject7(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject8(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
   let appliedWindow;
   try {
     appliedWindow = validateCollectionWindow(
@@ -40981,17 +41500,17 @@ function acceptFrozenInputs(returned, keys) {
   if (!Object.hasOwn(returned, "kind") || returned.kind !== FROZEN_INPUT_SEAL_KIND) {
     return { frozenInputs: returned, provenance: null };
   }
-  const fail = () => {
+  const fail2 = () => {
     throw codedError7("AUDIT_PREFLIGHT_FAILED_FROZEN_INPUT_SEAL");
   };
   const present = Object.keys(returned).sort();
-  if (present.length !== FROZEN_INPUT_SEAL_FIELDS.length) fail();
-  if (present.some((key, index) => key !== FROZEN_INPUT_SEAL_FIELDS[index])) fail();
+  if (present.length !== FROZEN_INPUT_SEAL_FIELDS.length) fail2();
+  if (present.some((key, index) => key !== FROZEN_INPUT_SEAL_FIELDS[index])) fail2();
   const inner = returned.frozenInputs;
-  if (!inner || typeof inner !== "object" || Array.isArray(inner)) fail();
+  if (!inner || typeof inner !== "object" || Array.isArray(inner)) fail2();
   const anchorDigest = frozenInputAnchorDigest(inner);
-  if (typeof anchorDigest !== "string" || anchorDigest.length === 0) fail();
-  if (!frozenInputMacMatches(frozenInputSealMac(anchorDigest, keys), returned.mac)) fail();
+  if (typeof anchorDigest !== "string" || anchorDigest.length === 0) fail2();
+  if (!frozenInputMacMatches(frozenInputSealMac(anchorDigest, keys), returned.mac)) fail2();
   return {
     frozenInputs: inner,
     // Bound to the anchors it authenticated. A provenance minted for one anchor block can never
@@ -42804,7 +43323,7 @@ import {
 function codedError10(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject8(value) {
+function isPlainObject9(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -42832,7 +43351,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync5(descriptor, "utf8"));
-    if (!isPlainObject8(parsed)) throw new Error();
+    if (!isPlainObject9(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError10(code);
@@ -42841,7 +43360,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject8(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject8(config2.frozenInputs) || !isPlainObject8(config2.context) || !isPlainObject8(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject9(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject9(config2.frozenInputs) || !isPlainObject9(config2.context) || !isPlainObject9(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -42849,7 +43368,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject8(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject8(rail.capabilityProofIndex) || !isPlainObject8(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject8(transport.responses) || !isPlainObject8(transport.toolsList))) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject9(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject9(rail.capabilityProofIndex) || !isPlainObject9(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject9(transport.responses) || !isPlainObject9(transport.toolsList))) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -42876,13 +43395,13 @@ function sealedDigestSet(frozenInputs, sealedList) {
   );
 }
 function assertSealedRailIdentities(rail, frozenInputs) {
-  const fail = () => {
+  const fail2 = () => {
     throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject8(frozenInputs)) fail();
+  if (!isPlainObject9(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
-  if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail();
-  if (rail.toolProfileHash !== sealedProfile) fail();
+  if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
+  if (rail.toolProfileHash !== sealedProfile) fail2();
   const manifests = sealedDigestSet(frozenInputs, "capabilityManifestHashes");
   const proofDigests = /* @__PURE__ */ new Set([
     ...sealedDigestSet(frozenInputs, "capabilityAttestationHashes"),
@@ -42894,12 +43413,12 @@ function assertSealedRailIdentities(rail, frozenInputs) {
     rail.capabilityManifestHash,
     rail.bundleHash
   ];
-  if (new Set(identities).size !== identities.length) fail();
+  if (new Set(identities).size !== identities.length) fail2();
   for (const identity of identities) {
-    if (proofDigests.has(identity)) fail();
+    if (proofDigests.has(identity)) fail2();
   }
   for (const identity of [rail.capabilityManifestHash, rail.bundleHash]) {
-    if (!manifests.has(identity)) fail();
+    if (!manifests.has(identity)) fail2();
   }
 }
 function localKeyMaterial(keyReference) {
@@ -42946,21 +43465,21 @@ function mintFrozenInputSeal({
   return { ...document, mac: sealMacFor(document, vaultKeyReference) };
 }
 function assertSealDocumentShape(document) {
-  const fail = () => {
+  const fail2 = () => {
     throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject8(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject8(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail();
+  if (!isPlainObject9(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject9(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
-  if (documentKeys.length !== documentExpected.length) fail();
-  if (documentKeys.some((key, index) => key !== documentExpected[index])) fail();
+  if (documentKeys.length !== documentExpected.length) fail2();
+  if (documentKeys.some((key, index) => key !== documentExpected[index])) fail2();
   const anchorKeys = Object.keys(document.anchors).sort();
   const expected = [...SEALED_ANCHOR_FIELDS].sort();
-  if (anchorKeys.length !== expected.length) fail();
-  if (anchorKeys.some((key, index) => key !== expected[index])) fail();
+  if (anchorKeys.length !== expected.length) fail2();
+  if (anchorKeys.some((key, index) => key !== expected[index])) fail2();
   for (const field of ["providerToolProfileHash", "capabilityProofIndexHash"]) {
     if (typeof document.anchors[field] !== "string" || document.anchors[field].length === 0) {
-      fail();
+      fail2();
     }
   }
   for (const field of [
@@ -42970,15 +43489,15 @@ function assertSealDocumentShape(document) {
   ]) {
     const value = document.anchors[field];
     if (!Array.isArray(value) || value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
-      fail();
+      fail2();
     }
   }
   if (!Array.isArray(document.anchors.capabilityProofExpiries) || document.anchors.capabilityProofExpiries.some(
     (entry) => !Number.isSafeInteger(entry) || entry < 0
-  )) fail();
+  )) fail2();
   if (document.canaryTargetHashes.some(
     (entry) => typeof entry !== "string" || entry.length === 0
-  )) fail();
+  )) fail2();
   return document;
 }
 function macMatches(expected, actual) {
@@ -42990,15 +43509,15 @@ function macMatches(expected, actual) {
   }
 }
 function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, providerDescriptor }) {
-  const fail = () => {
+  const fail2 = () => {
     throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject8(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail();
+  if (!isPlainObject9(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, declaration.relativePath);
-  if (!isWithin2(project, pathname)) fail();
+  if (!isWithin2(project, pathname)) fail2();
   const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const declaredConfigPath = typeof providerDescriptor?.relativePath === "string" ? providerDescriptor.relativePath : null;
   if (declaredConfigPath !== null) {
@@ -43008,13 +43527,13 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
     } catch {
       realConfigPath = null;
     }
-    if (realConfigPath !== null && realConfigPath === realPathname) fail();
+    if (realConfigPath !== null && realConfigPath === realPathname) fail2();
   }
   const document = readRegularJson(realPathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const { mac: mac3, ...body } = document;
   assertSealDocumentShape(body);
-  if (!macMatches(sealMacFor(body, vaultKeyReference), mac3)) fail();
-  if (body.locationId !== config2.internalRail?.locationId) fail();
+  if (!macMatches(sealMacFor(body, vaultKeyReference), mac3)) fail2();
+  if (body.locationId !== config2.internalRail?.locationId) fail2();
   return Object.freeze({
     anchors: Object.freeze({ ...body.anchors }),
     canaryTargetHashes: Object.freeze([...body.canaryTargetHashes]),
@@ -43053,7 +43572,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject8(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject9(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
@@ -43254,7 +43773,7 @@ function publicConfigError() {
   throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject8(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject9(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -43266,13 +43785,13 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject8(config2)) publicConfigError();
+  if (!isPlainObject9(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject8(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject8(config2.frozenInputs) || !isPlainObject8(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject9(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject9(config2.frozenInputs) || !isPlainObject9(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject8(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject9(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -43300,7 +43819,7 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject8(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject9(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
@@ -43442,6 +43961,7 @@ async function collectPublicEvidence({
   projectRoot,
   vaultKeyReference,
   transportConnect,
+  ghlNativeConnect,
   credentialResolver,
   keyProvider,
   signal,
@@ -43449,6 +43969,11 @@ async function collectPublicEvidence({
 }) {
   validatePublicConfig(config2);
   const locationId = config2.expectedLocationId;
+  if (transportConnect !== null && ghlNativeConnect !== null) {
+    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  }
+  if (ghlNativeConnect !== null) assertTranslatableCapabilities(config2.capabilities);
+  const effectiveConnect = ghlNativeConnect === null ? transportConnect : createGhlTranslatingConnect({ connect: ghlNativeConnect, runtime });
   const capabilities = approvedPublicCapabilities(config2);
   const plan = publicCollectionPlan(config2);
   const window = Object.freeze({
@@ -43472,7 +43997,7 @@ async function collectPublicEvidence({
   try {
     if (signal?.aborted) throw codedError10("COLLECTION_ABORTED");
     client = await connectMcp({
-      transport: transportConnect === null ? structuredClone(config2.transport) : { ...structuredClone(config2.transport), connect: transportConnect },
+      transport: effectiveConnect === null ? structuredClone(config2.transport) : { ...structuredClone(config2.transport), connect: effectiveConnect },
       // EXACTLY the six keys `lib/adapters/mcp-transport.mjs` accepts. `credentialRef` is copied
       // through as the reference it is; its VALUE is resolved inside the transport and never
       // returned to, held by, or logged by this runtime.
@@ -43573,7 +44098,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject8(sealed)) return null;
+    if (!isPlainObject9(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -43594,6 +44119,9 @@ function createPublicAuditKernel({
   // resumed — the kernel does not pass a run id to `freezeInputs`.
   resumeRunId = null,
   transportConnect = null,
+  // A host-owned connect whose delegate is a RAW GHL MCP client. Mutually exclusive with
+  // `transportConnect`; see `collectPublicEvidence`.
+  ghlNativeConnect = null,
   credentialResolver = null,
   keyProvider = null,
   signal = null,
@@ -43619,6 +44147,7 @@ function createPublicAuditKernel({
           projectRoot: args.projectRoot,
           vaultKeyReference: args.vaultKeyReference,
           transportConnect,
+          ghlNativeConnect,
           credentialResolver,
           keyProvider,
           signal,
@@ -43705,6 +44234,7 @@ var init_local_runtime = __esm({
   "lib/local-runtime.mjs"() {
     init_canonical();
     init_internal_ghl();
+    init_ghl_public_translator();
     init_mcp_transport();
     init_public_ghl();
     init_trusted_public_policy();
