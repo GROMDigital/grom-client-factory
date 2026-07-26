@@ -38231,711 +38231,6 @@ var init_client2 = __esm({
   }
 });
 
-// node_modules/isexe/windows.js
-var require_windows = __commonJS({
-  "node_modules/isexe/windows.js"(exports, module) {
-    module.exports = isexe;
-    isexe.sync = sync;
-    var fs = __require("fs");
-    function checkPathExt(path, options) {
-      var pathext = options.pathExt !== void 0 ? options.pathExt : process.env.PATHEXT;
-      if (!pathext) {
-        return true;
-      }
-      pathext = pathext.split(";");
-      if (pathext.indexOf("") !== -1) {
-        return true;
-      }
-      for (var i2 = 0; i2 < pathext.length; i2++) {
-        var p2 = pathext[i2].toLowerCase();
-        if (p2 && path.substr(-p2.length).toLowerCase() === p2) {
-          return true;
-        }
-      }
-      return false;
-    }
-    function checkStat(stat, path, options) {
-      if (!stat.isSymbolicLink() && !stat.isFile()) {
-        return false;
-      }
-      return checkPathExt(path, options);
-    }
-    function isexe(path, options, cb) {
-      fs.stat(path, function(er2, stat) {
-        cb(er2, er2 ? false : checkStat(stat, path, options));
-      });
-    }
-    function sync(path, options) {
-      return checkStat(fs.statSync(path), path, options);
-    }
-  }
-});
-
-// node_modules/isexe/mode.js
-var require_mode = __commonJS({
-  "node_modules/isexe/mode.js"(exports, module) {
-    module.exports = isexe;
-    isexe.sync = sync;
-    var fs = __require("fs");
-    function isexe(path, options, cb) {
-      fs.stat(path, function(er2, stat) {
-        cb(er2, er2 ? false : checkStat(stat, options));
-      });
-    }
-    function sync(path, options) {
-      return checkStat(fs.statSync(path), options);
-    }
-    function checkStat(stat, options) {
-      return stat.isFile() && checkMode(stat, options);
-    }
-    function checkMode(stat, options) {
-      var mod = stat.mode;
-      var uid = stat.uid;
-      var gid = stat.gid;
-      var myUid = options.uid !== void 0 ? options.uid : process.getuid && process.getuid();
-      var myGid = options.gid !== void 0 ? options.gid : process.getgid && process.getgid();
-      var u2 = parseInt("100", 8);
-      var g2 = parseInt("010", 8);
-      var o2 = parseInt("001", 8);
-      var ug = u2 | g2;
-      var ret = mod & o2 || mod & g2 && gid === myGid || mod & u2 && uid === myUid || mod & ug && myUid === 0;
-      return ret;
-    }
-  }
-});
-
-// node_modules/isexe/index.js
-var require_isexe = __commonJS({
-  "node_modules/isexe/index.js"(exports, module) {
-    var fs = __require("fs");
-    var core;
-    if (process.platform === "win32" || global.TESTING_WINDOWS) {
-      core = require_windows();
-    } else {
-      core = require_mode();
-    }
-    module.exports = isexe;
-    isexe.sync = sync;
-    function isexe(path, options, cb) {
-      if (typeof options === "function") {
-        cb = options;
-        options = {};
-      }
-      if (!cb) {
-        if (typeof Promise !== "function") {
-          throw new TypeError("callback not provided");
-        }
-        return new Promise(function(resolve6, reject) {
-          isexe(path, options || {}, function(er2, is) {
-            if (er2) {
-              reject(er2);
-            } else {
-              resolve6(is);
-            }
-          });
-        });
-      }
-      core(path, options || {}, function(er2, is) {
-        if (er2) {
-          if (er2.code === "EACCES" || options && options.ignoreErrors) {
-            er2 = null;
-            is = false;
-          }
-        }
-        cb(er2, is);
-      });
-    }
-    function sync(path, options) {
-      try {
-        return core.sync(path, options || {});
-      } catch (er2) {
-        if (options && options.ignoreErrors || er2.code === "EACCES") {
-          return false;
-        } else {
-          throw er2;
-        }
-      }
-    }
-  }
-});
-
-// node_modules/which/which.js
-var require_which = __commonJS({
-  "node_modules/which/which.js"(exports, module) {
-    var isWindows = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
-    var path = __require("path");
-    var COLON = isWindows ? ";" : ":";
-    var isexe = require_isexe();
-    var getNotFoundError = (cmd) => Object.assign(new Error(`not found: ${cmd}`), { code: "ENOENT" });
-    var getPathInfo = (cmd, opt) => {
-      const colon = opt.colon || COLON;
-      const pathEnv = cmd.match(/\//) || isWindows && cmd.match(/\\/) ? [""] : [
-        // windows always checks the cwd first
-        ...isWindows ? [process.cwd()] : [],
-        ...(opt.path || process.env.PATH || /* istanbul ignore next: very unusual */
-        "").split(colon)
-      ];
-      const pathExtExe = isWindows ? opt.pathExt || process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM" : "";
-      const pathExt = isWindows ? pathExtExe.split(colon) : [""];
-      if (isWindows) {
-        if (cmd.indexOf(".") !== -1 && pathExt[0] !== "")
-          pathExt.unshift("");
-      }
-      return {
-        pathEnv,
-        pathExt,
-        pathExtExe
-      };
-    };
-    var which = (cmd, opt, cb) => {
-      if (typeof opt === "function") {
-        cb = opt;
-        opt = {};
-      }
-      if (!opt)
-        opt = {};
-      const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
-      const found = [];
-      const step = (i2) => new Promise((resolve6, reject) => {
-        if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve6(found) : reject(getNotFoundError(cmd));
-        const ppRaw = pathEnv[i2];
-        const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
-        const pCmd = path.join(pathPart, cmd);
-        const p2 = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve6(subStep(p2, i2, 0));
-      });
-      const subStep = (p2, i2, ii2) => new Promise((resolve6, reject) => {
-        if (ii2 === pathExt.length)
-          return resolve6(step(i2 + 1));
-        const ext = pathExt[ii2];
-        isexe(p2 + ext, { pathExt: pathExtExe }, (er2, is) => {
-          if (!er2 && is) {
-            if (opt.all)
-              found.push(p2 + ext);
-            else
-              return resolve6(p2 + ext);
-          }
-          return resolve6(subStep(p2, i2, ii2 + 1));
-        });
-      });
-      return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
-    };
-    var whichSync = (cmd, opt) => {
-      opt = opt || {};
-      const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
-      const found = [];
-      for (let i2 = 0; i2 < pathEnv.length; i2++) {
-        const ppRaw = pathEnv[i2];
-        const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
-        const pCmd = path.join(pathPart, cmd);
-        const p2 = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        for (let j2 = 0; j2 < pathExt.length; j2++) {
-          const cur = p2 + pathExt[j2];
-          try {
-            const is = isexe.sync(cur, { pathExt: pathExtExe });
-            if (is) {
-              if (opt.all)
-                found.push(cur);
-              else
-                return cur;
-            }
-          } catch (ex) {
-          }
-        }
-      }
-      if (opt.all && found.length)
-        return found;
-      if (opt.nothrow)
-        return null;
-      throw getNotFoundError(cmd);
-    };
-    module.exports = which;
-    which.sync = whichSync;
-  }
-});
-
-// node_modules/path-key/index.js
-var require_path_key = __commonJS({
-  "node_modules/path-key/index.js"(exports, module) {
-    "use strict";
-    var pathKey = (options = {}) => {
-      const environment = options.env || process.env;
-      const platform = options.platform || process.platform;
-      if (platform !== "win32") {
-        return "PATH";
-      }
-      return Object.keys(environment).reverse().find((key) => key.toUpperCase() === "PATH") || "Path";
-    };
-    module.exports = pathKey;
-    module.exports.default = pathKey;
-  }
-});
-
-// node_modules/cross-spawn/lib/util/resolveCommand.js
-var require_resolveCommand = __commonJS({
-  "node_modules/cross-spawn/lib/util/resolveCommand.js"(exports, module) {
-    "use strict";
-    var path = __require("path");
-    var which = require_which();
-    var getPathKey = require_path_key();
-    function resolveCommandAttempt(parsed, withoutPathExt) {
-      const env = parsed.options.env || process.env;
-      const cwd = process.cwd();
-      const hasCustomCwd = parsed.options.cwd != null;
-      const shouldSwitchCwd = hasCustomCwd && process.chdir !== void 0 && !process.chdir.disabled;
-      if (shouldSwitchCwd) {
-        try {
-          process.chdir(parsed.options.cwd);
-        } catch (err) {
-        }
-      }
-      let resolved;
-      try {
-        resolved = which.sync(parsed.command, {
-          path: env[getPathKey({ env })],
-          pathExt: withoutPathExt ? path.delimiter : void 0
-        });
-      } catch (e2) {
-      } finally {
-        if (shouldSwitchCwd) {
-          process.chdir(cwd);
-        }
-      }
-      if (resolved) {
-        resolved = path.resolve(hasCustomCwd ? parsed.options.cwd : "", resolved);
-      }
-      return resolved;
-    }
-    function resolveCommand(parsed) {
-      return resolveCommandAttempt(parsed) || resolveCommandAttempt(parsed, true);
-    }
-    module.exports = resolveCommand;
-  }
-});
-
-// node_modules/cross-spawn/lib/util/escape.js
-var require_escape = __commonJS({
-  "node_modules/cross-spawn/lib/util/escape.js"(exports, module) {
-    "use strict";
-    var metaCharsRegExp = /([()\][%!^"`<>&|;, *?])/g;
-    function escapeCommand(arg) {
-      arg = arg.replace(metaCharsRegExp, "^$1");
-      return arg;
-    }
-    function escapeArgument(arg, doubleEscapeMetaChars) {
-      arg = `${arg}`;
-      arg = arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
-      arg = arg.replace(/(?=(\\+?)?)\1$/, "$1$1");
-      arg = `"${arg}"`;
-      arg = arg.replace(metaCharsRegExp, "^$1");
-      if (doubleEscapeMetaChars) {
-        arg = arg.replace(metaCharsRegExp, "^$1");
-      }
-      return arg;
-    }
-    module.exports.command = escapeCommand;
-    module.exports.argument = escapeArgument;
-  }
-});
-
-// node_modules/shebang-regex/index.js
-var require_shebang_regex = __commonJS({
-  "node_modules/shebang-regex/index.js"(exports, module) {
-    "use strict";
-    module.exports = /^#!(.*)/;
-  }
-});
-
-// node_modules/shebang-command/index.js
-var require_shebang_command = __commonJS({
-  "node_modules/shebang-command/index.js"(exports, module) {
-    "use strict";
-    var shebangRegex = require_shebang_regex();
-    module.exports = (string4 = "") => {
-      const match = string4.match(shebangRegex);
-      if (!match) {
-        return null;
-      }
-      const [path, argument] = match[0].replace(/#! ?/, "").split(" ");
-      const binary = path.split("/").pop();
-      if (binary === "env") {
-        return argument;
-      }
-      return argument ? `${binary} ${argument}` : binary;
-    };
-  }
-});
-
-// node_modules/cross-spawn/lib/util/readShebang.js
-var require_readShebang = __commonJS({
-  "node_modules/cross-spawn/lib/util/readShebang.js"(exports, module) {
-    "use strict";
-    var fs = __require("fs");
-    var shebangCommand = require_shebang_command();
-    function readShebang(command) {
-      const size = 150;
-      const buffer = Buffer.alloc(size);
-      let fd;
-      try {
-        fd = fs.openSync(command, "r");
-        fs.readSync(fd, buffer, 0, size, 0);
-        fs.closeSync(fd);
-      } catch (e2) {
-      }
-      return shebangCommand(buffer.toString());
-    }
-    module.exports = readShebang;
-  }
-});
-
-// node_modules/cross-spawn/lib/parse.js
-var require_parse = __commonJS({
-  "node_modules/cross-spawn/lib/parse.js"(exports, module) {
-    "use strict";
-    var path = __require("path");
-    var resolveCommand = require_resolveCommand();
-    var escape2 = require_escape();
-    var readShebang = require_readShebang();
-    var isWin = process.platform === "win32";
-    var isExecutableRegExp = /\.(?:com|exe)$/i;
-    var isCmdShimRegExp = /node_modules[\\/].bin[\\/][^\\/]+\.cmd$/i;
-    function detectShebang(parsed) {
-      parsed.file = resolveCommand(parsed);
-      const shebang = parsed.file && readShebang(parsed.file);
-      if (shebang) {
-        parsed.args.unshift(parsed.file);
-        parsed.command = shebang;
-        return resolveCommand(parsed);
-      }
-      return parsed.file;
-    }
-    function parseNonShell(parsed) {
-      if (!isWin) {
-        return parsed;
-      }
-      const commandFile = detectShebang(parsed);
-      const needsShell = !isExecutableRegExp.test(commandFile);
-      if (parsed.options.forceShell || needsShell) {
-        const needsDoubleEscapeMetaChars = isCmdShimRegExp.test(commandFile);
-        parsed.command = path.normalize(parsed.command);
-        parsed.command = escape2.command(parsed.command);
-        parsed.args = parsed.args.map((arg) => escape2.argument(arg, needsDoubleEscapeMetaChars));
-        const shellCommand = [parsed.command].concat(parsed.args).join(" ");
-        parsed.args = ["/d", "/s", "/c", `"${shellCommand}"`];
-        parsed.command = process.env.comspec || "cmd.exe";
-        parsed.options.windowsVerbatimArguments = true;
-      }
-      return parsed;
-    }
-    function parse3(command, args, options) {
-      if (args && !Array.isArray(args)) {
-        options = args;
-        args = null;
-      }
-      args = args ? args.slice(0) : [];
-      options = Object.assign({}, options);
-      const parsed = {
-        command,
-        args,
-        options,
-        file: void 0,
-        original: {
-          command,
-          args
-        }
-      };
-      return options.shell ? parsed : parseNonShell(parsed);
-    }
-    module.exports = parse3;
-  }
-});
-
-// node_modules/cross-spawn/lib/enoent.js
-var require_enoent = __commonJS({
-  "node_modules/cross-spawn/lib/enoent.js"(exports, module) {
-    "use strict";
-    var isWin = process.platform === "win32";
-    function notFoundError(original, syscall) {
-      return Object.assign(new Error(`${syscall} ${original.command} ENOENT`), {
-        code: "ENOENT",
-        errno: "ENOENT",
-        syscall: `${syscall} ${original.command}`,
-        path: original.command,
-        spawnargs: original.args
-      });
-    }
-    function hookChildProcess(cp, parsed) {
-      if (!isWin) {
-        return;
-      }
-      const originalEmit = cp.emit;
-      cp.emit = function(name, arg1) {
-        if (name === "exit") {
-          const err = verifyENOENT(arg1, parsed);
-          if (err) {
-            return originalEmit.call(cp, "error", err);
-          }
-        }
-        return originalEmit.apply(cp, arguments);
-      };
-    }
-    function verifyENOENT(status, parsed) {
-      if (isWin && status === 1 && !parsed.file) {
-        return notFoundError(parsed.original, "spawn");
-      }
-      return null;
-    }
-    function verifyENOENTSync(status, parsed) {
-      if (isWin && status === 1 && !parsed.file) {
-        return notFoundError(parsed.original, "spawnSync");
-      }
-      return null;
-    }
-    module.exports = {
-      hookChildProcess,
-      verifyENOENT,
-      verifyENOENTSync,
-      notFoundError
-    };
-  }
-});
-
-// node_modules/cross-spawn/index.js
-var require_cross_spawn = __commonJS({
-  "node_modules/cross-spawn/index.js"(exports, module) {
-    "use strict";
-    var cp = __require("child_process");
-    var parse3 = require_parse();
-    var enoent = require_enoent();
-    function spawn2(command, args, options) {
-      const parsed = parse3(command, args, options);
-      const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
-      enoent.hookChildProcess(spawned, parsed);
-      return spawned;
-    }
-    function spawnSync(command, args, options) {
-      const parsed = parse3(command, args, options);
-      const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
-      result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
-      return result;
-    }
-    module.exports = spawn2;
-    module.exports.spawn = spawn2;
-    module.exports.sync = spawnSync;
-    module.exports._parse = parse3;
-    module.exports._enoent = enoent;
-  }
-});
-
-// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
-function deserializeMessage(line) {
-  return JSONRPCMessageSchema.parse(JSON.parse(line));
-}
-function serializeMessage(message) {
-  return JSON.stringify(message) + "\n";
-}
-var ReadBuffer;
-var init_stdio = __esm({
-  "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js"() {
-    init_types();
-    ReadBuffer = class {
-      append(chunk) {
-        this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
-      }
-      readMessage() {
-        if (!this._buffer) {
-          return null;
-        }
-        const index = this._buffer.indexOf("\n");
-        if (index === -1) {
-          return null;
-        }
-        const line = this._buffer.toString("utf8", 0, index).replace(/\r$/, "");
-        this._buffer = this._buffer.subarray(index + 1);
-        return deserializeMessage(line);
-      }
-      clear() {
-        this._buffer = void 0;
-      }
-    };
-  }
-});
-
-// node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
-import process3 from "node:process";
-import { PassThrough } from "node:stream";
-function getDefaultEnvironment() {
-  const env = {};
-  for (const key of DEFAULT_INHERITED_ENV_VARS) {
-    const value = process3.env[key];
-    if (value === void 0) {
-      continue;
-    }
-    if (value.startsWith("()")) {
-      continue;
-    }
-    env[key] = value;
-  }
-  return env;
-}
-var import_cross_spawn, DEFAULT_INHERITED_ENV_VARS, StdioClientTransport;
-var init_stdio2 = __esm({
-  "node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js"() {
-    import_cross_spawn = __toESM(require_cross_spawn(), 1);
-    init_stdio();
-    DEFAULT_INHERITED_ENV_VARS = process3.platform === "win32" ? [
-      "APPDATA",
-      "HOMEDRIVE",
-      "HOMEPATH",
-      "LOCALAPPDATA",
-      "PATH",
-      "PROCESSOR_ARCHITECTURE",
-      "SYSTEMDRIVE",
-      "SYSTEMROOT",
-      "TEMP",
-      "USERNAME",
-      "USERPROFILE",
-      "PROGRAMFILES"
-    ] : (
-      /* list inspired by the default env inheritance of sudo */
-      ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"]
-    );
-    StdioClientTransport = class {
-      constructor(server) {
-        this._readBuffer = new ReadBuffer();
-        this._stderrStream = null;
-        this._serverParams = server;
-        if (server.stderr === "pipe" || server.stderr === "overlapped") {
-          this._stderrStream = new PassThrough();
-        }
-      }
-      /**
-       * Starts the server process and prepares to communicate with it.
-       */
-      async start() {
-        if (this._process) {
-          throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
-        }
-        return new Promise((resolve6, reject) => {
-          this._process = (0, import_cross_spawn.default)(this._serverParams.command, this._serverParams.args ?? [], {
-            // merge default env with server env because mcp server needs some env vars
-            env: {
-              ...getDefaultEnvironment(),
-              ...this._serverParams.env
-            },
-            stdio: ["pipe", "pipe", this._serverParams.stderr ?? "inherit"],
-            shell: false,
-            windowsHide: process3.platform === "win32",
-            cwd: this._serverParams.cwd
-          });
-          this._process.on("error", (error51) => {
-            reject(error51);
-            this.onerror?.(error51);
-          });
-          this._process.on("spawn", () => {
-            resolve6();
-          });
-          this._process.on("close", (_code) => {
-            this._process = void 0;
-            this.onclose?.();
-          });
-          this._process.stdin?.on("error", (error51) => {
-            this.onerror?.(error51);
-          });
-          this._process.stdout?.on("data", (chunk) => {
-            this._readBuffer.append(chunk);
-            this.processReadBuffer();
-          });
-          this._process.stdout?.on("error", (error51) => {
-            this.onerror?.(error51);
-          });
-          if (this._stderrStream && this._process.stderr) {
-            this._process.stderr.pipe(this._stderrStream);
-          }
-        });
-      }
-      /**
-       * The stderr stream of the child process, if `StdioServerParameters.stderr` was set to "pipe" or "overlapped".
-       *
-       * If stderr piping was requested, a PassThrough stream is returned _immediately_, allowing callers to
-       * attach listeners before the start method is invoked. This prevents loss of any early
-       * error output emitted by the child process.
-       */
-      get stderr() {
-        if (this._stderrStream) {
-          return this._stderrStream;
-        }
-        return this._process?.stderr ?? null;
-      }
-      /**
-       * The child process pid spawned by this transport.
-       *
-       * This is only available after the transport has been started.
-       */
-      get pid() {
-        return this._process?.pid ?? null;
-      }
-      processReadBuffer() {
-        while (true) {
-          try {
-            const message = this._readBuffer.readMessage();
-            if (message === null) {
-              break;
-            }
-            this.onmessage?.(message);
-          } catch (error51) {
-            this.onerror?.(error51);
-          }
-        }
-      }
-      async close() {
-        if (this._process) {
-          const processToClose = this._process;
-          this._process = void 0;
-          const closePromise = new Promise((resolve6) => {
-            processToClose.once("close", () => {
-              resolve6();
-            });
-          });
-          try {
-            processToClose.stdin?.end();
-          } catch {
-          }
-          await Promise.race([closePromise, new Promise((resolve6) => setTimeout(resolve6, 2e3).unref())]);
-          if (processToClose.exitCode === null) {
-            try {
-              processToClose.kill("SIGTERM");
-            } catch {
-            }
-            await Promise.race([closePromise, new Promise((resolve6) => setTimeout(resolve6, 2e3).unref())]);
-          }
-          if (processToClose.exitCode === null) {
-            try {
-              processToClose.kill("SIGKILL");
-            } catch {
-            }
-          }
-        }
-        this._readBuffer.clear();
-      }
-      send(message) {
-        return new Promise((resolve6) => {
-          if (!this._process?.stdin) {
-            throw new Error("Not connected");
-          }
-          const json2 = serializeMessage(message);
-          if (this._process.stdin.write(json2)) {
-            resolve6();
-          } else {
-            this._process.stdin.once("drain", resolve6);
-          }
-        });
-      }
-    };
-  }
-});
-
 // node_modules/@modelcontextprotocol/sdk/dist/esm/shared/transport.js
 function normalizeHeaders(headers) {
   if (!headers)
@@ -40457,6 +39752,807 @@ var init_streamableHttp = __esm({
   }
 });
 
+// lib/adapters/ghl-native-session.mjs
+function isPlainObject7(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+function transportInvalid() {
+  throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+}
+function assertGhlNativeUrl(value) {
+  if (typeof value !== "string" || value.length === 0) transportInvalid();
+  let url2;
+  try {
+    url2 = new URL(value);
+  } catch {
+    return transportInvalid();
+  }
+  if (url2.protocol !== "https:" && !(url2.protocol === "http:" && (url2.hostname === "localhost" || url2.hostname === "127.0.0.1")) || url2.username !== "" || url2.password !== "" || url2.search !== "" || url2.hash !== "") transportInvalid();
+  return url2.toString();
+}
+function validateGhlNativeTransport(transport) {
+  if (!isPlainObject7(transport) || transport.kind !== GHL_NATIVE_TRANSPORT_KIND) transportInvalid();
+  const keys = Object.keys(transport).sort().join(",");
+  if (keys !== "kind,url" && keys !== "credentialHeaderName,kind,url") transportInvalid();
+  const url2 = assertGhlNativeUrl(transport.url);
+  const credentialHeaderName = Object.hasOwn(transport, "credentialHeaderName") ? transport.credentialHeaderName : DEFAULT_GHL_CREDENTIAL_HEADER_NAME;
+  if (typeof credentialHeaderName !== "string" || !HEADER_NAME.test(credentialHeaderName) || RESERVED_HEADER_NAMES.has(credentialHeaderName.toLowerCase())) transportInvalid();
+  return Object.freeze({
+    kind: GHL_NATIVE_TRANSPORT_KIND,
+    url: url2,
+    credentialHeaderName
+  });
+}
+function createGhlNativeConnect({
+  url: url2,
+  credentialHeaderName = DEFAULT_GHL_CREDENTIAL_HEADER_NAME,
+  fetch: fetchImplementation = void 0
+} = {}) {
+  const checked = validateGhlNativeTransport({
+    kind: GHL_NATIVE_TRANSPORT_KIND,
+    url: url2,
+    credentialHeaderName
+  });
+  if (fetchImplementation !== void 0 && typeof fetchImplementation !== "function") {
+    transportInvalid();
+  }
+  return async function ghlNativeConnect(options) {
+    if (!isPlainObject7(options) || options.kind !== "streamable-http") transportInvalid();
+    if (assertGhlNativeUrl(options.url) !== checked.url) transportInvalid();
+    const credential = options.credential;
+    if (typeof credential !== "string" || credential.length === 0) {
+      throw codedError6("GHL_NATIVE_CREDENTIAL_REQUIRED");
+    }
+    const client = new Client(CLIENT_IDENTITY, { capabilities: {} });
+    const transport = new StreamableHTTPClientTransport(new URL(checked.url), {
+      // The ONE place the value is written. `_commonHeaders` merges these into every request the
+      // SDK makes on this session; the object is reachable only from the transport instance.
+      requestInit: { headers: { [checked.credentialHeaderName]: credential } },
+      ...fetchImplementation === void 0 ? {} : { fetch: fetchImplementation }
+    });
+    await client.connect(transport);
+    return Object.freeze({
+      async callTool(request, options2) {
+        return client.callTool(request, void 0, options2);
+      },
+      async close() {
+        await client.close();
+      }
+    });
+  };
+}
+var GHL_NATIVE_TRANSPORT_KIND, DEFAULT_GHL_CREDENTIAL_HEADER_NAME, HEADER_NAME, RESERVED_HEADER_NAMES, CLIENT_IDENTITY;
+var init_ghl_native_session = __esm({
+  "lib/adapters/ghl-native-session.mjs"() {
+    init_client2();
+    init_streamableHttp();
+    init_collection();
+    GHL_NATIVE_TRANSPORT_KIND = "ghl-native-streamable-http";
+    DEFAULT_GHL_CREDENTIAL_HEADER_NAME = "X-GHL-Token";
+    HEADER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,63}$/u;
+    RESERVED_HEADER_NAMES = Object.freeze(/* @__PURE__ */ new Set([
+      "authorization",
+      "connection",
+      "cookie",
+      "host",
+      "proxy-authorization",
+      "set-cookie",
+      "te",
+      "trailer",
+      "transfer-encoding",
+      "upgrade"
+    ]));
+    CLIENT_IDENTITY = Object.freeze({ name: "grom-weekly-audit", version: "1.0.0" });
+  }
+});
+
+// node_modules/isexe/windows.js
+var require_windows = __commonJS({
+  "node_modules/isexe/windows.js"(exports, module) {
+    module.exports = isexe;
+    isexe.sync = sync;
+    var fs = __require("fs");
+    function checkPathExt(path, options) {
+      var pathext = options.pathExt !== void 0 ? options.pathExt : process.env.PATHEXT;
+      if (!pathext) {
+        return true;
+      }
+      pathext = pathext.split(";");
+      if (pathext.indexOf("") !== -1) {
+        return true;
+      }
+      for (var i2 = 0; i2 < pathext.length; i2++) {
+        var p2 = pathext[i2].toLowerCase();
+        if (p2 && path.substr(-p2.length).toLowerCase() === p2) {
+          return true;
+        }
+      }
+      return false;
+    }
+    function checkStat(stat, path, options) {
+      if (!stat.isSymbolicLink() && !stat.isFile()) {
+        return false;
+      }
+      return checkPathExt(path, options);
+    }
+    function isexe(path, options, cb) {
+      fs.stat(path, function(er2, stat) {
+        cb(er2, er2 ? false : checkStat(stat, path, options));
+      });
+    }
+    function sync(path, options) {
+      return checkStat(fs.statSync(path), path, options);
+    }
+  }
+});
+
+// node_modules/isexe/mode.js
+var require_mode = __commonJS({
+  "node_modules/isexe/mode.js"(exports, module) {
+    module.exports = isexe;
+    isexe.sync = sync;
+    var fs = __require("fs");
+    function isexe(path, options, cb) {
+      fs.stat(path, function(er2, stat) {
+        cb(er2, er2 ? false : checkStat(stat, options));
+      });
+    }
+    function sync(path, options) {
+      return checkStat(fs.statSync(path), options);
+    }
+    function checkStat(stat, options) {
+      return stat.isFile() && checkMode(stat, options);
+    }
+    function checkMode(stat, options) {
+      var mod = stat.mode;
+      var uid = stat.uid;
+      var gid = stat.gid;
+      var myUid = options.uid !== void 0 ? options.uid : process.getuid && process.getuid();
+      var myGid = options.gid !== void 0 ? options.gid : process.getgid && process.getgid();
+      var u2 = parseInt("100", 8);
+      var g2 = parseInt("010", 8);
+      var o2 = parseInt("001", 8);
+      var ug = u2 | g2;
+      var ret = mod & o2 || mod & g2 && gid === myGid || mod & u2 && uid === myUid || mod & ug && myUid === 0;
+      return ret;
+    }
+  }
+});
+
+// node_modules/isexe/index.js
+var require_isexe = __commonJS({
+  "node_modules/isexe/index.js"(exports, module) {
+    var fs = __require("fs");
+    var core;
+    if (process.platform === "win32" || global.TESTING_WINDOWS) {
+      core = require_windows();
+    } else {
+      core = require_mode();
+    }
+    module.exports = isexe;
+    isexe.sync = sync;
+    function isexe(path, options, cb) {
+      if (typeof options === "function") {
+        cb = options;
+        options = {};
+      }
+      if (!cb) {
+        if (typeof Promise !== "function") {
+          throw new TypeError("callback not provided");
+        }
+        return new Promise(function(resolve6, reject) {
+          isexe(path, options || {}, function(er2, is) {
+            if (er2) {
+              reject(er2);
+            } else {
+              resolve6(is);
+            }
+          });
+        });
+      }
+      core(path, options || {}, function(er2, is) {
+        if (er2) {
+          if (er2.code === "EACCES" || options && options.ignoreErrors) {
+            er2 = null;
+            is = false;
+          }
+        }
+        cb(er2, is);
+      });
+    }
+    function sync(path, options) {
+      try {
+        return core.sync(path, options || {});
+      } catch (er2) {
+        if (options && options.ignoreErrors || er2.code === "EACCES") {
+          return false;
+        } else {
+          throw er2;
+        }
+      }
+    }
+  }
+});
+
+// node_modules/which/which.js
+var require_which = __commonJS({
+  "node_modules/which/which.js"(exports, module) {
+    var isWindows = process.platform === "win32" || process.env.OSTYPE === "cygwin" || process.env.OSTYPE === "msys";
+    var path = __require("path");
+    var COLON = isWindows ? ";" : ":";
+    var isexe = require_isexe();
+    var getNotFoundError = (cmd) => Object.assign(new Error(`not found: ${cmd}`), { code: "ENOENT" });
+    var getPathInfo = (cmd, opt) => {
+      const colon = opt.colon || COLON;
+      const pathEnv = cmd.match(/\//) || isWindows && cmd.match(/\\/) ? [""] : [
+        // windows always checks the cwd first
+        ...isWindows ? [process.cwd()] : [],
+        ...(opt.path || process.env.PATH || /* istanbul ignore next: very unusual */
+        "").split(colon)
+      ];
+      const pathExtExe = isWindows ? opt.pathExt || process.env.PATHEXT || ".EXE;.CMD;.BAT;.COM" : "";
+      const pathExt = isWindows ? pathExtExe.split(colon) : [""];
+      if (isWindows) {
+        if (cmd.indexOf(".") !== -1 && pathExt[0] !== "")
+          pathExt.unshift("");
+      }
+      return {
+        pathEnv,
+        pathExt,
+        pathExtExe
+      };
+    };
+    var which = (cmd, opt, cb) => {
+      if (typeof opt === "function") {
+        cb = opt;
+        opt = {};
+      }
+      if (!opt)
+        opt = {};
+      const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
+      const found = [];
+      const step = (i2) => new Promise((resolve6, reject) => {
+        if (i2 === pathEnv.length)
+          return opt.all && found.length ? resolve6(found) : reject(getNotFoundError(cmd));
+        const ppRaw = pathEnv[i2];
+        const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
+        const pCmd = path.join(pathPart, cmd);
+        const p2 = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
+        resolve6(subStep(p2, i2, 0));
+      });
+      const subStep = (p2, i2, ii2) => new Promise((resolve6, reject) => {
+        if (ii2 === pathExt.length)
+          return resolve6(step(i2 + 1));
+        const ext = pathExt[ii2];
+        isexe(p2 + ext, { pathExt: pathExtExe }, (er2, is) => {
+          if (!er2 && is) {
+            if (opt.all)
+              found.push(p2 + ext);
+            else
+              return resolve6(p2 + ext);
+          }
+          return resolve6(subStep(p2, i2, ii2 + 1));
+        });
+      });
+      return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
+    };
+    var whichSync = (cmd, opt) => {
+      opt = opt || {};
+      const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
+      const found = [];
+      for (let i2 = 0; i2 < pathEnv.length; i2++) {
+        const ppRaw = pathEnv[i2];
+        const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
+        const pCmd = path.join(pathPart, cmd);
+        const p2 = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
+        for (let j2 = 0; j2 < pathExt.length; j2++) {
+          const cur = p2 + pathExt[j2];
+          try {
+            const is = isexe.sync(cur, { pathExt: pathExtExe });
+            if (is) {
+              if (opt.all)
+                found.push(cur);
+              else
+                return cur;
+            }
+          } catch (ex) {
+          }
+        }
+      }
+      if (opt.all && found.length)
+        return found;
+      if (opt.nothrow)
+        return null;
+      throw getNotFoundError(cmd);
+    };
+    module.exports = which;
+    which.sync = whichSync;
+  }
+});
+
+// node_modules/path-key/index.js
+var require_path_key = __commonJS({
+  "node_modules/path-key/index.js"(exports, module) {
+    "use strict";
+    var pathKey = (options = {}) => {
+      const environment = options.env || process.env;
+      const platform = options.platform || process.platform;
+      if (platform !== "win32") {
+        return "PATH";
+      }
+      return Object.keys(environment).reverse().find((key) => key.toUpperCase() === "PATH") || "Path";
+    };
+    module.exports = pathKey;
+    module.exports.default = pathKey;
+  }
+});
+
+// node_modules/cross-spawn/lib/util/resolveCommand.js
+var require_resolveCommand = __commonJS({
+  "node_modules/cross-spawn/lib/util/resolveCommand.js"(exports, module) {
+    "use strict";
+    var path = __require("path");
+    var which = require_which();
+    var getPathKey = require_path_key();
+    function resolveCommandAttempt(parsed, withoutPathExt) {
+      const env = parsed.options.env || process.env;
+      const cwd = process.cwd();
+      const hasCustomCwd = parsed.options.cwd != null;
+      const shouldSwitchCwd = hasCustomCwd && process.chdir !== void 0 && !process.chdir.disabled;
+      if (shouldSwitchCwd) {
+        try {
+          process.chdir(parsed.options.cwd);
+        } catch (err) {
+        }
+      }
+      let resolved;
+      try {
+        resolved = which.sync(parsed.command, {
+          path: env[getPathKey({ env })],
+          pathExt: withoutPathExt ? path.delimiter : void 0
+        });
+      } catch (e2) {
+      } finally {
+        if (shouldSwitchCwd) {
+          process.chdir(cwd);
+        }
+      }
+      if (resolved) {
+        resolved = path.resolve(hasCustomCwd ? parsed.options.cwd : "", resolved);
+      }
+      return resolved;
+    }
+    function resolveCommand(parsed) {
+      return resolveCommandAttempt(parsed) || resolveCommandAttempt(parsed, true);
+    }
+    module.exports = resolveCommand;
+  }
+});
+
+// node_modules/cross-spawn/lib/util/escape.js
+var require_escape = __commonJS({
+  "node_modules/cross-spawn/lib/util/escape.js"(exports, module) {
+    "use strict";
+    var metaCharsRegExp = /([()\][%!^"`<>&|;, *?])/g;
+    function escapeCommand(arg) {
+      arg = arg.replace(metaCharsRegExp, "^$1");
+      return arg;
+    }
+    function escapeArgument(arg, doubleEscapeMetaChars) {
+      arg = `${arg}`;
+      arg = arg.replace(/(?=(\\+?)?)\1"/g, '$1$1\\"');
+      arg = arg.replace(/(?=(\\+?)?)\1$/, "$1$1");
+      arg = `"${arg}"`;
+      arg = arg.replace(metaCharsRegExp, "^$1");
+      if (doubleEscapeMetaChars) {
+        arg = arg.replace(metaCharsRegExp, "^$1");
+      }
+      return arg;
+    }
+    module.exports.command = escapeCommand;
+    module.exports.argument = escapeArgument;
+  }
+});
+
+// node_modules/shebang-regex/index.js
+var require_shebang_regex = __commonJS({
+  "node_modules/shebang-regex/index.js"(exports, module) {
+    "use strict";
+    module.exports = /^#!(.*)/;
+  }
+});
+
+// node_modules/shebang-command/index.js
+var require_shebang_command = __commonJS({
+  "node_modules/shebang-command/index.js"(exports, module) {
+    "use strict";
+    var shebangRegex = require_shebang_regex();
+    module.exports = (string4 = "") => {
+      const match = string4.match(shebangRegex);
+      if (!match) {
+        return null;
+      }
+      const [path, argument] = match[0].replace(/#! ?/, "").split(" ");
+      const binary = path.split("/").pop();
+      if (binary === "env") {
+        return argument;
+      }
+      return argument ? `${binary} ${argument}` : binary;
+    };
+  }
+});
+
+// node_modules/cross-spawn/lib/util/readShebang.js
+var require_readShebang = __commonJS({
+  "node_modules/cross-spawn/lib/util/readShebang.js"(exports, module) {
+    "use strict";
+    var fs = __require("fs");
+    var shebangCommand = require_shebang_command();
+    function readShebang(command) {
+      const size = 150;
+      const buffer = Buffer.alloc(size);
+      let fd;
+      try {
+        fd = fs.openSync(command, "r");
+        fs.readSync(fd, buffer, 0, size, 0);
+        fs.closeSync(fd);
+      } catch (e2) {
+      }
+      return shebangCommand(buffer.toString());
+    }
+    module.exports = readShebang;
+  }
+});
+
+// node_modules/cross-spawn/lib/parse.js
+var require_parse = __commonJS({
+  "node_modules/cross-spawn/lib/parse.js"(exports, module) {
+    "use strict";
+    var path = __require("path");
+    var resolveCommand = require_resolveCommand();
+    var escape2 = require_escape();
+    var readShebang = require_readShebang();
+    var isWin = process.platform === "win32";
+    var isExecutableRegExp = /\.(?:com|exe)$/i;
+    var isCmdShimRegExp = /node_modules[\\/].bin[\\/][^\\/]+\.cmd$/i;
+    function detectShebang(parsed) {
+      parsed.file = resolveCommand(parsed);
+      const shebang = parsed.file && readShebang(parsed.file);
+      if (shebang) {
+        parsed.args.unshift(parsed.file);
+        parsed.command = shebang;
+        return resolveCommand(parsed);
+      }
+      return parsed.file;
+    }
+    function parseNonShell(parsed) {
+      if (!isWin) {
+        return parsed;
+      }
+      const commandFile = detectShebang(parsed);
+      const needsShell = !isExecutableRegExp.test(commandFile);
+      if (parsed.options.forceShell || needsShell) {
+        const needsDoubleEscapeMetaChars = isCmdShimRegExp.test(commandFile);
+        parsed.command = path.normalize(parsed.command);
+        parsed.command = escape2.command(parsed.command);
+        parsed.args = parsed.args.map((arg) => escape2.argument(arg, needsDoubleEscapeMetaChars));
+        const shellCommand = [parsed.command].concat(parsed.args).join(" ");
+        parsed.args = ["/d", "/s", "/c", `"${shellCommand}"`];
+        parsed.command = process.env.comspec || "cmd.exe";
+        parsed.options.windowsVerbatimArguments = true;
+      }
+      return parsed;
+    }
+    function parse3(command, args, options) {
+      if (args && !Array.isArray(args)) {
+        options = args;
+        args = null;
+      }
+      args = args ? args.slice(0) : [];
+      options = Object.assign({}, options);
+      const parsed = {
+        command,
+        args,
+        options,
+        file: void 0,
+        original: {
+          command,
+          args
+        }
+      };
+      return options.shell ? parsed : parseNonShell(parsed);
+    }
+    module.exports = parse3;
+  }
+});
+
+// node_modules/cross-spawn/lib/enoent.js
+var require_enoent = __commonJS({
+  "node_modules/cross-spawn/lib/enoent.js"(exports, module) {
+    "use strict";
+    var isWin = process.platform === "win32";
+    function notFoundError(original, syscall) {
+      return Object.assign(new Error(`${syscall} ${original.command} ENOENT`), {
+        code: "ENOENT",
+        errno: "ENOENT",
+        syscall: `${syscall} ${original.command}`,
+        path: original.command,
+        spawnargs: original.args
+      });
+    }
+    function hookChildProcess(cp, parsed) {
+      if (!isWin) {
+        return;
+      }
+      const originalEmit = cp.emit;
+      cp.emit = function(name, arg1) {
+        if (name === "exit") {
+          const err = verifyENOENT(arg1, parsed);
+          if (err) {
+            return originalEmit.call(cp, "error", err);
+          }
+        }
+        return originalEmit.apply(cp, arguments);
+      };
+    }
+    function verifyENOENT(status, parsed) {
+      if (isWin && status === 1 && !parsed.file) {
+        return notFoundError(parsed.original, "spawn");
+      }
+      return null;
+    }
+    function verifyENOENTSync(status, parsed) {
+      if (isWin && status === 1 && !parsed.file) {
+        return notFoundError(parsed.original, "spawnSync");
+      }
+      return null;
+    }
+    module.exports = {
+      hookChildProcess,
+      verifyENOENT,
+      verifyENOENTSync,
+      notFoundError
+    };
+  }
+});
+
+// node_modules/cross-spawn/index.js
+var require_cross_spawn = __commonJS({
+  "node_modules/cross-spawn/index.js"(exports, module) {
+    "use strict";
+    var cp = __require("child_process");
+    var parse3 = require_parse();
+    var enoent = require_enoent();
+    function spawn2(command, args, options) {
+      const parsed = parse3(command, args, options);
+      const spawned = cp.spawn(parsed.command, parsed.args, parsed.options);
+      enoent.hookChildProcess(spawned, parsed);
+      return spawned;
+    }
+    function spawnSync(command, args, options) {
+      const parsed = parse3(command, args, options);
+      const result = cp.spawnSync(parsed.command, parsed.args, parsed.options);
+      result.error = result.error || enoent.verifyENOENTSync(result.status, parsed);
+      return result;
+    }
+    module.exports = spawn2;
+    module.exports.spawn = spawn2;
+    module.exports.sync = spawnSync;
+    module.exports._parse = parse3;
+    module.exports._enoent = enoent;
+  }
+});
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js
+function deserializeMessage(line) {
+  return JSONRPCMessageSchema.parse(JSON.parse(line));
+}
+function serializeMessage(message) {
+  return JSON.stringify(message) + "\n";
+}
+var ReadBuffer;
+var init_stdio = __esm({
+  "node_modules/@modelcontextprotocol/sdk/dist/esm/shared/stdio.js"() {
+    init_types();
+    ReadBuffer = class {
+      append(chunk) {
+        this._buffer = this._buffer ? Buffer.concat([this._buffer, chunk]) : chunk;
+      }
+      readMessage() {
+        if (!this._buffer) {
+          return null;
+        }
+        const index = this._buffer.indexOf("\n");
+        if (index === -1) {
+          return null;
+        }
+        const line = this._buffer.toString("utf8", 0, index).replace(/\r$/, "");
+        this._buffer = this._buffer.subarray(index + 1);
+        return deserializeMessage(line);
+      }
+      clear() {
+        this._buffer = void 0;
+      }
+    };
+  }
+});
+
+// node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js
+import process3 from "node:process";
+import { PassThrough } from "node:stream";
+function getDefaultEnvironment() {
+  const env = {};
+  for (const key of DEFAULT_INHERITED_ENV_VARS) {
+    const value = process3.env[key];
+    if (value === void 0) {
+      continue;
+    }
+    if (value.startsWith("()")) {
+      continue;
+    }
+    env[key] = value;
+  }
+  return env;
+}
+var import_cross_spawn, DEFAULT_INHERITED_ENV_VARS, StdioClientTransport;
+var init_stdio2 = __esm({
+  "node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js"() {
+    import_cross_spawn = __toESM(require_cross_spawn(), 1);
+    init_stdio();
+    DEFAULT_INHERITED_ENV_VARS = process3.platform === "win32" ? [
+      "APPDATA",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOCALAPPDATA",
+      "PATH",
+      "PROCESSOR_ARCHITECTURE",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "USERNAME",
+      "USERPROFILE",
+      "PROGRAMFILES"
+    ] : (
+      /* list inspired by the default env inheritance of sudo */
+      ["HOME", "LOGNAME", "PATH", "SHELL", "TERM", "USER"]
+    );
+    StdioClientTransport = class {
+      constructor(server) {
+        this._readBuffer = new ReadBuffer();
+        this._stderrStream = null;
+        this._serverParams = server;
+        if (server.stderr === "pipe" || server.stderr === "overlapped") {
+          this._stderrStream = new PassThrough();
+        }
+      }
+      /**
+       * Starts the server process and prepares to communicate with it.
+       */
+      async start() {
+        if (this._process) {
+          throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
+        }
+        return new Promise((resolve6, reject) => {
+          this._process = (0, import_cross_spawn.default)(this._serverParams.command, this._serverParams.args ?? [], {
+            // merge default env with server env because mcp server needs some env vars
+            env: {
+              ...getDefaultEnvironment(),
+              ...this._serverParams.env
+            },
+            stdio: ["pipe", "pipe", this._serverParams.stderr ?? "inherit"],
+            shell: false,
+            windowsHide: process3.platform === "win32",
+            cwd: this._serverParams.cwd
+          });
+          this._process.on("error", (error51) => {
+            reject(error51);
+            this.onerror?.(error51);
+          });
+          this._process.on("spawn", () => {
+            resolve6();
+          });
+          this._process.on("close", (_code) => {
+            this._process = void 0;
+            this.onclose?.();
+          });
+          this._process.stdin?.on("error", (error51) => {
+            this.onerror?.(error51);
+          });
+          this._process.stdout?.on("data", (chunk) => {
+            this._readBuffer.append(chunk);
+            this.processReadBuffer();
+          });
+          this._process.stdout?.on("error", (error51) => {
+            this.onerror?.(error51);
+          });
+          if (this._stderrStream && this._process.stderr) {
+            this._process.stderr.pipe(this._stderrStream);
+          }
+        });
+      }
+      /**
+       * The stderr stream of the child process, if `StdioServerParameters.stderr` was set to "pipe" or "overlapped".
+       *
+       * If stderr piping was requested, a PassThrough stream is returned _immediately_, allowing callers to
+       * attach listeners before the start method is invoked. This prevents loss of any early
+       * error output emitted by the child process.
+       */
+      get stderr() {
+        if (this._stderrStream) {
+          return this._stderrStream;
+        }
+        return this._process?.stderr ?? null;
+      }
+      /**
+       * The child process pid spawned by this transport.
+       *
+       * This is only available after the transport has been started.
+       */
+      get pid() {
+        return this._process?.pid ?? null;
+      }
+      processReadBuffer() {
+        while (true) {
+          try {
+            const message = this._readBuffer.readMessage();
+            if (message === null) {
+              break;
+            }
+            this.onmessage?.(message);
+          } catch (error51) {
+            this.onerror?.(error51);
+          }
+        }
+      }
+      async close() {
+        if (this._process) {
+          const processToClose = this._process;
+          this._process = void 0;
+          const closePromise = new Promise((resolve6) => {
+            processToClose.once("close", () => {
+              resolve6();
+            });
+          });
+          try {
+            processToClose.stdin?.end();
+          } catch {
+          }
+          await Promise.race([closePromise, new Promise((resolve6) => setTimeout(resolve6, 2e3).unref())]);
+          if (processToClose.exitCode === null) {
+            try {
+              processToClose.kill("SIGTERM");
+            } catch {
+            }
+            await Promise.race([closePromise, new Promise((resolve6) => setTimeout(resolve6, 2e3).unref())]);
+          }
+          if (processToClose.exitCode === null) {
+            try {
+              processToClose.kill("SIGKILL");
+            } catch {
+            }
+          }
+        }
+        this._readBuffer.clear();
+      }
+      send(message) {
+        return new Promise((resolve6) => {
+          if (!this._process?.stdin) {
+            throw new Error("Not connected");
+          }
+          const json2 = serializeMessage(message);
+          if (this._process.stdin.write(json2)) {
+            resolve6();
+          } else {
+            this._process.stdin.once("drain", resolve6);
+          }
+        });
+      }
+    };
+  }
+});
+
 // lib/adapters/trusted-public-policy.mjs
 function deepFreeze4(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -40497,14 +40593,14 @@ var init_trusted_public_policy = __esm({
 });
 
 // lib/adapters/mcp-transport.mjs
-function isPlainObject7(value) {
+function isPlainObject8(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function validateCredentialRef(reference) {
   if (reference === null) return null;
-  if (!isPlainObject7(reference)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject8(reference)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(reference).sort();
   if (reference.kind === "environment" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof reference.name === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(reference.name)) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (reference.kind === "secret-store" && keys.length === 4 && keys[0] === "kind" && keys[1] === "provenance" && keys[2] === "provider" && keys[3] === "reference" && typeof reference.provider === "string" && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider) && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance && typeof reference.reference === "string" && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference) && !RAW_CREDENTIAL_SHAPE.test(reference.reference) && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
@@ -40518,7 +40614,7 @@ function validateCredentialRef(reference) {
   throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
 }
 function validateProviderConfig(config2) {
-  if (!isPlainObject7(config2)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject8(config2)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(config2).sort();
   if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
   return Object.freeze({
@@ -40559,7 +40655,7 @@ function collectLocationIndicators2(value, indicators = [], stack = /* @__PURE__
   }
 }
 function validateTransport(transport) {
-  if (!isPlainObject7(transport)) throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  if (!isPlainObject8(transport)) throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).some((key) => !["connect", "fetch", "kind", "url"].includes(key))) {
       throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
@@ -40683,10 +40779,10 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     publicCatalogSnapshotHash: trustedPolicy.snapshotHash,
     publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
-      if (!isPlainObject7(request) || !ALLOWED_TOOLS.has(request.name)) {
+      if (!isPlainObject8(request) || !ALLOWED_TOOLS.has(request.name)) {
         throw codedError6("TOOL_NOT_AVAILABLE");
       }
-      if (!isPlainObject7(request.arguments) || containsForbiddenArgument(request.arguments)) {
+      if (!isPlainObject8(request.arguments) || containsForbiddenArgument(request.arguments)) {
         throw codedError6("MUTATION_ARGUMENT_NOT_ALLOWED");
       }
       const policy = request.arguments.policy;
@@ -40696,7 +40792,7 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
         throw codedError6("ACTION_NOT_ALLOWED");
       }
       if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError6("ACTION_NOT_ALLOWED");
-      if (!isPlainObject7(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
+      if (!isPlainObject8(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
         (locationId) => locationId !== config2.expectedLocationId
       )) throw codedError6("LOCATION_MISMATCH");
       try {
@@ -40751,16 +40847,16 @@ var init_mcp_transport = __esm({
 });
 
 // lib/adapters/public-ghl.mjs
-function isPlainObject8(value) {
+function isPlainObject9(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function parseToolResult(response) {
   let value = response;
-  if (isPlainObject8(response) && isPlainObject8(response.structuredContent)) {
+  if (isPlainObject9(response) && isPlainObject9(response.structuredContent)) {
     value = response.structuredContent;
-  } else if (isPlainObject8(response) && Array.isArray(response.content)) {
+  } else if (isPlainObject9(response) && Array.isArray(response.content)) {
     const text = response.content.find((entry) => entry?.type === "text")?.text;
     if (typeof text !== "string") throw codedError6("PUBLIC_RESPONSE_INVALID");
     try {
@@ -40769,7 +40865,7 @@ function parseToolResult(response) {
       throw codedError6("PUBLIC_RESPONSE_INVALID");
     }
   }
-  if (!isPlainObject8(value) || !Array.isArray(value.items) || !isPlainObject8(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError6("PUBLIC_RESPONSE_INVALID");
+  if (!isPlainObject9(value) || !Array.isArray(value.items) || !isPlainObject9(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError6("PUBLIC_RESPONSE_INVALID");
   return cloneJson(value, "PUBLIC_RESPONSE_INVALID");
 }
 function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalSignal) {
@@ -40823,7 +40919,7 @@ function startTime(runtime) {
   return typeof runtime.now === "function" ? runtime.now() : Date.now();
 }
 function normalizeCapability(capability, allowlist, allowlistHash, client) {
-  if (!isPlainObject8(capability) || typeof capability.actionId !== "string") {
+  if (!isPlainObject9(capability) || typeof capability.actionId !== "string") {
     throw codedError6("ACTION_NOT_ALLOWED");
   }
   const listed = allowlist.actions.find(({ actionId }) => actionId === capability.actionId);
@@ -40900,7 +40996,7 @@ function normalizeRawPageSink(rawPageSink) {
   });
 }
 function validateSealedPage(sealed, payloadHash) {
-  if (!isPlainObject8(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError6("RAW_PAGE_SEAL_FAILED");
+  if (!isPlainObject9(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError6("RAW_PAGE_SEAL_FAILED");
   return Object.freeze({
     opaqueRef: sealed.opaqueRef,
     payloadHash: sealed.payloadHash
@@ -40935,7 +41031,7 @@ function validateCheckpointArtifact(artifact, index, expectedCursor, reportedCou
     "reportedCount",
     "responseBytes"
   ];
-  if (!isPlainObject8(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject9(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
   return artifact.nextCursor;
 }
 function validateResumeCheckpoint(checkpoint, {
@@ -40964,7 +41060,7 @@ function validateResumeCheckpoint(checkpoint, {
     "scopeHash",
     "source"
   ];
-  if (!isPlainObject8(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject9(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
   let appliedWindow;
   try {
     appliedWindow = validateCollectionWindow(
@@ -43323,7 +43419,7 @@ import {
 function codedError10(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject9(value) {
+function isPlainObject10(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -43351,7 +43447,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync5(descriptor, "utf8"));
-    if (!isPlainObject9(parsed)) throw new Error();
+    if (!isPlainObject10(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError10(code);
@@ -43360,7 +43456,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject9(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject9(config2.frozenInputs) || !isPlainObject9(config2.context) || !isPlainObject9(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject10(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject10(config2.frozenInputs) || !isPlainObject10(config2.context) || !isPlainObject10(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -43368,7 +43464,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject9(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject9(rail.capabilityProofIndex) || !isPlainObject9(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject9(transport.responses) || !isPlainObject9(transport.toolsList))) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject10(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject10(rail.capabilityProofIndex) || !isPlainObject10(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject10(transport.responses) || !isPlainObject10(transport.toolsList))) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -43398,7 +43494,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
     throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject9(frozenInputs)) fail2();
+  if (!isPlainObject10(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -43468,7 +43564,7 @@ function assertSealDocumentShape(document) {
   const fail2 = () => {
     throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject9(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject9(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject10(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject10(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -43514,7 +43610,7 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject9(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  if (!isPlainObject10(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, declaration.relativePath);
   if (!isWithin2(project, pathname)) fail2();
@@ -43572,7 +43668,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject9(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject10(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
@@ -43773,7 +43869,7 @@ function publicConfigError() {
   throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject9(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject10(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -43782,16 +43878,27 @@ function validatePublicTransport(transport) {
     if (Object.keys(transport).sort().join(",") !== "args,command,kind" || typeof transport.command !== "string" || transport.command.length === 0 || !Array.isArray(transport.args) || transport.args.some((argument) => typeof argument !== "string")) publicConfigError();
     return;
   }
+  if (transport.kind === GHL_NATIVE_TRANSPORT_KIND) {
+    try {
+      validateGhlNativeTransport(transport);
+    } catch {
+      publicConfigError();
+    }
+    return;
+  }
   publicConfigError();
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject9(config2)) publicConfigError();
+  if (!isPlainObject10(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject9(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject9(config2.frozenInputs) || !isPlainObject9(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject10(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject10(config2.frozenInputs) || !isPlainObject10(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
+  if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
+    publicConfigError();
+  }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject9(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject10(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -43819,7 +43926,7 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject9(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject10(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
@@ -43972,8 +44079,19 @@ async function collectPublicEvidence({
   if (transportConnect !== null && ghlNativeConnect !== null) {
     throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
-  if (ghlNativeConnect !== null) assertTranslatableCapabilities(config2.capabilities);
-  const effectiveConnect = ghlNativeConnect === null ? transportConnect : createGhlTranslatingConnect({ connect: ghlNativeConnect, runtime });
+  const nativeTransport = config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND ? validateGhlNativeTransport(config2.transport) : null;
+  if (nativeTransport !== null && transportConnect !== null) {
+    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  }
+  const nativeConnect = ghlNativeConnect ?? (nativeTransport === null ? null : createGhlNativeConnect({
+    url: nativeTransport.url,
+    credentialHeaderName: nativeTransport.credentialHeaderName,
+    // A host may instrument the wire (a hermetic test does exactly this). A provider
+    // configuration cannot: `validateGhlNativeTransport` refuses a `fetch` key outright.
+    fetch: typeof runtime?.ghlNativeFetch === "function" ? runtime.ghlNativeFetch : void 0
+  }));
+  if (nativeConnect !== null) assertTranslatableCapabilities(config2.capabilities);
+  const effectiveConnect = nativeConnect === null ? transportConnect : createGhlTranslatingConnect({ connect: nativeConnect, runtime });
   const capabilities = approvedPublicCapabilities(config2);
   const plan = publicCollectionPlan(config2);
   const window = Object.freeze({
@@ -43996,8 +44114,9 @@ async function collectPublicEvidence({
   let client;
   try {
     if (signal?.aborted) throw codedError10("COLLECTION_ABORTED");
+    const wireTransport = nativeTransport === null ? structuredClone(config2.transport) : { kind: "streamable-http", url: nativeTransport.url };
     client = await connectMcp({
-      transport: effectiveConnect === null ? structuredClone(config2.transport) : { ...structuredClone(config2.transport), connect: effectiveConnect },
+      transport: effectiveConnect === null ? wireTransport : { ...wireTransport, connect: effectiveConnect },
       // EXACTLY the six keys `lib/adapters/mcp-transport.mjs` accepts. `credentialRef` is copied
       // through as the reference it is; its VALUE is resolved inside the transport and never
       // returned to, held by, or logged by this runtime.
@@ -44098,7 +44217,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject9(sealed)) return null;
+    if (!isPlainObject10(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -44235,6 +44354,7 @@ var init_local_runtime = __esm({
     init_canonical();
     init_internal_ghl();
     init_ghl_public_translator();
+    init_ghl_native_session();
     init_mcp_transport();
     init_public_ghl();
     init_trusted_public_policy();

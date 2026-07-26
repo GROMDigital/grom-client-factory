@@ -27,6 +27,11 @@ import {
   assertTranslatableCapabilities,
   createGhlTranslatingConnect,
 } from './adapters/ghl-public-translator.mjs';
+import {
+  GHL_NATIVE_TRANSPORT_KIND,
+  createGhlNativeConnect,
+  validateGhlNativeTransport,
+} from './adapters/ghl-native-session.mjs';
 import { connectMcp } from './adapters/mcp-transport.mjs';
 import { createPublicGhlAdapter } from './adapters/public-ghl.mjs';
 import { loadTrustedPublicReadPolicy } from './adapters/trusted-public-policy.mjs';
@@ -883,6 +888,21 @@ function validatePublicTransport(transport) {
     ) publicConfigError();
     return;
   }
+  /**
+   * The GHL-NATIVE kind. A configuration that declares it is saying "the server at this URL is a
+   * raw GoHighLevel MCP server, authenticated by a bespoke header, and the sub-account is chosen
+   * by the token value" — which is what every Grom sub-account is actually reachable through.
+   * Declaring it is what makes `lib/adapters/ghl-native-session.mjs` the DEFAULT `ghlNativeConnect`
+   * in `collectPublicEvidence`; a host that injects its own seam still wins.
+   */
+  if (transport.kind === GHL_NATIVE_TRANSPORT_KIND) {
+    try {
+      validateGhlNativeTransport(transport);
+    } catch {
+      publicConfigError();
+    }
+    return;
+  }
   publicConfigError();
 }
 
@@ -917,6 +937,13 @@ export function validatePublicConfig(config) {
     || config.capabilities.length === 0
   ) publicConfigError();
   validatePublicTransport(config.transport);
+  // A GHL MCP worker binds the session to a sub-account ENTIRELY through the token value, so a
+  // native transport with no credential reference is a run bound to no account at all. Refused
+  // here, at preflight, rather than at connect where it would surface as an opaque
+  // MCP_CONNECTION_FAILED with nothing to act on.
+  if (config.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config.credentialRef === null) {
+    publicConfigError();
+  }
   const operationIds = new Set();
   for (const capability of config.capabilities) {
     if (
@@ -1228,10 +1255,37 @@ async function collectPublicEvidence({
   if (transportConnect !== null && ghlNativeConnect !== null) {
     throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
   }
-  if (ghlNativeConnect !== null) assertTranslatableCapabilities(config.capabilities);
-  const effectiveConnect = ghlNativeConnect === null
+  /**
+   * The DEFAULT GHL-native session — the last missing piece. Nothing in this repo could construct
+   * a real GHL MCP session: `connectMcp`'s `defaultConnect` sends `Authorization: Bearer`, which
+   * no GHL worker accepts, and `ghlNativeConnect` had no default, so a live run required a host to
+   * bring its own client. A configuration that DECLARES the native transport now gets
+   * `lib/adapters/ghl-native-session.mjs` built for it, from a credential REFERENCE only.
+   *
+   * The seam stays injectable and injection stays authoritative: a host-supplied
+   * `ghlNativeConnect` is used as-is whatever the configuration declares, which is why every
+   * hermetic test in `tests/ghl-public-translator.test.mjs` is untouched by this. And a
+   * configuration that declares a native server while the host injects a NORMALISED
+   * `transportConnect` is a contradiction about what is on the other end of the wire, so it is
+   * refused rather than resolved by precedence.
+   */
+  const nativeTransport = config.transport.kind === GHL_NATIVE_TRANSPORT_KIND
+    ? validateGhlNativeTransport(config.transport)
+    : null;
+  if (nativeTransport !== null && transportConnect !== null) {
+    throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  }
+  const nativeConnect = ghlNativeConnect ?? (nativeTransport === null ? null : createGhlNativeConnect({
+    url: nativeTransport.url,
+    credentialHeaderName: nativeTransport.credentialHeaderName,
+    // A host may instrument the wire (a hermetic test does exactly this). A provider
+    // configuration cannot: `validateGhlNativeTransport` refuses a `fetch` key outright.
+    fetch: typeof runtime?.ghlNativeFetch === 'function' ? runtime.ghlNativeFetch : undefined,
+  }));
+  if (nativeConnect !== null) assertTranslatableCapabilities(config.capabilities);
+  const effectiveConnect = nativeConnect === null
     ? transportConnect
-    : createGhlTranslatingConnect({ connect: ghlNativeConnect, runtime });
+    : createGhlTranslatingConnect({ connect: nativeConnect, runtime });
   const capabilities = approvedPublicCapabilities(config);
   const plan = publicCollectionPlan(config);
   const window = Object.freeze({
@@ -1259,10 +1313,17 @@ async function collectPublicEvidence({
   let client;
   try {
     if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
+    // `mcp-transport.mjs` `validateTransport` knows two kinds and exactly four keys. The
+    // GHL-native record is therefore reduced to the streamable-http transport it IS before it
+    // crosses that boundary — the header name is already baked into `effectiveConnect`, and the
+    // URL is re-validated on the far side by rules identical to the ones it already passed.
+    const wireTransport = nativeTransport === null
+      ? structuredClone(config.transport)
+      : { kind: 'streamable-http', url: nativeTransport.url };
     client = await connectMcp({
       transport: effectiveConnect === null
-        ? structuredClone(config.transport)
-        : { ...structuredClone(config.transport), connect: effectiveConnect },
+        ? wireTransport
+        : { ...wireTransport, connect: effectiveConnect },
       // EXACTLY the six keys `lib/adapters/mcp-transport.mjs` accepts. `credentialRef` is copied
       // through as the reference it is; its VALUE is resolved inside the transport and never
       // returned to, held by, or logged by this runtime.
