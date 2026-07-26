@@ -100,11 +100,45 @@ function safeStatus(value) {
   return safe;
 }
 
+/**
+ * The adapter kind that binds the run to a REAL sub-account through the public MCP adapter.
+ * `local_fixture` replays a configuration; this one collects.
+ */
+const PUBLIC_ADAPTER_KIND = 'ghl_public';
+
+/**
+ * Which composition root a RESUME needs. A resume names only a project, a location and a run id,
+ * so the adapter kind has to come from the run's own durable invocation. Resolved read-only, and
+ * ANY failure falls back to the pre-existing local kernel so a fixture resume is unchanged.
+ */
+async function resumeAdapterKind({ projectRoot, locationId, runId }) {
+  try {
+    const { openState } = await import('../lib/state.mjs');
+    const state = openState({ projectRoot, locationId });
+    let descriptor;
+    try {
+      descriptor = state.getRunInvocation(runId).providerDescriptor;
+    } finally {
+      state.close();
+    }
+    if (descriptor?.kind === 'inline_safe') return descriptor.config?.adapterKind;
+    if (descriptor?.kind !== 'project_file') return undefined;
+    const pathname = resolve(projectRoot, descriptor.relativePath);
+    return readRegularJson(pathname, 'AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG').adapterKind;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function runAuditCli({
   argv = process.argv.slice(2),
   kernel,
   stdout = process.stdout,
   vaultReferenceResolver,
+  // Host-owned bindings for the public rail: an already-authenticated `transportConnect`, a
+  // secret-store `credentialResolver`, an OS-keychain `keyProvider`, an abort `signal`. Empty by
+  // default, in which case the transport is the MCP SDK's own. Never a credential VALUE.
+  publicRuntime = {},
 } = {}) {
   const { command, flags } = parseAuditCliArgs(argv);
   let runtimeKernel = kernel;
@@ -195,6 +229,20 @@ export async function runAuditCli({
           providerConfigPath: resolve(flags['provider-config']),
           config: providerConfig,
         });
+      } else if (!runtimeKernel && providerConfig.adapterKind === PUBLIC_ADAPTER_KIND) {
+        // The gap this branch closes: `createPublicGhlAdapter` and `connectMcp` shipped built and
+        // tested but bound to nothing, so every non-fixture configuration fell through to
+        // AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS below and the CLI could not audit an account.
+        const local = await import('../lib/local-runtime.mjs');
+        runtimeKernel = local.createPublicAuditKernel({
+          initialRunId: providerConfig.runId,
+          ...publicRuntime,
+        });
+        providerDescriptor = local.publicProviderDescriptor({
+          projectRoot: resolve(flags.project),
+          providerConfigPath: resolve(flags['provider-config']),
+          config: providerConfig,
+        });
       }
       if (!runtimeKernel) throw codedError('AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS');
       result = await runtimeKernel.start({
@@ -223,8 +271,17 @@ export async function runAuditCli({
         throw codedError('AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE');
       }
       if (!runtimeKernel) {
-        const { createLocalAuditKernel } = await import('../lib/local-runtime.mjs');
-        runtimeKernel = createLocalAuditKernel();
+        const local = await import('../lib/local-runtime.mjs');
+        const adapterKind = await resumeAdapterKind({
+          projectRoot: resolve(flags.project),
+          locationId: flags.location,
+          runId: flags['run-id'],
+        });
+        runtimeKernel = adapterKind === PUBLIC_ADAPTER_KIND
+          // The run id is passed so the public root adopts the inventory this run was already
+          // sealed with instead of re-reading the live account (see `adoptSealedInventory`).
+          ? local.createPublicAuditKernel({ ...publicRuntime, resumeRunId: flags['run-id'] })
+          : local.createLocalAuditKernel();
       }
       result = await runtimeKernel.resume({
         projectRoot: resolve(flags.project),

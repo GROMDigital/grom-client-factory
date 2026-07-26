@@ -148,12 +148,13 @@ test('public action matching binds every tuple field and the catalog snapshot ha
   };
   assert.equal(assertAllowedPublicAction(allowlist, action), true);
   for (const [field, replacement] of [
-    ['method', 'GET'],
+    ['method', 'PATCH'],
     ['normalizedPath', '/contacts/other'],
     ['category', 'payments'],
     ['risk', 'write'],
     ['sourceSnapshotHash', 'a'.repeat(64)],
   ]) {
+    assert.notEqual(action[field], replacement, `replacement for ${field} must differ from the fixture tuple`);
     assert.throws(() => assertAllowedPublicAction(allowlist, { ...action, [field]: replacement }), /PUBLIC_ACTION_NOT_ALLOWED/);
   }
 });

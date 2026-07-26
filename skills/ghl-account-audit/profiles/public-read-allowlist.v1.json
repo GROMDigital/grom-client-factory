@@ -1,9 +1,37 @@
 {
   "schemaVersion": "1.0.0",
-  "sourceCatalogRevision": "2026-07-24-public-read-review-1",
-  "sourceSnapshotHash": "705a9658e5cf405dc7b4b5e1fc59e20304d57bf80c661181e5642cf981f32052",
+  "sourceCatalogRevision": "2026-07-27-public-read-review-2",
+  "sourceSnapshotHash": "eed2dbc4c229c4dc8f8c15305a2cb1de17c5082e7adbc0d4017f20d4fb6ba6f6",
   "sourceServerIdentity": "reviewed-public-catalog",
   "actions": [
+    {
+      "actionId": "calendars-v3__get-appointment",
+      "method": "GET",
+      "normalizedPath": "/calendars/events/appointments/{eventId}",
+      "category": "appointments",
+      "risk": "read"
+    },
+    {
+      "actionId": "calendars-v3__get-calendar-events",
+      "method": "GET",
+      "normalizedPath": "/calendars/events",
+      "category": "appointments",
+      "risk": "read"
+    },
+    {
+      "actionId": "calendars-v3__get-calendars",
+      "method": "GET",
+      "normalizedPath": "/calendars/",
+      "category": "appointments",
+      "risk": "read"
+    },
+    {
+      "actionId": "contacts-v3__get-appointments-for-contact",
+      "method": "GET",
+      "normalizedPath": "/contacts/{contactId}/appointments",
+      "category": "appointments",
+      "risk": "read"
+    },
     {
       "actionId": "contacts.search",
       "method": "POST",
@@ -12,10 +40,52 @@
       "risk": "read"
     },
     {
+      "actionId": "conversations-v3__export-messages-by-location",
+      "method": "GET",
+      "normalizedPath": "/conversations/messages/export",
+      "category": "conversations",
+      "risk": "read"
+    },
+    {
+      "actionId": "conversations-v3__get-messages",
+      "method": "GET",
+      "normalizedPath": "/conversations/{conversationId}/messages",
+      "category": "conversations",
+      "risk": "read"
+    },
+    {
+      "actionId": "conversations-v3__search-conversation",
+      "method": "GET",
+      "normalizedPath": "/conversations/search",
+      "category": "conversations",
+      "risk": "read"
+    },
+    {
+      "actionId": "opportunities-v3__get-pipelines",
+      "method": "GET",
+      "normalizedPath": "/opportunities/pipelines",
+      "category": "opportunities",
+      "risk": "read"
+    },
+    {
       "actionId": "opportunities.list",
       "method": "GET",
       "normalizedPath": "/opportunities/search",
       "category": "opportunities",
+      "risk": "read"
+    },
+    {
+      "actionId": "payments-v3__list-orders",
+      "method": "GET",
+      "normalizedPath": "/payments/orders",
+      "category": "payments",
+      "risk": "read"
+    },
+    {
+      "actionId": "payments-v3__list-transactions",
+      "method": "GET",
+      "normalizedPath": "/payments/transactions",
+      "category": "payments",
       "risk": "read"
     }
   ]

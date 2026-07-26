@@ -23,8 +23,14 @@ import {
 } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { createInternalGhlAdapter } from './adapters/internal-ghl.mjs';
-import { createAuditKernel, sealFrozenInputs } from './kernel.mjs';
+import { connectMcp } from './adapters/mcp-transport.mjs';
+import { createPublicGhlAdapter } from './adapters/public-ghl.mjs';
+import { loadTrustedPublicReadPolicy } from './adapters/trusted-public-policy.mjs';
+import { createAuditKernel, planWeeklyCollection, sealFrozenInputs } from './kernel.mjs';
+import { auditPaths } from './paths.mjs';
 import { openState } from './state.mjs';
+import { openVault, resolveVaultKeys } from './vault.mjs';
+import { loadPublicReadAllowlist } from '../schemas/v1.mjs';
 
 const LOCAL_SCHEMA = '1.0.0';
 const INTERNAL_LIMITATIONS = Object.freeze([
@@ -601,55 +607,66 @@ function writeImmutable(pathname, value) {
   chmodSync(pathname, 0o400);
 }
 
-function localPublisher({
-  paths,
-  runId,
-  publicationId,
-  compiled,
-  verification,
-  frozenInputs,
-}) {
-  const publicationRoot = join(paths.weekly, publicationId);
-  if (existsSync(publicationRoot)) {
-    const metadata = lstatSync(publicationRoot);
-    if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-      throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT');
-    }
-  } else {
-    mkdirSync(publicationRoot, { mode: 0o700 });
-  }
-  const report = [
-    '# Weekly GHL audit',
-    '',
-    'Status: complete_partial',
-    '',
-    'This offline fixture publication covers the public comparable subset only.',
-    '',
-  ].join('\n');
-  const manifest = {
-    schemaVersion: LOCAL_SCHEMA,
+/**
+ * The publication writer, parameterised ONLY by its one-line scope statement. `localPublisher`
+ * below passes the exact string it always passed, so an offline fixture publication is still
+ * byte-for-byte what it was; the public rail passes a statement that is true of a live run.
+ */
+function publicationPublisher(scopeStatement) {
+  return function publish({
+    paths,
     runId,
     publicationId,
-    status: 'complete_partial',
-    frozenInputsHash: sha256(frozenInputs),
-    compiledHash: sha256(compiled),
-    verificationHash: sha256(verification),
-  };
-  writeImmutable(join(publicationRoot, 'REPORT.md'), report);
-  writeImmutable(join(publicationRoot, 'coverage.json'), compiled.coverage);
-  writeImmutable(join(publicationRoot, 'result.json'), compiled);
-  writeImmutable(join(publicationRoot, 'manifest.json'), manifest);
-  return {
-    publicationId,
-    manifestHash: sha256(manifest),
-    publicationRoot: sha256({
-      report: sha256(report),
-      coverage: sha256(compiled.coverage),
-      result: sha256(compiled),
-      manifest: sha256(manifest),
-    }),
+    compiled,
+    verification,
+    frozenInputs,
+  }) {
+    const publicationRoot = join(paths.weekly, publicationId);
+    if (existsSync(publicationRoot)) {
+      const metadata = lstatSync(publicationRoot);
+      if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
+        throw codedError('AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT');
+      }
+    } else {
+      mkdirSync(publicationRoot, { mode: 0o700 });
+    }
+    const report = [
+      '# Weekly GHL audit',
+      '',
+      'Status: complete_partial',
+      '',
+      scopeStatement,
+      '',
+    ].join('\n');
+    const manifest = {
+      schemaVersion: LOCAL_SCHEMA,
+      runId,
+      publicationId,
+      status: 'complete_partial',
+      frozenInputsHash: sha256(frozenInputs),
+      compiledHash: sha256(compiled),
+      verificationHash: sha256(verification),
+    };
+    writeImmutable(join(publicationRoot, 'REPORT.md'), report);
+    writeImmutable(join(publicationRoot, 'coverage.json'), compiled.coverage);
+    writeImmutable(join(publicationRoot, 'result.json'), compiled);
+    writeImmutable(join(publicationRoot, 'manifest.json'), manifest);
+    return {
+      publicationId,
+      manifestHash: sha256(manifest),
+      publicationRoot: sha256({
+        report: sha256(report),
+        coverage: sha256(compiled.coverage),
+        result: sha256(compiled),
+        manifest: sha256(manifest),
+      }),
+    };
   };
 }
+
+const localPublisher = publicationPublisher(
+  'This offline fixture publication covers the public comparable subset only.',
+);
 
 export function localProviderDescriptor({ projectRoot, providerConfigPath, config }) {
   const project = resolve(projectRoot);
@@ -768,5 +785,747 @@ export function createLocalAuditKernel({ initialRunId, internalClient = null } =
       };
     },
     publisher: localPublisher,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The PUBLIC composition root — `adapterKind: 'ghl_public'`
+// ---------------------------------------------------------------------------
+
+/**
+ * `createPublicGhlAdapter` and `connectMcp` shipped fully built and fully tested in Task 4 and
+ * were then referenced by NOTHING outside their own tests: `cli/audit.mjs` only ever built a
+ * kernel for `adapterKind: 'local_fixture'`, whose `collectPublic` returns a JSON blob copied out
+ * of the provider configuration. The delivered CLI could therefore replay a fixture and could not
+ * audit an account. This is the missing half — the same wiring style as the INTERNAL rail above:
+ * CONFIGURATION-DRIVEN construction, credential REFERENCES only, and a transport that is either
+ * host-injected or the SDK's own.
+ *
+ * The `local_fixture` path above is untouched: a public run is a DIFFERENT `adapterKind`, a
+ * different validator, a different descriptor minter and a different kernel factory.
+ */
+const PUBLIC_ADAPTER_KIND = 'ghl_public';
+const PUBLIC_SOURCE = 'public_ghl';
+const PUBLIC_HEX64 = /^[a-f0-9]{64}$/u;
+const PUBLIC_LOCATION_ID = /^[A-Za-z0-9_-]{1,128}$/u;
+const PUBLIC_OPERATION_ID = /^[a-z0-9][a-z0-9_.:-]{0,63}$/u;
+const PUBLIC_KEY_REFERENCE = /^(protected-file|os-keychain):(.+)$/su;
+const PUBLIC_REQUIRED_KEYS = Object.freeze([
+  'adapterKind',
+  'capabilities',
+  'capabilityManifestHash',
+  'context',
+  'credentialRef',
+  'cutoff',
+  'expectedLocationId',
+  'frozenInputs',
+  'providerId',
+  'publicCatalogSnapshotHash',
+  'publicReadAllowlistHash',
+  'reviews',
+  'schemaVersion',
+  'timezone',
+  'transport',
+]);
+const PUBLIC_OPTIONAL_KEYS = Object.freeze([
+  'lateArrivalHours',
+  'providerAvailableFrom',
+  'rawEvidenceRetentionDays',
+  'runId',
+  'salesCycleDays',
+]);
+/**
+ * These two fields are DERIVED, never declared. `lib/state.mjs:109-136` seals them into the run,
+ * and Task 4's contract says they must be built from the envelopes the collection actually
+ * produced — so a configuration that states its own inventory is stating what it collected before
+ * it collected anything. A declared inventory fails preflight rather than being overwritten.
+ */
+const PUBLIC_DERIVED_FROZEN_FIELDS = Object.freeze([
+  'privateSourceInventory',
+  'privateSourceInventoryHash',
+]);
+const PUBLIC_DEFAULT_RETENTION_DAYS = 7;
+const PUBLIC_MAXIMUM_RETENTION_DAYS = 30;
+const PUBLIC_DAY_MS = 86_400_000;
+
+function publicConfigError() {
+  throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+}
+
+function validatePublicTransport(transport) {
+  if (
+    !isPlainObject(transport)
+    // A JSON document cannot carry a function, so a `connect`/`fetch` KEY in the configuration is
+    // never the injected seam — it is a value `validateTransport` would silently discard. Refused
+    // so a configuration can never look like it is choosing its own transport implementation.
+    || Object.hasOwn(transport, 'connect')
+    || Object.hasOwn(transport, 'fetch')
+  ) publicConfigError();
+  if (transport.kind === 'streamable-http') {
+    if (
+      Object.keys(transport).sort().join(',') !== 'kind,url'
+      || typeof transport.url !== 'string'
+      || transport.url.length === 0
+    ) publicConfigError();
+    return;
+  }
+  if (transport.kind === 'stdio') {
+    if (
+      Object.keys(transport).sort().join(',') !== 'args,command,kind'
+      || typeof transport.command !== 'string'
+      || transport.command.length === 0
+      || !Array.isArray(transport.args)
+      || transport.args.some((argument) => typeof argument !== 'string')
+    ) publicConfigError();
+    return;
+  }
+  publicConfigError();
+}
+
+export function validatePublicConfig(config) {
+  if (!isPlainObject(config)) publicConfigError();
+  const keys = Object.keys(config);
+  if (
+    keys.some((key) => (
+      !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)
+    ))
+    || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config, key))
+    || config.schemaVersion !== LOCAL_SCHEMA
+    || config.adapterKind !== PUBLIC_ADAPTER_KIND
+    || typeof config.providerId !== 'string'
+    || config.providerId.length === 0
+    || typeof config.expectedLocationId !== 'string'
+    || !PUBLIC_LOCATION_ID.test(config.expectedLocationId)
+    || typeof config.capabilityManifestHash !== 'string'
+    || !PUBLIC_HEX64.test(config.capabilityManifestHash)
+    || typeof config.publicCatalogSnapshotHash !== 'string'
+    || !PUBLIC_HEX64.test(config.publicCatalogSnapshotHash)
+    || typeof config.publicReadAllowlistHash !== 'string'
+    || !PUBLIC_HEX64.test(config.publicReadAllowlistHash)
+    || !(config.credentialRef === null || isPlainObject(config.credentialRef))
+    || !Number.isSafeInteger(config.cutoff)
+    || typeof config.timezone !== 'string'
+    || config.timezone.length === 0
+    || !isPlainObject(config.frozenInputs)
+    || !isPlainObject(config.context)
+    || !Array.isArray(config.reviews)
+    || !Array.isArray(config.capabilities)
+    || config.capabilities.length === 0
+  ) publicConfigError();
+  validatePublicTransport(config.transport);
+  const operationIds = new Set();
+  for (const capability of config.capabilities) {
+    if (
+      !isPlainObject(capability)
+      || Object.keys(capability).sort().join(',') !== 'actionId,operationId'
+      || typeof capability.actionId !== 'string'
+      || capability.actionId.length === 0
+      || typeof capability.operationId !== 'string'
+      || !PUBLIC_OPERATION_ID.test(capability.operationId)
+      || operationIds.has(capability.operationId)
+    ) publicConfigError();
+    operationIds.add(capability.operationId);
+  }
+  for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
+    if (Object.hasOwn(config.frozenInputs, field)) publicConfigError();
+  }
+  // Cheap, early and free: the account this run is BOUND to must be one account, stated once.
+  // Checked here so a cross-account configuration never reaches a transport connect.
+  if (
+    config.frozenInputs.locationId !== config.expectedLocationId
+    || config.frozenInputs.target?.locationId !== config.expectedLocationId
+    || !Number.isSafeInteger(config.frozenInputs.cutoff)
+    || typeof config.frozenInputs.timezone !== 'string'
+    || config.frozenInputs.timezone.length === 0
+    // The cutoff and timezone are stated twice — once for the invocation, once inside the SEALED
+    // frozen inputs — and the sealed pair is the one that plans the window. Two different answers
+    // would mean the run reports one period and collects another.
+    || config.cutoff !== config.frozenInputs.cutoff
+    || config.timezone !== config.frozenInputs.timezone
+  ) publicConfigError();
+  for (const [field, limit] of [
+    ['salesCycleDays', 3_650],
+    ['lateArrivalHours', 8_760],
+  ]) {
+    if (Object.hasOwn(config, field)) {
+      const value = config[field];
+      if (!Number.isSafeInteger(value) || value <= 0 || value > limit) publicConfigError();
+    }
+  }
+  if (Object.hasOwn(config, 'providerAvailableFrom')) {
+    const value = config.providerAvailableFrom;
+    if (
+      typeof value !== 'string'
+      || !Number.isFinite(Date.parse(value))
+      || new Date(Date.parse(value)).toISOString() !== value
+    ) publicConfigError();
+  }
+  if (Object.hasOwn(config, 'rawEvidenceRetentionDays')) {
+    const value = config.rawEvidenceRetentionDays;
+    if (
+      !Number.isSafeInteger(value)
+      || value < 1
+      || value > PUBLIC_MAXIMUM_RETENTION_DAYS
+    ) publicConfigError();
+  }
+  if (Object.hasOwn(config, 'runId') && (
+    typeof config.runId !== 'string' || config.runId.length === 0
+  )) publicConfigError();
+  return config;
+}
+
+function loadPublicProjectConfig({ descriptor, projectRoot }) {
+  if (
+    !isPlainObject(descriptor)
+    || descriptor.kind !== 'project_file'
+    || typeof descriptor.relativePath !== 'string'
+    || descriptor.relativePath.length === 0
+    || typeof descriptor.configHash !== 'string'
+  ) throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  const project = resolve(projectRoot);
+  const pathname = resolve(project, descriptor.relativePath);
+  if (!isWithin(project, pathname)) {
+    throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  }
+  const realPathname = realWithin(project, pathname, 'AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  return validatePublicConfig(readRegularJson(
+    realPathname,
+    'AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG',
+  ));
+}
+
+export function publicProviderDescriptor({ projectRoot, providerConfigPath, config }) {
+  const project = resolve(projectRoot);
+  const pathname = resolve(providerConfigPath);
+  if (!isWithin(project, pathname)) {
+    throw codedError('AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  }
+  realWithin(project, pathname, 'AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG');
+  validatePublicConfig(config);
+  // `project_file`, ALWAYS. `lib/state.mjs` `assertSafeInvocationValue` refuses any invocation
+  // value under a key matching /credential/, so an `inline_safe` descriptor carrying this
+  // configuration (the kernel's fallback when no descriptor is supplied) would be rejected at
+  // run creation because the configuration names a `credentialRef`. The reference itself is never
+  // copied into run state; only this path and hash are.
+  return Object.freeze({
+    kind: 'project_file',
+    configHash: sha256(config),
+    relativePath: relative(project, pathname).split(sep).join('/'),
+  });
+}
+
+/**
+ * Vault key material for a REAL run. `localKeyMaterial` above is the hermetic constant the
+ * fixture rail uses and it stays exactly that; a public run resolves the same 64-byte layout
+ * through `lib/vault.mjs` `resolveVaultKeys`, from a reference of the form
+ * `protected-file:/absolute/path` or `os-keychain:<name>`. The reference is a REFERENCE: no key
+ * value is ever read from the provider configuration, the CLI, or the environment, and nothing
+ * here logs, returns or serialises the material.
+ */
+function publicKeyMaterial(reference, { keyProvider = null } = {}) {
+  if (reference === LOCAL_KEY_REFERENCE) return localKeyMaterial(reference);
+  const match = typeof reference === 'string' ? PUBLIC_KEY_REFERENCE.exec(reference) : null;
+  if (!match) throw codedError('AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE');
+  const [, kind, value] = match;
+  try {
+    return resolveVaultKeys({
+      keyReference: kind === 'protected-file'
+        ? { type: 'protected-file', path: value }
+        : { type: 'os-keychain', name: value },
+      keyProvider,
+    });
+  } catch {
+    // Deliberately opaque, and deliberately the SAME code for every failure mode: a key
+    // resolution failure must not describe the key, its location, its permissions or its
+    // contents. `VAULT_KEY_FILE_PERMISSIONS` vs `VAULT_KEYS_UNAVAILABLE` is an oracle.
+    throw codedError('AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE');
+  }
+}
+
+/**
+ * The raw page sink, backed by the vault that already exists. `vault.sealRaw` encrypts with
+ * AES-256-GCM under the run's key material, mints the `raw_<32 hex>` opaque reference the public
+ * adapter validates, and returns `rawHash` = sha256 of the sealed bytes — which, because the
+ * bytes ARE the canonical JSON of the page, is byte-identical to the adapter's `sha256(response)`
+ * payload hash. No parallel store is introduced; page bodies live where every other private
+ * artefact lives, under `private/raw/` at 0600, carrying an expiry the vault's purge honours.
+ */
+function vaultRawPageSink(vault, expiresAt) {
+  return Object.freeze({
+    async sealPage({ payload, payloadHash }) {
+      const bytes = Buffer.from(canonicalJson(payload), 'utf8');
+      let sealed;
+      try {
+        sealed = vault.sealRaw({ source: PUBLIC_SOURCE, bytes, expiresAt });
+      } finally {
+        bytes.fill(0);
+      }
+      if (sealed.rawHash !== payloadHash) throw codedError('RAW_PAGE_SEAL_FAILED');
+      return { opaqueRef: sealed.opaqueRef, payloadHash: sealed.rawHash };
+    },
+    // NO `restorePage`. `lib/vault.mjs` seals and purges; it exposes no read-back, so this
+    // runtime cannot honestly claim it can rehydrate a sealed page, and the adapter fails closed
+    // with RESUME_PAGE_SOURCE_REQUIRED rather than pretending. See the limitation note on
+    // `collectPublicEvidence`.
+  });
+}
+
+function checkpointKey({ source, operationId, boundLocationId, scopeHash, resumeCursor }) {
+  return canonicalJson({
+    boundLocationId,
+    operationId,
+    resumeCursor: resumeCursor ?? null,
+    scopeHash,
+    source,
+  });
+}
+
+/**
+ * The scope checkpoint store. Every checkpoint the adapter saves is kept and then travels OUT of
+ * collection inside the public evidence, so the kernel writes it into the encrypted
+ * `collecting_public` phase artefact along with everything else it collected — durable, at rest,
+ * under the same key, with no second SQLite handle and no store of its own.
+ *
+ * It cannot be the RUN-scoped checkpoint table: `state.saveCheckpoint` requires an existing run
+ * row (`RUN_NOT_FOUND`), and collection here necessarily happens BEFORE `createRun` because
+ * `privateSourceInventoryHash` is a frozen input and can only be computed from envelopes that
+ * already exist.
+ */
+function scopeCheckpointStore() {
+  const records = new Map();
+  return {
+    records,
+    async save(checkpoint) {
+      records.set(checkpointKey(checkpoint), JSON.parse(canonicalJson(checkpoint)));
+    },
+    async load(query) {
+      const found = records.get(checkpointKey(query));
+      return found === undefined ? undefined : JSON.parse(canonicalJson(found));
+    },
+    list() {
+      return [...records.values()]
+        .sort((left, right) => (
+          canonicalJson(left) < canonicalJson(right) ? -1 : 1
+        ));
+    },
+  };
+}
+
+function publicCollectionPlan(config) {
+  return planWeeklyCollection({
+    // Identical arguments to the ones `lib/kernel.mjs` uses at preflight (with no governed
+    // baseline, which this rail does not supply), so the window collected here is the window the
+    // run reports.
+    cutoff: new Date(config.frozenInputs.cutoff).toISOString(),
+    timezone: config.frozenInputs.timezone,
+    salesCycleDays: config.salesCycleDays,
+    providerAvailableFrom: config.providerAvailableFrom,
+    lateArrivalHours: Math.max(
+      72,
+      Number.isFinite(config.lateArrivalHours) ? config.lateArrivalHours : 72,
+    ),
+  });
+}
+
+/**
+ * The declared capabilities, resolved against the TRUSTED policy rather than against themselves.
+ * A configuration names only `{operationId, actionId}`; the method, path, category, risk,
+ * snapshot hash and allowlist hash are taken from the checked-in allowlist, so a configuration
+ * cannot state a tuple the catalog does not agree with — and a catalog that is being extended
+ * elsewhere is picked up without touching this file.
+ */
+function approvedPublicCapabilities(config) {
+  const policy = loadTrustedPublicReadPolicy();
+  if (
+    config.publicCatalogSnapshotHash !== policy.snapshotHash
+    || config.publicReadAllowlistHash !== policy.allowlistHash
+  ) throw codedError('AUDIT_PREFLIGHT_FAILED_PUBLIC_POLICY');
+  const listed = new Map(policy.allowlist.actions.map((action) => [action.actionId, action]));
+  return Object.freeze(config.capabilities.map(({ operationId, actionId }) => {
+    const action = listed.get(actionId);
+    if (!action || action.risk !== 'read') {
+      throw codedError('AUDIT_PREFLIGHT_FAILED_PUBLIC_CAPABILITY');
+    }
+    return Object.freeze({
+      operationId,
+      actionId: action.actionId,
+      method: action.method,
+      normalizedPath: action.normalizedPath,
+      category: action.category,
+      risk: action.risk,
+      sourceSnapshotHash: policy.snapshotHash,
+      allowlistHash: policy.allowlistHash,
+      providerId: config.providerId,
+      capabilityManifestHash: config.capabilityManifestHash,
+    });
+  }));
+}
+
+function sortedPrivateSourceInventory(entries) {
+  const sorted = [...entries].sort((left, right) => {
+    if (left.sourceId === right.sourceId) return 0;
+    return left.sourceId < right.sourceId ? -1 : 1;
+  });
+  for (let index = 1; index < sorted.length; index += 1) {
+    if (sorted[index].sourceId === sorted[index - 1].sourceId) {
+      throw codedError('AUDIT_PREFLIGHT_FAILED_PRIVATE_SOURCE_INVENTORY');
+    }
+  }
+  if (sorted.length === 0) {
+    // Every scope came back incomplete, so this run has NO authoritative source at all. The
+    // frozen inputs would be unsealable (`lib/state.mjs` requires a non-empty inventory) and a
+    // run created on them would be claiming an authority it does not have. Fail closed, loudly,
+    // before any run row exists.
+    throw codedError('AUDIT_PREFLIGHT_FAILED_PRIVATE_SOURCE_INVENTORY');
+  }
+  return sorted;
+}
+
+/**
+ * ONE bounded public collection: connect, collect every approved capability, and hand back both
+ * the evidence and the frozen-input half that only the collection can know.
+ *
+ * Boundedness is the adapter's, unchanged: each `collect` paginates to a terminal page or returns
+ * an INCOMPLETE result with a stable reason and a saved checkpoint. A budget-exhausted scope is
+ * therefore `complete_partial` with a resume cursor, never a throw. This runtime does not re-enter
+ * `collect` with that cursor: every reason the adapter can emit is either a budget bound (where
+ * continuing would void the bound the profile exists to impose) or an integrity/coverage signal
+ * (`CURSOR_LOOP`, `REPORTED_COUNT_CHANGED`, `APPLIED_WINDOW_CHANGED`, `TRUNCATED`,
+ * `TERMINAL_PROOF_MISSING`, `RATE_LIMITED`), where continuing would paper over the very thing the
+ * reason exists to report. The cursor is checkpointed for a human-gated continuation instead.
+ */
+async function collectPublicEvidence({
+  config,
+  projectRoot,
+  vaultKeyReference,
+  transportConnect,
+  credentialResolver,
+  keyProvider,
+  signal,
+  runtime,
+}) {
+  validatePublicConfig(config);
+  const locationId = config.expectedLocationId;
+  const capabilities = approvedPublicCapabilities(config);
+  const plan = publicCollectionPlan(config);
+  const window = Object.freeze({
+    from: new Date(plan.collectionStart).toISOString(),
+    to: new Date(plan.cutoff).toISOString(),
+  });
+  const retentionDays = Number.isSafeInteger(config.rawEvidenceRetentionDays)
+    ? config.rawEvidenceRetentionDays
+    : PUBLIC_DEFAULT_RETENTION_DAYS;
+  const expiresAt = new Date(
+    config.frozenInputs.cutoff + retentionDays * PUBLIC_DAY_MS,
+  ).toISOString();
+
+  const keys = publicKeyMaterial(vaultKeyReference, { keyProvider });
+  // `openVault` takes ownership and zeroes what it is handed, which is why this is a SEPARATE
+  // resolution from the one the kernel holds for phase encryption.
+  const vault = openVault({
+    paths: auditPaths(projectRoot, locationId),
+    encryptionKey: keys.encryptionKey,
+    pseudonymKey: keys.pseudonymKey,
+  });
+  const checkpointStore = scopeCheckpointStore();
+  const rawPageSink = vaultRawPageSink(vault, expiresAt);
+  const allowlist = loadPublicReadAllowlist();
+  let client;
+  try {
+    if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
+    client = await connectMcp({
+      transport: transportConnect === null
+        ? structuredClone(config.transport)
+        : { ...structuredClone(config.transport), connect: transportConnect },
+      // EXACTLY the six keys `lib/adapters/mcp-transport.mjs` accepts. `credentialRef` is copied
+      // through as the reference it is; its VALUE is resolved inside the transport and never
+      // returned to, held by, or logged by this runtime.
+      providerConfig: {
+        providerId: config.providerId,
+        expectedLocationId: locationId,
+        capabilityManifestHash: config.capabilityManifestHash,
+        publicCatalogSnapshotHash: config.publicCatalogSnapshotHash,
+        publicReadAllowlistHash: config.publicReadAllowlistHash,
+        credentialRef: config.credentialRef === null
+          ? null
+          : structuredClone(config.credentialRef),
+      },
+      ...(credentialResolver === null ? {} : { credentialResolver }),
+    });
+
+    const scopes = [];
+    const envelopes = [];
+    const inventory = [];
+    const limitations = [];
+    for (const capability of capabilities) {
+      if (signal?.aborted) throw codedError('COLLECTION_ABORTED');
+      const adapter = createPublicGhlAdapter({
+        client,
+        allowlist,
+        expectedLocationId: locationId,
+        // Undefined on purpose: the adapter then loads the versioned per-category budgets from
+        // `profiles/collection-budgets.v1.json`, which is the only place they may come from.
+        budgets: undefined,
+        checkpointStore,
+        rawPageSink,
+        runtime,
+      });
+      const result = await adapter.collect({
+        capability,
+        window,
+        cursor: null,
+        signal,
+      });
+      const complete = result.page.complete === true
+        && !Object.hasOwn(result, 'incompleteReason');
+      if (complete) {
+        envelopes.push(JSON.parse(canonicalJson(result.privateSourceEnvelope)));
+        inventory.push(...result.privateSourceInventory.map(
+          (entry) => JSON.parse(canonicalJson(entry)),
+        ));
+      } else {
+        limitations.push({
+          operationId: capability.operationId,
+          reason: result.incompleteReason ?? 'PUBLIC_SCOPE_INCOMPLETE',
+          resumeCursor: result.page.nextCursor,
+        });
+      }
+      scopes.push({
+        operationId: capability.operationId,
+        actionId: capability.actionId,
+        category: capability.category,
+        status: complete ? 'complete' : 'complete_partial',
+        incompleteReason: result.incompleteReason ?? null,
+        requestedWindow: JSON.parse(canonicalJson(result.requestedWindow)),
+        appliedWindow: JSON.parse(canonicalJson(result.appliedWindow)),
+        capturedAt: result.capturedAt,
+        page: JSON.parse(canonicalJson(result.page)),
+        items: JSON.parse(canonicalJson(result.items)),
+      });
+    }
+
+    const privateSourceInventory = sortedPrivateSourceInventory(inventory);
+    const publicEvidence = {
+      schemaVersion: LOCAL_SCHEMA,
+      source: PUBLIC_SOURCE,
+      boundLocationId: locationId,
+      collectionWindow: { from: window.from, to: window.to },
+      collectionMode: plan.mode,
+      // Present and empty so the kernel's late-event merge sees the shape it expects when a
+      // governed baseline is later supplied.
+      events: [],
+      scopes: scopes.sort((left, right) => (
+        left.operationId < right.operationId ? -1 : left.operationId > right.operationId ? 1 : 0
+      )),
+      privateSourceEnvelopes: envelopes.sort((left, right) => (
+        left.sourceId < right.sourceId ? -1 : left.sourceId > right.sourceId ? 1 : 0
+      )),
+      scopeCheckpoints: checkpointStore.list(),
+      limitations: limitations.sort((left, right) => (
+        left.operationId < right.operationId ? -1 : 1
+      )),
+    };
+    return Object.freeze({
+      publicEvidence,
+      privateSourceInventory,
+      privateSourceInventoryHash: sha256(privateSourceInventory),
+      collectionPlan: plan,
+    });
+  } finally {
+    try {
+      await client?.close?.();
+    } catch {
+      // A transport that cannot be closed cleanly must not mask the collection's own outcome.
+    }
+    vault.close();
+  }
+}
+
+/**
+ * A RESUME must not re-collect, and cannot.
+ *
+ * `privateSourceInventory` entries hash an envelope that contains `capturedAt`, so two
+ * collections of a byte-identical account produce two different `privateSourceInventoryHash`
+ * values. A resume that re-collects therefore ALWAYS fails `assertResumeInputs`, the kernel
+ * restarts it as a new run, and while the suspended run still holds its lease the operator gets
+ * `RESUME_INPUT_MISMATCH_ACTIVE_LEASE` — i.e. an `awaiting_model_review` public run could never
+ * be finished. Re-collecting would also re-read the live account for a run whose evidence is
+ * already durable, which is exactly what a resume exists to avoid.
+ *
+ * So a resume ADOPTS the inventory the run was already sealed with, and only when the run's own
+ * public evidence is durably checkpointed, so the adopted inventory always describes evidence
+ * that exists. Every other case returns `null` and the caller collects, which is an honest
+ * `RESUME_INPUT_MISMATCH` restart.
+ */
+function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
+  let state;
+  try {
+    state = openState({ projectRoot, locationId });
+  } catch {
+    return null;
+  }
+  try {
+    const sealed = state.getRun(runId)?.frozenInputs;
+    if (!isPlainObject(sealed)) return null;
+    // Without a durable `collecting_public` artefact the kernel would call `collectPublic` for
+    // real, and a fresh collection can never match an adopted inventory.
+    if (state.getCheckpoint({ runId, phase: 'collecting_public' }) === undefined) return null;
+    const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
+    // Everything the CONFIGURATION states must still be what the run was sealed with. A changed
+    // configuration is a different audit and must restart rather than inherit an authority.
+    if (canonicalJson(rest) !== canonicalJson(declared)) return null;
+    if (
+      !Array.isArray(privateSourceInventory)
+      || privateSourceInventory.length === 0
+      || sha256(privateSourceInventory) !== privateSourceInventoryHash
+    ) return null;
+    return {
+      privateSourceInventory: structuredClone(privateSourceInventory),
+      privateSourceInventoryHash,
+    };
+  } catch {
+    return null;
+  } finally {
+    state?.close();
+  }
+}
+
+/**
+ * The public kernel.
+ *
+ * Ordering is forced by the frozen-input contract: `privateSourceInventoryHash` is sealed into
+ * the run at `createRun`, and it can only be computed from envelopes that already exist, so the
+ * collection runs inside `freezeInputs` and is MEMOISED for the `collecting_public` phase that
+ * follows. One logical run therefore performs exactly one public collection.
+ *
+ * `collectInternal` is absent: this rail is public-only, so the run carries the two internal
+ * limitations and is honestly `complete_partial`, exactly as the offline rail is.
+ */
+export function createPublicAuditKernel({
+  initialRunId,
+  // Set by the CLI's `resume` command, which is the only caller that knows which run is being
+  // resumed — the kernel does not pass a run id to `freezeInputs`.
+  resumeRunId = null,
+  transportConnect = null,
+  credentialResolver = null,
+  keyProvider = null,
+  signal = null,
+  runtime = {},
+} = {}) {
+  let nextRunId = initialRunId;
+  let memo = null;
+  let adopted = null;
+  // Consumed on the FIRST `freezeInputs`, which is the resume's own. `kernel.resume` restarts a
+  // mismatched run by calling `start` in the same kernel, and that new run must collect for
+  // itself rather than adopting the authority of the run it is replacing.
+  let pendingResumeRunId = resumeRunId;
+  const collectionFor = async (args) => {
+    const config = validatePublicConfig(args.providerConfig);
+    const key = sha256({
+      configHash: sha256(config),
+      locationId: config.expectedLocationId,
+      projectRoot: resolve(args.projectRoot),
+      vaultKeyReference: sha256(args.vaultKeyReference ?? null),
+    });
+    if (memo === null || memo.key !== key) {
+      memo = {
+        key,
+        collection: collectPublicEvidence({
+          config,
+          projectRoot: args.projectRoot,
+          vaultKeyReference: args.vaultKeyReference,
+          transportConnect,
+          credentialResolver,
+          keyProvider,
+          signal,
+          runtime,
+        }),
+      };
+    }
+    return memo.collection;
+  };
+  return createAuditKernel({
+    clock: () => Date.now(),
+    idFactory: () => {
+      const selected = nextRunId ?? `run_${randomUUID()}`;
+      nextRunId = undefined;
+      return selected;
+    },
+    keyResolver: (reference) => publicKeyMaterial(reference, { keyProvider }),
+    stateStore: { open: openState },
+    providerConfigLoader: loadPublicProjectConfig,
+    adapters: {
+      collectContext: async ({ providerConfig }) => (
+        structuredClone(validatePublicConfig(providerConfig).context)
+      ),
+      collectPublic: async (args) => {
+        // Reached only when the kernel could NOT restore the phase. Under an adopted inventory
+        // there is no evidence this runtime may produce that the sealed inventory describes, so
+        // it fails closed instead of collecting something the run is not sealed for.
+        if (adopted !== null) throw codedError('AUDIT_PREFLIGHT_FAILED_PUBLIC_EVIDENCE_UNAVAILABLE');
+        return (await collectionFor(args)).publicEvidence;
+      },
+    },
+    analyzer: {
+      freezeInputs: async (args) => {
+        const config = validatePublicConfig(args.providerConfig);
+        const declared = structuredClone(config.frozenInputs);
+        const resumingRunId = pendingResumeRunId;
+        pendingResumeRunId = null;
+        adopted = resumingRunId === null
+          ? null
+          : adoptSealedInventory({
+            projectRoot: resolve(args.projectRoot),
+            locationId: config.expectedLocationId,
+            runId: resumingRunId,
+            declared,
+          });
+        if (adopted !== null) return { ...declared, ...structuredClone(adopted) };
+        const collection = await collectionFor(args);
+        return {
+          ...declared,
+          privateSourceInventory: structuredClone(collection.privateSourceInventory),
+          privateSourceInventoryHash: collection.privateSourceInventoryHash,
+        };
+      },
+      normalize: async ({ context, publicEvidence }) => ({
+        contextHash: sha256(context),
+        publicEvidenceHash: sha256(publicEvidence),
+      }),
+      discover: async () => ({ findings: [] }),
+      falsify: async () => ({ packets: [] }),
+      loadMemory: async () => ({ events: [] }),
+      createReviewRequests: async ({ providerConfig }) => (
+        structuredClone(validatePublicConfig(providerConfig).reviews)
+      ),
+      prioritize: async ({ discovery, falsification, reviews }) => ({
+        discovery,
+        falsification,
+        reviewHashes: reviews.map((review) => sha256(review)).sort(),
+      }),
+      compile: async () => ({
+        status: 'complete_partial',
+        coverage: {
+          state: 'complete_partial',
+          scope: 'public_comparable_subset',
+          limitations: [...INTERNAL_LIMITATIONS],
+        },
+        diff: { state: 'FIRST_BASELINE', transitions: [] },
+        findings: [],
+      }),
+    },
+    verifier: async ({ compiled }) => {
+      const limitations = new Set(compiled?.coverage?.limitations ?? []);
+      return {
+        result: compiled?.status === 'complete_partial'
+          && limitations.has(INTERNAL_LIMITATIONS[0])
+          && limitations.has(INTERNAL_LIMITATIONS[1])
+          ? 'pass'
+          : 'fail',
+      };
+    },
+    publisher: publicationPublisher(
+      'This publication covers the public comparable subset only; no internal evidence was collected.',
+    ),
   });
 }
