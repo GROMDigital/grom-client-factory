@@ -129,6 +129,68 @@ gates**. Two proposed adjustments only:
    post-registry gate qualifies. Any gate added later must clear that bar or it
    is just a pause.
 
+## 3A. 🔴 Cost and wall-clock, raised by Xander 2026-07-27 during the dry run
+
+**The runs take too long and burn too many tokens.** This is now the loudest
+complaint about the factory and it has evidence behind it.
+
+Measured on the Better By Ati dry run, phases 1 and 2 only (five agents):
+
+| Agent | Transcript |
+|---|---|
+| three foundation researchers | 265 KB, 271 KB, 297 KB |
+| systems-architect | 538 KB |
+| registry-reviewer | 55 KB (partial) |
+
+**About 1.4 MB of transcript for five agents, roughly 15 minutes wall clock.**
+Phases 3 and 4 add roughly eighteen more agents plus a fix loop bounded at two
+rounds, so the full run is plausibly three to four times that again.
+
+### The diagnosis, which is mostly structural and partly self-inflicted
+
+Every agent bootstraps by reading the same files from scratch before writing a
+line:
+
+| File | Lines |
+|---|---|
+| `guardrails.md` | 43 |
+| `canonical-model.md` | 175 |
+| `base-workflows.md` | 464 |
+| `ai-agent-contract.md` | 224 |
+| the client registry | ~700 |
+
+That is roughly 1,600 lines of mandatory reading, per agent, times twenty-three
+agents. The content is nearly identical every time; only the role prompt differs.
+
+🔴 **The Standard Build made this materially worse.** `base-workflows.md` and
+`ai-agent-contract.md` are 688 lines that did not exist on 2026-07-26 and are now
+read by every agent. The contracts are right, but they were written without
+costing what it means to hand all of them to twenty-three agents.
+
+### Where the fix probably is
+
+1. **Scope the baseline per role.** `nurture-copywriter` does not need the removal
+   matrix. `domains-deliverability` does not need the AI agent contract.
+   `pipeline-fields` genuinely needs `canonical-model.md` and `base-workflows.md`
+   and little else. A per-role reading list in `roster.json` is a small change
+   with a large multiplier.
+2. **Scope the REGISTRY per role too.** Module prompts already name which sections
+   are their primary source (pipeline-fields reads 2 and 5, cites 3 and 9). Handing
+   each role a scoped extract instead of all 700 lines cuts the largest single
+   input.
+3. **Question whether twenty-three roles is the right shape.** Some produce short
+   docs and could merge. This is the expensive kind of change and should follow 1
+   and 2, not lead.
+4. **Do not solve it by weakening the contracts.** The Tier-1 files exist because
+   the estate kept re-deciding settled things. Read LESS of them per role; do not
+   write less of them.
+
+### Measurement first
+
+Before optimising, instrument: log per-agent input and output tokens into the run
+manifest. The numbers above are transcript bytes, which is a proxy, not a
+measurement. Optimising against a proxy is how the wrong thing gets cut.
+
 ## 4. Agent output quality
 
 **This part is not specifiable yet, and writing it as though it were would be the
@@ -152,10 +214,12 @@ Until that run exists, this section stays a heading.
 1 and 2 are independent of each other and both are worth doing. 3 is small and
 rides along with 1. 4 waits for evidence.
 
-Recommended order: **the front door first**, because it is the cheapest change
-with the largest failure it prevents, and because the Treatwell case is a live
-demonstration that it is needed. Onboarding ingest second. Quality last, once
-there is something to look at.
+**Revised 2026-07-27 after the dry run: 3A (cost and wall clock) moves to the
+front.** It is the complaint the user actually has, it has measurements behind it,
+and steps 1 and 2 of its fix are small. The front door is second: still cheap,
+still justified by the Treatwell case, but a run nobody wants to sit through is
+the more pressing problem. Onboarding ingest third. Quality last, once there is
+something to look at.
 
 ## 6. Open items
 
