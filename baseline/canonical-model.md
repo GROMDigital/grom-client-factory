@@ -24,19 +24,24 @@ the client manifest. Steps and sort scale, verbatim:
 | no_show | 45 | off-spine branch of booked |
 | showed | 50 | |
 | treatment | 55 | clinic terminal |
+| **done** | **58** | **clinic terminal, the Standard Build's eighth stage** |
 | terms_sent | 60 | agency funnel |
 | terms_signed | 70 | agency funnel |
 | onboarding | 80 | agency funnel |
 | live | 90 | agency funnel |
 
-🔴 **`done` is MISSING and must be added.** The Standard Build's eighth stage has
-no canonical step. Only sorts 56 to 59 are free between `treatment` and
-`terms_sent`, so reserve deliberately. This is a code change in
-`grom-dashboard/apps/web/lib/funnel-canonical.ts` (`CANONICAL_SORT`), not a docs
-change, and it is a prerequisite for the Standard Build reporting correctly.
+✅ **`done` = 58, SHIPPED to production 2026-07-27** (grom-dashboard `82600ca`).
+Verified on prod by remapping a live clinic stage to `done` inside a transaction
+and rolling back: the card counted at the Done rung, cumulatively implied Showed
+and Treatment, and did not touch the agency `n_terms_sent`. **56, 57 and 59 remain
+free** between `treatment` and `terms_sent`; no existing step was renumbered.
+`done` is deliberately NOT in `SALES_CANONICALS` (a terminal must not be the
+detector for "is this a sales pipeline") and NOT in `OFF_SPINE` (it is a real
+forward rung and gets drawn).
 
 **Owner:** `grom-dashboard/apps/web/lib/funnel-canonical.ts` (`CANONICAL_SORT`).
-Verified against grom-dashboard@main on 2026-07-10.
+⚠️ The list is mirrored across EIGHT surfaces in that repo, not one. Anyone adding
+a future step should not assume the owner file is the whole job.
 
 ## 2. LP event names (exact strings)
 

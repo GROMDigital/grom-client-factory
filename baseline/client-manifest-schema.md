@@ -62,10 +62,10 @@ a config action rather than a code change. The mart seeder now derives its
 `ghl_stage_map` rows by joining `pipelines[].stage_ids` to
 `x-standard-stage-canonical`.
 
-⚠️ `done` is in the schema's canonical vocabulary but is **not yet in
-`grom-dashboard`'s `CANONICAL_SORT`** (`treatment` is 55 and `terms_sent` is 60,
-so only 56 to 59 are free). Until that lands, the eighth stage is invisible to
-reporting. Tracked in `Standard-Build-Revamp/README.md`.
+✅ `done` = **sort 58**, shipped to `grom-dashboard` production on 2026-07-27
+(commit `82600ca`) and verified on prod. The eighth stage reports. 56, 57 and 59
+remain free between `treatment` (55) and `terms_sent` (60), and no existing step
+was renumbered.
 
 ### `base_workflows`
 

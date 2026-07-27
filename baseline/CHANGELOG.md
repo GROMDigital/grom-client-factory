@@ -3,6 +3,17 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: `done` = sort **58**, SHIPPED to grom-dashboard production
+  (commit `82600ca`) and verified on prod by remapping a live clinic stage inside
+  a transaction and rolling back. The Standard Build's eighth stage now reports.
+  56, 57 and 59 remain free between `treatment` (55) and `terms_sent` (60), and
+  no existing step was renumbered. `done` is deliberately absent from
+  `SALES_CANONICALS` (a terminal must not detect "is this a sales pipeline") and
+  from `OFF_SPINE` (it is a real forward rung and gets drawn). Closed out in
+  `canonical-model.md`, `client-manifest.schema.json` and
+  `client-manifest-schema.md`. Landmine for whoever adds the NEXT step: the list
+  is mirrored across EIGHT surfaces in grom-dashboard, not the three the handoff
+  named.
 - 2026-07-27: the Standard Build, part 7. Three holes on the
   `booking.model = external` path, found by the FIRST build ever run against
   these contracts (Better By Ati, Treatwell diary, dry run) and confirmed

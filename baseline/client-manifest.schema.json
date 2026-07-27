@@ -17,7 +17,7 @@
     "Continuing Treatment": "treatment",
     "Done": "done"
   },
-  "x-standard-stage-canonical-note": "At manifest_version 2 the stage names are FIXED, so the stage-to-canonical mapping is known in advance and is NOT recorded per client. This table is the single source for it: the mart seeder derives ghl_stage_map rows by joining pipelines[].stage_ids to this table, which is what removes the hand-written per-client SQL migration. Stages appended after Done are not in this table and map to NULL canonical (kept, excluded from the funnel). 'done' is NOT yet in grom-dashboard CANONICAL_SORT (treatment 55, terms_sent 60, so 56-59 free); adding it is a prerequisite for the eighth stage to report.",
+  "x-standard-stage-canonical-note": "At manifest_version 2 the stage names are FIXED, so the stage-to-canonical mapping is known in advance and is NOT recorded per client. This table is the single source for it: the mart seeder derives ghl_stage_map rows by joining pipelines[].stage_ids to this table, which is what removes the hand-written per-client SQL migration. Stages appended after Done are not in this table and map to NULL canonical (kept, excluded from the funnel). 'done' = sort 58, SHIPPED to grom-dashboard production 2026-07-27 (commit 82600ca) and verified on prod; 56, 57 and 59 remain free between treatment (55) and terms_sent (60).",
 
   "x-standard-lost-reasons": [
     "price", "location", "timing", "not suitable",
