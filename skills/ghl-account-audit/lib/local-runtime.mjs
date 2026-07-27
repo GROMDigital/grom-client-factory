@@ -32,6 +32,15 @@ import {
   createGhlNativeConnect,
   validateGhlNativeTransport,
 } from './adapters/ghl-native-session.mjs';
+import {
+  DEFAULT_BUDGETS as DEFAULT_INTERNAL_BUDGETS,
+  createInternalAuditCollector,
+} from './adapters/internal-audit-collector.mjs';
+import { createInternalAuditAdapter } from './adapters/internal-audit.mjs';
+import {
+  createInternalAuditConnect,
+  validateInternalAuditTransport,
+} from './adapters/internal-audit-session.mjs';
 import { connectMcp } from './adapters/mcp-transport.mjs';
 import { createPublicGhlAdapter } from './adapters/public-ghl.mjs';
 import { loadTrustedPublicReadPolicy } from './adapters/trusted-public-policy.mjs';
@@ -838,11 +847,21 @@ const PUBLIC_REQUIRED_KEYS = Object.freeze([
   'transport',
 ]);
 const PUBLIC_OPTIONAL_KEYS = Object.freeze([
+  // The internal (builder API) rail. OPTIONAL, and its absence is the byte-identical public-only
+  // path that every existing configuration already takes. A run only reads workflows if its
+  // configuration asks to.
+  'internalAudit',
   'lateArrivalHours',
   'providerAvailableFrom',
   'rawEvidenceRetentionDays',
   'runId',
   'salesCycleDays',
+]);
+const PUBLIC_INTERNAL_AUDIT_KEYS = Object.freeze([
+  'budgets',
+  'companyId',
+  'runtimeWorkflowIds',
+  'transport',
 ]);
 /**
  * These two fields are DERIVED, never declared. `lib/state.mjs:109-136` seals them into the run,
@@ -907,6 +926,48 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 
+/**
+ * The optional internal-rail block.
+ *
+ * `transport` is validated by `validateInternalAuditTransport`, which accepts three keys, none of
+ * which can be a secret or an argv, and which refuses to name anything but the plugin's read-only
+ * audit-server bundle inside the plugin cache.
+ *
+ * `runtimeWorkflowIds` is CONFIGURATION and not a default, because which workflows carry the
+ * revenue path is an account fact. A runtime window is expensive enough that guessing wrong costs
+ * the run, so nothing in this repository guesses.
+ */
+function validatePublicInternalAudit(value) {
+  if (!isPlainObject(value)) publicConfigError();
+  if (Object.keys(value).some((key) => !PUBLIC_INTERNAL_AUDIT_KEYS.includes(key))) {
+    publicConfigError();
+  }
+  if (!Object.hasOwn(value, 'transport')) publicConfigError();
+  try {
+    validateInternalAuditTransport(value.transport);
+  } catch {
+    publicConfigError();
+  }
+  if (Object.hasOwn(value, 'companyId')) {
+    if (typeof value.companyId !== 'string' || !PUBLIC_LOCATION_ID.test(value.companyId)) {
+      publicConfigError();
+    }
+  }
+  if (Object.hasOwn(value, 'runtimeWorkflowIds')) {
+    if (
+      !Array.isArray(value.runtimeWorkflowIds)
+      || value.runtimeWorkflowIds.some((id) => typeof id !== 'string' || id.length === 0)
+    ) publicConfigError();
+  }
+  if (Object.hasOwn(value, 'budgets')) {
+    if (!isPlainObject(value.budgets)) publicConfigError();
+    for (const [key, limit] of Object.entries(value.budgets)) {
+      if (!Object.hasOwn(DEFAULT_INTERNAL_BUDGETS, key)) publicConfigError();
+      if (!Number.isSafeInteger(limit) || limit < 1) publicConfigError();
+    }
+  }
+}
+
 export function validatePublicConfig(config) {
   if (!isPlainObject(config)) publicConfigError();
   const keys = Object.keys(config);
@@ -938,6 +999,7 @@ export function validatePublicConfig(config) {
     || config.capabilities.length === 0
   ) publicConfigError();
   validatePublicTransport(config.transport);
+  if (Object.hasOwn(config, 'internalAudit')) validatePublicInternalAudit(config.internalAudit);
   // A GHL MCP worker binds the session to a sub-account ENTIRELY through the token value, so a
   // native transport with no credential reference is a run bound to no account at all. Refused
   // here, at preflight, rather than at connect where it would surface as an opaque
@@ -1489,6 +1551,51 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
  * `collectInternal` is absent: this rail is public-only, so the run carries the two internal
  * limitations and is honestly `complete_partial`, exactly as the offline rail is.
  */
+/**
+ * THE INTERNAL RAIL, OWNING ITS OWN SESSION LIFETIME.
+ *
+ * `collectInternalEvidencePhase` calls `collectAuditEvidence` once and has no notion of closing a
+ * transport. So the session is opened INSIDE that call and closed in its `finally`, which means a
+ * run that suspends at the auth boundary, latches its circuit, or throws does not leave a child
+ * process behind. A kernel-level open would have to be torn down by the kernel, and the kernel
+ * neither knows about transports nor should.
+ */
+function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectOverride, runtime }) {
+  if (!isPlainObject(internalAudit)) return null;
+  const connect = connectOverride ?? createInternalAuditConnect({
+    serverPath: internalAudit.transport.serverPath,
+    tokenFilePath: internalAudit.transport.tokenFilePath,
+  });
+  return {
+    async collectAuditEvidence(request) {
+      const client = await connect();
+      try {
+        const collector = createInternalAuditCollector({
+          rail: createInternalAuditAdapter({ client, expectedLocationId }),
+          boundLocationId: expectedLocationId,
+          companyId: internalAudit.companyId,
+          runtimeWorkflowIds: internalAudit.runtimeWorkflowIds ?? [],
+          budgets: internalAudit.budgets ?? {},
+          runtime,
+        });
+        // AWAITED, and it has to be. `return collector.collectAuditEvidence(request)` hands the
+        // pending promise out of the `try`, so the `finally` below closes the session while the
+        // collection is still on its first call. Against a hermetic double that only reorders a
+        // log; against a real transport every read after the credential check happens on a closed
+        // child process. A test asserting the call ORDER caught it, which an outcome-only test
+        // could not have.
+        return await collector.collectAuditEvidence(request);
+      } finally {
+        try {
+          await client.close?.();
+        } catch {
+          // A transport that will not close cleanly must not mask the collection's own outcome.
+        }
+      }
+    },
+  };
+}
+
 export function createPublicAuditKernel({
   initialRunId,
   // Set by the CLI's `resume` command, which is the only caller that knows which run is being
@@ -1498,6 +1605,10 @@ export function createPublicAuditKernel({
   // A host-owned connect whose delegate is a RAW GHL MCP client. Mutually exclusive with
   // `transportConnect`; see `collectPublicEvidence`.
   ghlNativeConnect = null,
+  // A host-owned connect to the INTERNAL audit server. When supplied it wins over whatever the
+  // configuration declares, exactly as `ghlNativeConnect` does, so a hermetic test never launches
+  // a child process and never needs the plugin installed.
+  internalAuditConnect = null,
   credentialResolver = null,
   keyProvider = null,
   signal = null,
@@ -1556,6 +1667,23 @@ export function createPublicAuditKernel({
         // it fails closed instead of collecting something the run is not sealed for.
         if (adopted !== null) throw codedError('AUDIT_PREFLIGHT_FAILED_PUBLIC_EVIDENCE_UNAVAILABLE');
         return (await collectionFor(args)).publicEvidence;
+      },
+      /**
+       * Returns `null` -- the byte-identical public-only path every existing configuration takes
+       * -- unless the configuration declares an internal rail. No credential is read here and no
+       * network access is introduced by this wiring: the session opens inside
+       * `collectAuditEvidence` and the GHL token is never handled by this process at all, because
+       * the audit server reads it from a file whose PATH the transport record names.
+       */
+      collectInternal: async (args) => {
+        const config = validatePublicConfig(args.providerConfig);
+        if (!Object.hasOwn(config, 'internalAudit')) return null;
+        return buildInternalAuditAdapter({
+          internalAudit: config.internalAudit,
+          expectedLocationId: config.expectedLocationId,
+          connectOverride: internalAuditConnect,
+          runtime,
+        });
       },
     },
     analyzer: {

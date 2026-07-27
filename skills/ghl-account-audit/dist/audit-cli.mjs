@@ -30823,7 +30823,7 @@ var init_protocol = __esm({
               return;
             }
             const pollInterval = task2.pollInterval ?? this._options?.defaultTaskPollInterval ?? 1e3;
-            await new Promise((resolve6) => setTimeout(resolve6, pollInterval));
+            await new Promise((resolve7) => setTimeout(resolve7, pollInterval));
             options?.signal?.throwIfAborted();
           }
         } catch (error51) {
@@ -30840,7 +30840,7 @@ var init_protocol = __esm({
        */
       request(request, resultSchema, options) {
         const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
-        return new Promise((resolve6, reject) => {
+        return new Promise((resolve7, reject) => {
           const earlyReject = (error51) => {
             reject(error51);
           };
@@ -30918,7 +30918,7 @@ var init_protocol = __esm({
               if (!parseResult.success) {
                 reject(parseResult.error);
               } else {
-                resolve6(parseResult.data);
+                resolve7(parseResult.data);
               }
             } catch (error51) {
               reject(error51);
@@ -31179,12 +31179,12 @@ var init_protocol = __esm({
           }
         } catch {
         }
-        return new Promise((resolve6, reject) => {
+        return new Promise((resolve7, reject) => {
           if (signal.aborted) {
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
             return;
           }
-          const timeoutId = setTimeout(resolve6, interval);
+          const timeoutId = setTimeout(resolve7, interval);
           signal.addEventListener("abort", () => {
             clearTimeout(timeoutId);
             reject(new McpError(ErrorCode.InvalidRequest, "Request cancelled"));
@@ -34211,7 +34211,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve6.call(this, root, ref);
+      let _sch = resolve7.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
         const { schemaId } = this.opts;
@@ -34238,7 +34238,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve6(root, ref) {
+    function resolve7(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -34869,7 +34869,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve6(baseURI, relativeURI, options) {
+    function resolve7(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const resolved = resolveComponent(parse3(baseURI, schemelessOptions), parse3(relativeURI, schemelessOptions), schemelessOptions, true);
       schemelessOptions.skipEscape = true;
@@ -35133,7 +35133,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize,
-      resolve: resolve6,
+      resolve: resolve7,
       resolveComponent,
       equal,
       serialize,
@@ -40542,6 +40542,416 @@ var init_ghl_native_session = __esm({
   }
 });
 
+// lib/adapters/internal-audit-collector.mjs
+function byteOrder(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function readRosterIds(data) {
+  const candidates = [
+    data?.data?.workflowIds,
+    data?.data?.roster,
+    data?.data?.workflows,
+    data?.workflowIds,
+    data?.roster,
+    data?.workflows
+  ];
+  for (const candidate of candidates) {
+    if (!Array.isArray(candidate)) continue;
+    const ids = candidate.map((entry) => typeof entry === "string" ? entry : entry?.id ?? entry?.workflowId).filter((id) => typeof id === "string" && id.length > 0);
+    if (ids.length > 0) return { ids: [...new Set(ids)].sort(byteOrder), readable: true };
+  }
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate) && candidate.length === 0) return { ids: [], readable: true };
+  }
+  return { ids: [], readable: false };
+}
+function createInternalAuditCollector({
+  rail,
+  boundLocationId,
+  companyId = void 0,
+  runtimeWorkflowIds = [],
+  budgets = {},
+  runtime = {}
+} = {}) {
+  if (!rail || typeof rail.roster !== "function") {
+    throw codedError("INTERNAL_AUDIT_RAIL_INVALID", TypeError);
+  }
+  if (typeof boundLocationId !== "string" || boundLocationId.length === 0) {
+    throw codedError("INTERNAL_AUDIT_LOCATION_UNBOUND", TypeError);
+  }
+  const budget = { ...DEFAULT_BUDGETS, ...budgets };
+  const capturedAt2 = () => new Date(
+    typeof runtime.now === "function" ? runtime.now() : Date.now()
+  ).toISOString();
+  return {
+    async collectAuditEvidence({ window, signal } = {}) {
+      const limitations = /* @__PURE__ */ new Set();
+      const credential = await rail.credentialState();
+      if (credential.usable !== true) {
+        return Object.freeze({
+          schemaVersion: INTERNAL_SCHEMA,
+          source: "internal_ghl",
+          boundLocationId,
+          checkpoint: Object.freeze({ phase: "awaiting_internal_auth", reason: AUTH_REQUIRED2 }),
+          complete: false,
+          limitations: Object.freeze([credential.reason]),
+          capabilityCoverage: Object.freeze([]),
+          workflows: Object.freeze([])
+        });
+      }
+      const roster = await rail.roster({ maxPages: budget.rosterMaxPages });
+      if (!roster.ok) limitations.add(roster.code);
+      const { ids, readable } = roster.ok ? readRosterIds(roster.data) : { ids: [], readable: false };
+      if (roster.ok && !readable) limitations.add("ROSTER_SHAPE_UNREADABLE");
+      if (roster.ok && readable && roster.data?.complete === false) {
+        limitations.add("ROSTER_INCOMPLETE");
+      }
+      const definitionIds = ids.slice(0, budget.maxDefinitions);
+      if (ids.length > definitionIds.length) limitations.add("DEFINITION_BUDGET_EXHAUSTED");
+      const requestedRuntime = [...new Set(runtimeWorkflowIds)].sort(byteOrder);
+      const unknownRuntime = requestedRuntime.filter((id) => !ids.includes(id));
+      if (unknownRuntime.length > 0) limitations.add("RUNTIME_WORKFLOW_NOT_IN_ROSTER");
+      const runtimeIds = requestedRuntime.filter((id) => ids.includes(id)).slice(0, budget.maxRuntimeWindows);
+      if (requestedRuntime.filter((id) => ids.includes(id)).length > runtimeIds.length) {
+        limitations.add("RUNTIME_BUDGET_EXHAUSTED");
+      }
+      const runtimeWanted = new Set(runtimeIds);
+      const fromDate = Date.parse(window?.from ?? "");
+      const toDate = Date.parse(window?.to ?? "");
+      const windowUsable = Number.isInteger(fromDate) && Number.isInteger(toDate) && fromDate < toDate;
+      if (!windowUsable && runtimeWanted.size > 0) limitations.add("RUNTIME_WINDOW_UNUSABLE");
+      const workflows = [];
+      for (const workflowId of definitionIds) {
+        if (signal?.aborted) {
+          limitations.add("COLLECTION_ABORTED");
+          break;
+        }
+        if (rail.latchedCode() !== null) {
+          limitations.add(rail.latchedCode());
+          break;
+        }
+        const definition = await rail.definition(workflowId);
+        if (!definition.ok) limitations.add(definition.code);
+        let runtimeWindow = null;
+        if (runtimeWanted.has(workflowId) && windowUsable && rail.latchedCode() === null) {
+          runtimeWindow = await rail.runtimeWindow({
+            workflowId,
+            fromDate,
+            toDate,
+            logPageSize: budget.logPageSize,
+            maxLogPages: budget.maxLogPages,
+            maxLogRetries: budget.maxLogRetries,
+            maxEnrollmentPages: budget.maxEnrollmentPages,
+            maxStepRosterPages: budget.maxStepRosterPages
+          });
+          if (!runtimeWindow.ok) limitations.add(runtimeWindow.code);
+        }
+        workflows.push({
+          workflowId,
+          definition: definition.ok ? definition.data : null,
+          definitionCode: definition.ok ? null : definition.code,
+          runtimeWindow: runtimeWindow?.ok === true ? runtimeWindow.data : null,
+          // Absent is not the same as failed, and neither is the same as empty. A detector must be
+          // able to tell "we did not ask" from "we asked and could not read it".
+          runtimeCode: runtimeWindow === null ? "RUNTIME_NOT_REQUESTED" : runtimeWindow.ok ? null : runtimeWindow.code
+        });
+      }
+      let aiConfiguration = null;
+      if (credential.agencyTokenUsable === true && rail.latchedCode() === null) {
+        const bundle = await rail.aiBundle({ companyId });
+        if (bundle.ok) aiConfiguration = bundle.data;
+        else limitations.add(bundle.code);
+      } else if (credential.agencyTokenUsable !== true) {
+        limitations.add("AGENCY_TOKEN_UNAVAILABLE");
+      }
+      const complete = limitations.size === 0 && readable && definitionIds.length === ids.length;
+      return Object.freeze({
+        schemaVersion: INTERNAL_SCHEMA,
+        source: "internal_ghl",
+        boundLocationId,
+        capturedAt: capturedAt2(),
+        requestedWindow: Object.freeze({ from: window?.from ?? null, to: window?.to ?? null }),
+        appliedWindow: Object.freeze({ from: window?.from ?? null, to: window?.to ?? null }),
+        complete,
+        truncated: !complete,
+        limitations: Object.freeze([...limitations].sort(byteOrder)),
+        // EMPTY, honestly. See the module header: no capability receipt exists, and forging a row
+        // here would forge the one record that says whether anything was ever proven.
+        capabilityCoverage: Object.freeze([]),
+        roster: Object.freeze({
+          complete: roster.ok && readable && roster.data?.complete !== false,
+          reportedCount: ids.length,
+          readCount: definitionIds.length,
+          code: roster.ok ? null : roster.code
+        }),
+        workflows: Object.freeze(workflows),
+        aiConfiguration,
+        latchedCode: rail.latchedCode()
+      });
+    }
+  };
+}
+var AUTH_REQUIRED2, INTERNAL_SCHEMA, DEFAULT_BUDGETS;
+var init_internal_audit_collector = __esm({
+  "lib/adapters/internal-audit-collector.mjs"() {
+    init_collection();
+    AUTH_REQUIRED2 = "INTERNAL_AUDIT_AUTH_REQUIRED";
+    INTERNAL_SCHEMA = "1.0.0";
+    DEFAULT_BUDGETS = Object.freeze({
+      /** Roster pages. The server reconciles to a stable total or reports incomplete. */
+      rosterMaxPages: 20,
+      /** Definitions read per run. Cheap, one call each. */
+      maxDefinitions: 60,
+      /** Runtime windows read per run. Expensive; see the module header. */
+      maxRuntimeWindows: 5,
+      /** Passed through to the runtime window, well under the server's own ceilings. */
+      logPageSize: 100,
+      maxLogPages: 20,
+      maxLogRetries: 3,
+      maxEnrollmentPages: 20,
+      maxStepRosterPages: 20
+    });
+  }
+});
+
+// lib/adapters/internal-audit.mjs
+function isPlainObject8(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function normalizeKey(key) {
+  return String(key).toLowerCase().replaceAll(/[^a-z]/gu, "");
+}
+function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet()) {
+  if (typeof value === "string") {
+    if (PERSONAL_KEYS.has(normalizeKey(key)) || PERSONAL_PATTERN.test(value)) return REDACTED;
+    return value;
+  }
+  if (value === null || ["number", "boolean"].includes(typeof value)) return value;
+  if (typeof value === "bigint") return value.toString();
+  if (!value || typeof value !== "object") return null;
+  if (seen.has(value)) throw codedError("INTERNAL_AUDIT_RESPONSE_CYCLE");
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry) => scrubPersonal(entry, key, seen));
+    }
+    if (PERSONAL_KEYS.has(normalizeKey(key))) return REDACTED;
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, child]) => [childKey, scrubPersonal(child, childKey, seen)])
+    );
+  } finally {
+    seen.delete(value);
+  }
+}
+function readEnvelope(reply) {
+  if (reply?.isError === true) throw codedError("INTERNAL_AUDIT_TOOL_ERROR");
+  let body = reply?.structuredContent;
+  if (body === void 0) {
+    const text = reply?.content?.[0]?.text;
+    if (typeof text !== "string") throw codedError("INTERNAL_AUDIT_RESPONSE_UNREADABLE");
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw codedError("INTERNAL_AUDIT_RESPONSE_UNREADABLE");
+    }
+  }
+  if (!isPlainObject8(body) || !Object.hasOwn(body, "ok")) {
+    throw codedError("INTERNAL_AUDIT_RESPONSE_UNREADABLE");
+  }
+  return body;
+}
+function refusal(tool, body) {
+  return Object.freeze({
+    tool,
+    ok: false,
+    code: typeof body.code === "string" ? body.code : "INTERNAL_AUDIT_CODE_MISSING",
+    latching: LATCHING_CODES.has(body.code),
+    data: null
+  });
+}
+function assertSeenSuccessShape(tool, body, expectedLocationId) {
+  const expectedContract = EXPECTED_CONTRACT_VERSIONS[tool];
+  if (expectedContract !== null && expectedContract !== void 0) {
+    if (body.contractVersion !== expectedContract) {
+      throw codedError("INTERNAL_AUDIT_CONTRACT_MISMATCH");
+    }
+  }
+  if (Object.hasOwn(body, "boundLocationId") && body.boundLocationId !== expectedLocationId) {
+    throw codedError("INTERNAL_AUDIT_LOCATION_MISMATCH");
+  }
+  if (Object.hasOwn(body, "data") && isPlainObject8(body.data)) {
+    if (Object.hasOwn(body.data, "boundLocationId") && body.data.boundLocationId !== expectedLocationId) throw codedError("INTERNAL_AUDIT_LOCATION_MISMATCH");
+  }
+}
+function createInternalAuditAdapter({
+  client,
+  expectedLocationId,
+  // Minimum credential life a run needs before it is worth starting. A token that expires
+  // mid-run latches the circuit and destroys the partial, so this is not politeness.
+  minimumCredentialSeconds = 300
+} = {}) {
+  if (!client || typeof client.callTool !== "function") {
+    throw codedError("INTERNAL_AUDIT_CLIENT_INVALID", TypeError);
+  }
+  if (typeof expectedLocationId !== "string" || expectedLocationId.length === 0) {
+    throw codedError("INTERNAL_AUDIT_LOCATION_UNBOUND", TypeError);
+  }
+  let latched = null;
+  async function call(tool, args) {
+    if (latched !== null) return Object.freeze({ tool, ok: false, code: latched, latching: true, data: null });
+    const body = readEnvelope(await client.callTool({ name: tool, arguments: args }));
+    if (body.ok !== true) {
+      const result = refusal(tool, body);
+      if (result.latching) latched = result.code;
+      return result;
+    }
+    assertSeenSuccessShape(tool, body, expectedLocationId);
+    return Object.freeze({
+      tool,
+      ok: true,
+      code: null,
+      latching: false,
+      // Scrubbed at the boundary, once, so no later caller has to remember to do it.
+      data: scrubPersonal(body)
+    });
+  }
+  return {
+    /**
+     * PREFLIGHT. Observation C: this makes no request, so it costs nothing, and it is the
+     * difference between "nobody is logged in" and a run that reports a transport fault.
+     */
+    async credentialState() {
+      const body = readEnvelope(await client.callTool({ name: "auth_status", arguments: {} }));
+      if (body.ok !== true) return Object.freeze({ usable: false, reason: "AUTH_STATUS_UNAVAILABLE" });
+      const jwt2 = body.data?.jwtClaims ?? {};
+      const tokenId = body.data?.tokenIdClaims ?? {};
+      const remaining = Number(jwt2.secondsRemaining);
+      if (jwt2.present !== true) return Object.freeze({ usable: false, reason: "CREDENTIAL_ABSENT" });
+      if (!Number.isFinite(remaining) || remaining < minimumCredentialSeconds) {
+        return Object.freeze({
+          usable: false,
+          reason: remaining < 0 ? "CREDENTIAL_EXPIRED" : "CREDENTIAL_EXPIRING",
+          secondsRemaining: Number.isFinite(remaining) ? Math.floor(remaining) : null
+        });
+      }
+      return Object.freeze({
+        usable: true,
+        reason: null,
+        secondsRemaining: Math.floor(remaining),
+        // The AI surfaces additionally need the elevated agency-admin token-id, which expires
+        // independently. Reported separately so a run can honestly skip that surface alone
+        // instead of failing whole or claiming an empty agent list.
+        agencyTokenUsable: tokenId.present === true && Number(tokenId.secondsRemaining) >= minimumCredentialSeconds
+      });
+    },
+    /** The whole workflow roster, walked to a reconciled terminal proof by the server. */
+    async roster({ pageSize, maxPages } = {}) {
+      return call("list_workflows_complete", {
+        locationId: expectedLocationId,
+        ...pageSize === void 0 ? {} : { pageSize },
+        ...maxPages === void 0 ? {} : { maxPages }
+      });
+    },
+    /** One workflow's configuration. */
+    async definition(workflowId) {
+      return call("get_workflow", { locationId: expectedLocationId, workflowId });
+    },
+    /** One workflow's exported form, which is what carries the step graph. */
+    async exported(workflowId) {
+      return call("export_workflow", { locationId: expectedLocationId, workflowId });
+    },
+    /**
+     * One workflow's runtime window. Observation B: `logPageSize` and `maxLogPages`, never the
+     * three retired names, and the window is half-open so `fromDate` must be strictly less than
+     * `toDate` or the server refuses it before building a gateway.
+     */
+    async runtimeWindow({
+      workflowId,
+      fromDate,
+      toDate,
+      eventTypes,
+      stepIds,
+      logPageSize,
+      maxLogPages,
+      maxLogRetries,
+      maxEnrollmentPages,
+      maxStepRosterPages
+    } = {}) {
+      if (!Number.isInteger(fromDate) || !Number.isInteger(toDate) || fromDate >= toDate) {
+        throw codedError("INTERNAL_AUDIT_WINDOW_INVALID", TypeError);
+      }
+      return call("get_workflow_runtime_window", {
+        locationId: expectedLocationId,
+        workflowId,
+        fromDate,
+        toDate,
+        ...eventTypes === void 0 ? {} : { eventTypes },
+        ...stepIds === void 0 ? {} : { stepIds },
+        ...logPageSize === void 0 ? {} : { logPageSize },
+        ...maxLogPages === void 0 ? {} : { maxLogPages },
+        ...maxLogRetries === void 0 ? {} : { maxLogRetries },
+        ...maxEnrollmentPages === void 0 ? {} : { maxEnrollmentPages },
+        ...maxStepRosterPages === void 0 ? {} : { maxStepRosterPages }
+      });
+    },
+    /** Conversation AI, Voice AI and Agent Studio. Needs the elevated token-id. */
+    async aiBundle({ companyId, maxPages } = {}) {
+      return call("get_ai_configuration_bundle", {
+        locationId: expectedLocationId,
+        ...companyId === void 0 ? {} : { companyId },
+        ...maxPages === void 0 ? {} : { maxPages }
+      });
+    },
+    /** Has anything latched, and on what. Read by a caller deciding whether to keep going. */
+    latchedCode() {
+      return latched;
+    }
+  };
+}
+var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, PERSONAL_KEYS, PERSONAL_PATTERN, REDACTED;
+var init_internal_audit = __esm({
+  "lib/adapters/internal-audit.mjs"() {
+    init_collection();
+    EXPECTED_CONTRACT_VERSIONS = Object.freeze({
+      get_ai_configuration_bundle: "1.0.0",
+      get_workflow_runtime_window: "2.0.0",
+      list_workflows_complete: null
+    });
+    LATCHING_CODES = Object.freeze(/* @__PURE__ */ new Set([
+      "AUTH_REJECTED",
+      "CIRCUIT_OPEN",
+      "RATE_LIMITED",
+      "TRANSPORT_FAILED"
+    ]));
+    PERSONAL_KEYS = Object.freeze(/* @__PURE__ */ new Set([
+      "additionalemails",
+      "additionalphones",
+      "address",
+      "city",
+      "companyname",
+      "contactname",
+      "dateofbirth",
+      "email",
+      "firstname",
+      "firstnamelowercase",
+      "fullname",
+      "lastmessagebody",
+      "lastname",
+      "lastnamelowercase",
+      "name",
+      "phone",
+      "phonelabel",
+      "postalcode",
+      "state",
+      "website"
+    ]));
+    PERSONAL_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+\d[\d\s().-]{7,}\d|https?:\/\/|Bearer\s+\S+)/iu;
+    REDACTED = "[redacted]";
+  }
+});
+
 // node_modules/isexe/windows.js
 var require_windows = __commonJS({
   "node_modules/isexe/windows.js"(exports, module) {
@@ -40636,12 +41046,12 @@ var require_isexe = __commonJS({
         if (typeof Promise !== "function") {
           throw new TypeError("callback not provided");
         }
-        return new Promise(function(resolve6, reject) {
+        return new Promise(function(resolve7, reject) {
           isexe(path, options || {}, function(er2, is) {
             if (er2) {
               reject(er2);
             } else {
-              resolve6(is);
+              resolve7(is);
             }
           });
         });
@@ -40707,27 +41117,27 @@ var require_which = __commonJS({
         opt = {};
       const { pathEnv, pathExt, pathExtExe } = getPathInfo(cmd, opt);
       const found = [];
-      const step = (i2) => new Promise((resolve6, reject) => {
+      const step = (i2) => new Promise((resolve7, reject) => {
         if (i2 === pathEnv.length)
-          return opt.all && found.length ? resolve6(found) : reject(getNotFoundError(cmd));
+          return opt.all && found.length ? resolve7(found) : reject(getNotFoundError(cmd));
         const ppRaw = pathEnv[i2];
         const pathPart = /^".*"$/.test(ppRaw) ? ppRaw.slice(1, -1) : ppRaw;
         const pCmd = path.join(pathPart, cmd);
         const p2 = !pathPart && /^\.[\\\/]/.test(cmd) ? cmd.slice(0, 2) + pCmd : pCmd;
-        resolve6(subStep(p2, i2, 0));
+        resolve7(subStep(p2, i2, 0));
       });
-      const subStep = (p2, i2, ii2) => new Promise((resolve6, reject) => {
+      const subStep = (p2, i2, ii2) => new Promise((resolve7, reject) => {
         if (ii2 === pathExt.length)
-          return resolve6(step(i2 + 1));
+          return resolve7(step(i2 + 1));
         const ext = pathExt[ii2];
         isexe(p2 + ext, { pathExt: pathExtExe }, (er2, is) => {
           if (!er2 && is) {
             if (opt.all)
               found.push(p2 + ext);
             else
-              return resolve6(p2 + ext);
+              return resolve7(p2 + ext);
           }
-          return resolve6(subStep(p2, i2, ii2 + 1));
+          return resolve7(subStep(p2, i2, ii2 + 1));
         });
       });
       return cb ? step(0).then((res) => cb(null, res), cb) : step(0);
@@ -41128,7 +41538,7 @@ var init_stdio2 = __esm({
         if (this._process) {
           throw new Error("StdioClientTransport already started! If using Client class, note that connect() calls start() automatically.");
         }
-        return new Promise((resolve6, reject) => {
+        return new Promise((resolve7, reject) => {
           this._process = (0, import_cross_spawn.default)(this._serverParams.command, this._serverParams.args ?? [], {
             // merge default env with server env because mcp server needs some env vars
             env: {
@@ -41145,7 +41555,7 @@ var init_stdio2 = __esm({
             this.onerror?.(error51);
           });
           this._process.on("spawn", () => {
-            resolve6();
+            resolve7();
           });
           this._process.on("close", (_code) => {
             this._process = void 0;
@@ -41204,22 +41614,22 @@ var init_stdio2 = __esm({
         if (this._process) {
           const processToClose = this._process;
           this._process = void 0;
-          const closePromise = new Promise((resolve6) => {
+          const closePromise = new Promise((resolve7) => {
             processToClose.once("close", () => {
-              resolve6();
+              resolve7();
             });
           });
           try {
             processToClose.stdin?.end();
           } catch {
           }
-          await Promise.race([closePromise, new Promise((resolve6) => setTimeout(resolve6, 2e3).unref())]);
+          await Promise.race([closePromise, new Promise((resolve7) => setTimeout(resolve7, 2e3).unref())]);
           if (processToClose.exitCode === null) {
             try {
               processToClose.kill("SIGTERM");
             } catch {
             }
-            await Promise.race([closePromise, new Promise((resolve6) => setTimeout(resolve6, 2e3).unref())]);
+            await Promise.race([closePromise, new Promise((resolve7) => setTimeout(resolve7, 2e3).unref())]);
           }
           if (processToClose.exitCode === null) {
             try {
@@ -41231,19 +41641,143 @@ var init_stdio2 = __esm({
         this._readBuffer.clear();
       }
       send(message) {
-        return new Promise((resolve6) => {
+        return new Promise((resolve7) => {
           if (!this._process?.stdin) {
             throw new Error("Not connected");
           }
           const json2 = serializeMessage(message);
           if (this._process.stdin.write(json2)) {
-            resolve6();
+            resolve7();
           } else {
-            this._process.stdin.once("drain", resolve6);
+            this._process.stdin.once("drain", resolve7);
           }
         });
       }
     };
+  }
+});
+
+// lib/adapters/internal-audit-session.mjs
+import { lstatSync as lstatSync4, readdirSync, realpathSync as realpathSync4 } from "node:fs";
+import { homedir } from "node:os";
+import { basename as basename2, isAbsolute as isAbsolute2, join as join2, resolve as resolve3, sep as sep3 } from "node:path";
+function pluginCacheRoot() {
+  return join2(homedir(), ".claude", "plugins", "cache");
+}
+function isWithin2(parent, candidate) {
+  const base = parent.endsWith(sep3) ? parent : `${parent}${sep3}`;
+  return candidate === parent || candidate.startsWith(base);
+}
+function assertAuditServerPath(value) {
+  if (typeof value !== "string" || value.length === 0 || !isAbsolute2(value)) {
+    throw codedError("INTERNAL_AUDIT_SERVER_PATH_INVALID", TypeError);
+  }
+  if (basename2(value) !== AUDIT_SERVER_FILENAME) {
+    throw codedError("INTERNAL_AUDIT_SERVER_NOT_AUDIT_PROFILE");
+  }
+  const root = pluginCacheRoot();
+  const lexical = resolve3(value);
+  if (!isWithin2(root, lexical)) throw codedError("INTERNAL_AUDIT_SERVER_PATH_OUTSIDE_CACHE");
+  let real;
+  try {
+    real = realpathSync4(lexical);
+  } catch {
+    throw codedError("INTERNAL_AUDIT_SERVER_UNREADABLE");
+  }
+  if (!isWithin2(realpathSync4(root), real)) {
+    throw codedError("INTERNAL_AUDIT_SERVER_PATH_OUTSIDE_CACHE");
+  }
+  if (basename2(real) !== AUDIT_SERVER_FILENAME) {
+    throw codedError("INTERNAL_AUDIT_SERVER_NOT_AUDIT_PROFILE");
+  }
+  const metadata = lstatSync4(lexical);
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw codedError("INTERNAL_AUDIT_SERVER_UNREADABLE");
+  }
+  return real;
+}
+function assertTokenFilePath(value) {
+  if (typeof value !== "string" || value.length === 0 || !isAbsolute2(value)) {
+    throw codedError("INTERNAL_AUDIT_TOKEN_FILE_INVALID", TypeError);
+  }
+  let metadata;
+  try {
+    metadata = lstatSync4(value);
+  } catch {
+    throw codedError("INTERNAL_AUDIT_TOKEN_FILE_UNREADABLE");
+  }
+  if (metadata.isSymbolicLink() || !metadata.isFile()) {
+    throw codedError("INTERNAL_AUDIT_TOKEN_FILE_UNREADABLE");
+  }
+  return value;
+}
+function validateInternalAuditTransport(transport) {
+  if (!transport || typeof transport !== "object" || Array.isArray(transport) || transport.kind !== INTERNAL_AUDIT_TRANSPORT_KIND) throw codedError("INTERNAL_AUDIT_TRANSPORT_INVALID", TypeError);
+  const keys = Object.keys(transport).sort();
+  if (keys.length !== 3 || keys[0] !== "kind" || keys[1] !== "serverPath" || keys[2] !== "tokenFilePath") throw codedError("INTERNAL_AUDIT_TRANSPORT_INVALID", TypeError);
+  return Object.freeze({
+    kind: INTERNAL_AUDIT_TRANSPORT_KIND,
+    serverPath: assertAuditServerPath(transport.serverPath),
+    tokenFilePath: assertTokenFilePath(transport.tokenFilePath)
+  });
+}
+function createInternalAuditConnect({
+  serverPath,
+  tokenFilePath,
+  nodeExecutable = process.execPath
+} = {}) {
+  const server = assertAuditServerPath(serverPath);
+  const tokenFile = assertTokenFilePath(tokenFilePath);
+  return async function connect() {
+    const transport = new StdioClientTransport({
+      command: nodeExecutable,
+      args: [server],
+      // EXACTLY one entry. The server inherits nothing else, so no credential, proxy setting or
+      // debug flag from this process's environment can change how it behaves.
+      env: { GHL_TOK_FILE: tokenFile },
+      // The server writes credential-state diagnostics to stderr. Inheriting that would put them
+      // in the operator's terminal and, worse, in whatever captures it.
+      stderr: "ignore"
+    });
+    const client = new Client(
+      { name: "ghl-account-audit", version: "1.0.0" },
+      { capabilities: {} }
+    );
+    await client.connect(transport);
+    return {
+      async listTools() {
+        return client.listTools();
+      },
+      async callTool(request) {
+        const name = request?.name;
+        if (typeof name !== "string" || !TOOL_SET.has(name)) {
+          throw codedError("INTERNAL_AUDIT_TOOL_NOT_PERMITTED");
+        }
+        return client.callTool(request);
+      },
+      async close() {
+        await client.close();
+      }
+    };
+  };
+}
+var INTERNAL_AUDIT_TRANSPORT_KIND, AUDIT_SERVER_FILENAME, INTERNAL_AUDIT_TOOLS, TOOL_SET;
+var init_internal_audit_session = __esm({
+  "lib/adapters/internal-audit-session.mjs"() {
+    init_client2();
+    init_stdio2();
+    init_collection();
+    INTERNAL_AUDIT_TRANSPORT_KIND = "ghl-internal-audit-stdio";
+    AUDIT_SERVER_FILENAME = "audit-server.mjs";
+    INTERNAL_AUDIT_TOOLS = Object.freeze([
+      "auth_status",
+      "export_workflow",
+      "get_ai_configuration_bundle",
+      "get_workflow",
+      "get_workflow_runtime_window",
+      "list_workflows_complete"
+    ]);
+    TOOL_SET = new Set(INTERNAL_AUDIT_TOOLS);
   }
 });
 
@@ -41287,14 +41821,14 @@ var init_trusted_public_policy = __esm({
 });
 
 // lib/adapters/mcp-transport.mjs
-function isPlainObject8(value) {
+function isPlainObject9(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function validateCredentialRef(reference) {
   if (reference === null) return null;
-  if (!isPlainObject8(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject9(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(reference).sort();
   if (reference.kind === "environment" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof reference.name === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(reference.name)) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (reference.kind === "secret-store" && keys.length === 4 && keys[0] === "kind" && keys[1] === "provenance" && keys[2] === "provider" && keys[3] === "reference" && typeof reference.provider === "string" && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider) && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance && typeof reference.reference === "string" && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference) && !RAW_CREDENTIAL_SHAPE.test(reference.reference) && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
@@ -41308,7 +41842,7 @@ function validateCredentialRef(reference) {
   throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
 }
 function validateProviderConfig(config2) {
-  if (!isPlainObject8(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject9(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(config2).sort();
   if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   return Object.freeze({
@@ -41349,7 +41883,7 @@ function collectLocationIndicators2(value, indicators = [], stack = /* @__PURE__
   }
 }
 function validateTransport(transport) {
-  if (!isPlainObject8(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
+  if (!isPlainObject9(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).some((key) => !["connect", "fetch", "kind", "url"].includes(key))) {
       throw codedError("MCP_TRANSPORT_INVALID", TypeError);
@@ -41473,10 +42007,10 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     publicCatalogSnapshotHash: trustedPolicy.snapshotHash,
     publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
-      if (!isPlainObject8(request) || !ALLOWED_TOOLS.has(request.name)) {
+      if (!isPlainObject9(request) || !ALLOWED_TOOLS.has(request.name)) {
         throw codedError("TOOL_NOT_AVAILABLE");
       }
-      if (!isPlainObject8(request.arguments) || containsForbiddenArgument(request.arguments)) {
+      if (!isPlainObject9(request.arguments) || containsForbiddenArgument(request.arguments)) {
         throw codedError("MUTATION_ARGUMENT_NOT_ALLOWED");
       }
       const policy = request.arguments.policy;
@@ -41486,7 +42020,7 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
         throw codedError("ACTION_NOT_ALLOWED");
       }
       if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError("ACTION_NOT_ALLOWED");
-      if (!isPlainObject8(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
+      if (!isPlainObject9(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
         (locationId) => locationId !== config2.expectedLocationId
       )) throw codedError("LOCATION_MISMATCH");
       try {
@@ -41543,16 +42077,16 @@ var init_mcp_transport = __esm({
 });
 
 // lib/adapters/public-ghl.mjs
-function isPlainObject9(value) {
+function isPlainObject10(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function parseToolResult(response) {
   let value = response;
-  if (isPlainObject9(response) && isPlainObject9(response.structuredContent)) {
+  if (isPlainObject10(response) && isPlainObject10(response.structuredContent)) {
     value = response.structuredContent;
-  } else if (isPlainObject9(response) && Array.isArray(response.content)) {
+  } else if (isPlainObject10(response) && Array.isArray(response.content)) {
     const text = response.content.find((entry) => entry?.type === "text")?.text;
     if (typeof text !== "string") throw codedError("PUBLIC_RESPONSE_INVALID");
     try {
@@ -41561,7 +42095,7 @@ function parseToolResult(response) {
       throw codedError("PUBLIC_RESPONSE_INVALID");
     }
   }
-  if (!isPlainObject9(value) || !Array.isArray(value.items) || !isPlainObject9(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
+  if (!isPlainObject10(value) || !Array.isArray(value.items) || !isPlainObject10(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
   return cloneJson(value, "PUBLIC_RESPONSE_INVALID");
 }
 function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalSignal) {
@@ -41572,11 +42106,11 @@ function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalS
   let timer;
   let timedOut = false;
   const call = Promise.resolve().then(() => invoke(combinedSignal));
-  const timeout = new Promise((resolve6) => {
+  const timeout = new Promise((resolve7) => {
     timer = setTimer(() => {
       timedOut = true;
       timeoutController.abort(codedError(timeoutReason));
-      resolve6({ timeout: true, reason: timeoutReason });
+      resolve7({ timeout: true, reason: timeoutReason });
     }, timeoutMs);
   });
   return Promise.race([
@@ -41615,7 +42149,7 @@ function startTime(runtime) {
   return typeof runtime.now === "function" ? runtime.now() : Date.now();
 }
 function normalizeCapability(capability, allowlist, allowlistHash, client) {
-  if (!isPlainObject9(capability) || typeof capability.actionId !== "string") {
+  if (!isPlainObject10(capability) || typeof capability.actionId !== "string") {
     throw codedError("ACTION_NOT_ALLOWED");
   }
   const listed = allowlist.actions.find(({ actionId }) => actionId === capability.actionId);
@@ -41692,7 +42226,7 @@ function normalizeRawPageSink(rawPageSink) {
   });
 }
 function validateSealedPage(sealed, payloadHash) {
-  if (!isPlainObject9(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
+  if (!isPlainObject10(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
   return Object.freeze({
     opaqueRef: sealed.opaqueRef,
     payloadHash: sealed.payloadHash
@@ -41727,7 +42261,7 @@ function validateCheckpointArtifact(artifact, index, expectedCursor, reportedCou
     "reportedCount",
     "responseBytes"
   ];
-  if (!isPlainObject9(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject10(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   return artifact.nextCursor;
 }
 function validateResumeCheckpoint(checkpoint, {
@@ -41756,7 +42290,7 @@ function validateResumeCheckpoint(checkpoint, {
     "scopeHash",
     "source"
   ];
-  if (!isPlainObject9(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject10(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   let appliedWindow;
   try {
     appliedWindow = validateCollectionWindow(
@@ -42034,7 +42568,7 @@ function createPublicGhlAdapter({
             retryCount += 1;
             retryDelay += remainingAfterFailure;
             await (runtime.sleep ?? ((milliseconds) => new Promise(
-              (resolve6) => setTimeout(resolve6, milliseconds)
+              (resolve7) => setTimeout(resolve7, milliseconds)
             )))(remainingAfterFailure);
             return finishIncomplete("BUDGET_WALL_CLOCK");
           }
@@ -42042,14 +42576,14 @@ function createPublicGhlAdapter({
             retryCount += 1;
             retryDelay += remainingRetryDelay;
             await (runtime.sleep ?? ((milliseconds) => new Promise(
-              (resolve6) => setTimeout(resolve6, milliseconds)
+              (resolve7) => setTimeout(resolve7, milliseconds)
             )))(remainingRetryDelay);
             return finishIncomplete("BUDGET_TOTAL_RETRY_DELAY");
           }
           retryCount += 1;
           retryDelay += delay;
           await (runtime.sleep ?? ((milliseconds) => new Promise(
-            (resolve6) => setTimeout(resolve6, milliseconds)
+            (resolve7) => setTimeout(resolve7, milliseconds)
           )))(delay);
           continue;
         }
@@ -42182,11 +42716,11 @@ import {
   existsSync as existsSync2,
   fstatSync,
   fsyncSync,
-  lstatSync as lstatSync4,
+  lstatSync as lstatSync5,
   mkdirSync as mkdirSync3,
   openSync,
   readFileSync as readFileSync3,
-  realpathSync as realpathSync4,
+  realpathSync as realpathSync5,
   renameSync,
   writeFileSync as writeFileSync2
 } from "node:fs";
@@ -42198,12 +42732,12 @@ import {
   timingSafeEqual
 } from "node:crypto";
 import {
-  basename as basename2,
+  basename as basename3,
   dirname,
-  join as join2,
+  join as join3,
   relative as relative3,
-  resolve as resolve3,
-  sep as sep3
+  resolve as resolve4,
+  sep as sep4
 } from "node:path";
 function codedError7(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -42321,7 +42855,7 @@ function acceptFrozenInputs(returned, keys) {
 function phaseArtifactPath(state, runId, phase) {
   const logicalPhase = phase.split("@", 1)[0];
   const safePhase = phase.replaceAll(/[^a-z0-9_-]/gu, "_");
-  return join2(
+  return join3(
     state.paths.privateCheckpoints,
     runId,
     "phases",
@@ -42343,7 +42877,7 @@ function sameIdentity(left, right) {
 function directoryIdentity(pathname, code) {
   let metadata;
   try {
-    metadata = lstatSync4(pathname, { bigint: true });
+    metadata = lstatSync5(pathname, { bigint: true });
   } catch {
     throw codedError7(code);
   }
@@ -42352,25 +42886,25 @@ function directoryIdentity(pathname, code) {
 }
 function openPhaseDirectory({ state, runId, create, expectedBinding }) {
   if (!Number.isInteger(constants.O_NOFOLLOW) || !Number.isInteger(constants.O_DIRECTORY)) throw codedError7("AUDIT_CHECKPOINT_INVALID_FS_UNSUPPORTED");
-  const root = resolve3(state.paths.privateCheckpoints);
+  const root = resolve4(state.paths.privateCheckpoints);
   const authorizedRoot = state.pathBindings?.privateCheckpoints;
-  const runDirectory = join2(root, runId);
-  const phasesDirectory = join2(runDirectory, "phases");
+  const runDirectory = join3(root, runId);
+  const phasesDirectory = join3(runDirectory, "phases");
   let canonicalRoot;
   const assertDirectory = (pathname, expected, code) => {
     const identity = directoryIdentity(pathname, code);
     if (expected && !sameIdentity(identity, expected)) throw codedError7(code);
     let canonical;
     try {
-      canonical = realpathSync4(pathname);
+      canonical = realpathSync5(pathname);
     } catch {
       throw codedError7(code);
     }
-    if (resolve3(pathname) === root) {
+    if (resolve4(pathname) === root) {
       if (expected?.realpath && canonical !== expected.realpath) throw codedError7(code);
       canonicalRoot = canonical;
       return Object.freeze({ ...identity, realpath: canonical });
-    } else if (canonical === canonicalRoot || !canonical.startsWith(`${canonicalRoot}${sep3}`)) throw codedError7(code);
+    } else if (canonical === canonicalRoot || !canonical.startsWith(`${canonicalRoot}${sep4}`)) throw codedError7(code);
     return identity;
   };
   const rootIdentity = assertDirectory(
@@ -42502,9 +43036,9 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
     create: true,
     expectedBinding: priorBinding
   });
-  const pathname = join2(
+  const pathname = join3(
     guard.directory,
-    basename2(phaseArtifactPath(state, runId, phase))
+    basename3(phaseArtifactPath(state, runId, phase))
   );
   const temporary = `${pathname}.tmp`;
   try {
@@ -42521,7 +43055,7 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
         throw codedError7("AUDIT_CHECKPOINT_INVALID_OUTPUT_CONFLICT");
       }
       return {
-        artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
+        artifactRef: relative3(state.paths.root, pathname).split(sep4).join("/"),
         artifactHash: sha256(existing),
         phaseDirectoryBinding: guard.binding
       };
@@ -42543,7 +43077,7 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
         guard.assertSame();
         chmodSync(pathname, 384);
         return {
-          artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
+          artifactRef: relative3(state.paths.root, pathname).split(sep4).join("/"),
           artifactHash: sha256(orphan),
           phaseDirectoryBinding: guard.binding
         };
@@ -42589,7 +43123,7 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
       if (descriptor !== void 0) closeSync(descriptor);
     }
     return {
-      artifactRef: relative3(state.paths.root, pathname).split(sep3).join("/"),
+      artifactRef: relative3(state.paths.root, pathname).split(sep4).join("/"),
       artifactHash: sha256(envelope),
       phaseDirectoryBinding: guard.binding
     };
@@ -42608,13 +43142,13 @@ function restorePhase({ state, runId, phase, input, keys }) {
     create: false,
     expectedBinding: checkpoint.payload.phaseDirectoryBinding
   });
-  const pathname = resolve3(state.paths.root, checkpoint.payload.artifactRef);
-  const checkpointRoot = resolve3(state.paths.privateCheckpoints);
-  const expectedPathname = join2(
+  const pathname = resolve4(state.paths.root, checkpoint.payload.artifactRef);
+  const checkpointRoot = resolve4(state.paths.privateCheckpoints);
+  const expectedPathname = join3(
     guard.directory,
-    basename2(phaseArtifactPath(state, runId, phase))
+    basename3(phaseArtifactPath(state, runId, phase))
   );
-  if (!pathname.startsWith(`${checkpointRoot}${sep3}`) || pathname !== expectedPathname) {
+  if (!pathname.startsWith(`${checkpointRoot}${sep4}`) || pathname !== expectedPathname) {
     guard.close();
     throw codedError7("AUDIT_CHECKPOINT_INVALID_PATH");
   }
@@ -42665,23 +43199,23 @@ function savePhase(state, runId, phase, input, output, keys) {
 function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) {
   const requestId = request.requestId;
   if (typeof requestId !== "string" || !OPAQUE_ID.test(requestId) || !["conversation", "mechanism"].includes(kind)) throw codedError7("REVIEW_REQUEST_STATE_INVALID_ID");
-  const directory = join2(state.paths.privateCheckpoints, runId, "reviews");
+  const directory = join3(state.paths.privateCheckpoints, runId, "reviews");
   mkdirSync3(directory, { recursive: true, mode: 448 });
   for (const candidate of [
     state.paths.privateCheckpoints,
-    join2(state.paths.privateCheckpoints, runId),
+    join3(state.paths.privateCheckpoints, runId),
     directory
   ]) {
-    const metadata = lstatSync4(candidate);
+    const metadata = lstatSync5(candidate);
     if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
       throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
     }
     chmodSync(candidate, 448);
   }
-  const destination = join2(directory, `${kind}-${requestId}.json`);
-  const expectedRoot = resolve3(state.paths.root);
-  const resolvedDestination = resolve3(destination);
-  if (!resolvedDestination.startsWith(`${expectedRoot}${sep3}`)) {
+  const destination = join3(directory, `${kind}-${requestId}.json`);
+  const expectedRoot = resolve4(state.paths.root);
+  const resolvedDestination = resolve4(destination);
+  if (!resolvedDestination.startsWith(`${expectedRoot}${sep4}`)) {
     throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_PATH");
   }
   const bytes = Buffer.from(`${canonicalJson({
@@ -42693,14 +43227,14 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
   })}
 `, "utf8");
   if (existsSync2(destination)) {
-    const metadata = lstatSync4(destination);
+    const metadata = lstatSync5(destination);
     if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync3(destination).equals(bytes)) throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
   } else {
     const temporary = `${destination}.tmp`;
     let descriptor;
     try {
       if (existsSync2(temporary)) {
-        const metadata = lstatSync4(temporary);
+        const metadata = lstatSync5(temporary);
         if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync3(temporary).equals(bytes)) throw codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
       } else {
         descriptor = openSync(
@@ -42720,7 +43254,7 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
       throw error51?.code?.startsWith?.("AUDIT_") ? error51 : codedError7("AUDIT_INTEGRITY_FAILURE_REVIEW_ARTIFACT");
     }
   }
-  return relative3(state.paths.root, destination).split(sep3).join("/");
+  return relative3(state.paths.root, destination).split(sep4).join("/");
 }
 function persistReviewRequest(state, runId, item, now) {
   assertObject(item, "REVIEW_REQUEST_STATE_INVALID_SHAPE");
@@ -43935,7 +44469,7 @@ var init_evidence_graph = __esm({
 function codedError9(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject10(value) {
+function isPlainObject11(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
   );
@@ -43953,7 +44487,7 @@ function byteCompare(left, right) {
 function readPath(record2, path) {
   let current = record2;
   for (const key of path.split(".")) {
-    if (!isPlainObject10(current) || !Object.hasOwn(current, key)) return void 0;
+    if (!isPlainObject11(current) || !Object.hasOwn(current, key)) return void 0;
     current = current[key];
   }
   return current;
@@ -44152,7 +44686,7 @@ function orderingKey(value, seen = /* @__PURE__ */ new WeakSet()) {
   }
 }
 function envelopeOrderingKey(collection) {
-  if (!isPlainObject10(collection)) return orderingKey(collection);
+  if (!isPlainObject11(collection)) return orderingKey(collection);
   const rows = Array.isArray(collection.items) ? collection.items : [];
   const withoutRows = Object.fromEntries(
     Object.entries(collection).filter(([key]) => key !== "items")
@@ -44170,22 +44704,22 @@ function talliedAnnotations(counter) {
   return [...counter.entries()].sort(([left], [right]) => byteCompare(left, right)).map(([code, count]) => ({ code, count }));
 }
 function assertInput({ collections, context, profile, projection }) {
-  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject10(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject10(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject10(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject10(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError9("PROJECTION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject11(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject11(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject11(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject11(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError9("PROJECTION_INPUT_INVALID", TypeError);
 }
 function assertWindowShape(window) {
-  if (!isPlainObject10(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (!isPlainObject11(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
 }
 function copyWindow(window) {
   return { ...window };
 }
 function assertSourceCollection(collection, locationId) {
-  if (!isPlainObject10(collection)) {
+  if (!isPlainObject11(collection)) {
     throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   }
   if (collection.boundLocationId !== locationId) {
     throw codedError9("PROJECTION_LOCATION_MISMATCH");
   }
-  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject10(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject11(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   assertWindowShape(collection.requestedWindow);
   assertWindowShape(collection.appliedWindow);
   if (Date.parse(collection.appliedWindow.from) < Date.parse(collection.requestedWindow.from) || Date.parse(collection.appliedWindow.to) > Date.parse(collection.requestedWindow.to)) throw codedError9("PROJECTION_WINDOW_MISMATCH");
@@ -44214,7 +44748,7 @@ function resolveJourneyInstances(profile, projection) {
       if (typeof entity?.recordType !== "string" || entity.recordType.length === 0) {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject10(entity.when) || typeof entity.when.kind !== "string") {
+      if (!isPlainObject11(entity.when) || typeof entity.when.kind !== "string") {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
     }
@@ -44226,7 +44760,7 @@ function resolveJourneyInstances(profile, projection) {
       if (!Array.isArray(event.eventTimeField) || event.eventTimeField.length === 0) {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject10(event.when) || typeof event.when.kind !== "string") {
+      if (!isPlainObject11(event.when) || typeof event.when.kind !== "string") {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
       if (Object.hasOwn(event, "revenueFrom") && !Array.isArray(event.revenueFrom)) {
@@ -44267,7 +44801,7 @@ function projectJourneyEvents({ collections, context, profile, projection } = {}
     const entities = plan.spec.entities ?? [];
     const events = plan.spec.events ?? [];
     for (const record2 of plan.collection.items) {
-      if (!isPlainObject10(record2)) {
+      if (!isPlainObject11(record2)) {
         tally(plan.suppressed, REASON_NOT_AN_OBJECT);
         continue;
       }
@@ -45198,7 +45732,7 @@ var init_metrics = __esm({
 function codedError11(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject11(value) {
+function isPlainObject12(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
@@ -45236,10 +45770,10 @@ function assertLocation(value, locationId, seen = /* @__PURE__ */ new WeakSet())
   }
 }
 function assertWindow(window, code) {
-  if (!isPlainObject11(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError11(code, TypeError);
+  if (!isPlainObject12(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError11(code, TypeError);
 }
 function validateCollection(collection, locationId) {
-  if (!isPlainObject11(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject11(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError11(
+  if (!isPlainObject12(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject12(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError11(
     collection?.boundLocationId !== locationId ? "EVIDENCE_LOCATION_MISMATCH" : "EVIDENCE_COLLECTION_INVALID",
     TypeError
   );
@@ -45252,7 +45786,7 @@ function validateCollection(collection, locationId) {
   }
 }
 function normalizeItem(item, provenance, occurrenceOrdinal) {
-  if (!isPlainObject11(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
+  if (!isPlainObject12(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
     throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
   }
   if (Object.hasOwn(item, "eventTime") && !isCanonicalTimestamp2(item.eventTime) || Object.hasOwn(item, "evidenceRef") && (typeof item.evidenceRef !== "string" || !/^ev_[a-f0-9]{16,64}$/u.test(item.evidenceRef)) || Object.hasOwn(item, "definitionHash") && !/^[a-f0-9]{64}$/u.test(item.definitionHash) || Object.hasOwn(item, "effectiveDefinitionHash") && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash) || Object.hasOwn(item, "cohortInstanceRef") && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef) || Object.hasOwn(item, "revenueAmount") && (typeof item.revenueAmount !== "number" || !Number.isFinite(item.revenueAmount) || item.revenueAmount < 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
@@ -45308,7 +45842,7 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
   return canonical;
 }
 function normalizeEvidence(records, context) {
-  if (!Array.isArray(records) || records.length === 0 || !isPlainObject11(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError11("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(records) || records.length === 0 || !isPlainObject12(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError11("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
   const pending = [];
   for (const collection of records) {
     validateCollection(collection, context.locationId);
@@ -45372,7 +45906,7 @@ var init_normalize = __esm({
 function codedError12(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function byteOrder(left, right) {
+function byteOrder2(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 function sealedProfileId(frozenInputs) {
@@ -45402,7 +45936,7 @@ function collectionSummary(publicEvidence) {
     collectedCount: Array.isArray(scope.items) ? scope.items.length : 0,
     reportedCount: scope.page?.reportedCount ?? null,
     appliedWindow: { ...scope.appliedWindow }
-  })).sort((left, right) => byteOrder(canonicalJson(left), canonicalJson(right)));
+  })).sort((left, right) => byteOrder2(canonicalJson(left), canonicalJson(right)));
 }
 function projectionSummary(projected) {
   return projected.map((envelope) => ({
@@ -45541,10 +46075,10 @@ import {
   fstatSync as fstatSync2,
   fsyncSync as fsyncSync2,
   linkSync,
-  lstatSync as lstatSync5,
+  lstatSync as lstatSync6,
   openSync as openSync2,
   readFileSync as readFileSync4,
-  readdirSync,
+  readdirSync as readdirSync2,
   unlinkSync,
   writeFileSync as writeFileSync3
 } from "node:fs";
@@ -45555,7 +46089,7 @@ import {
   createHmac as createHmac3,
   randomBytes as randomBytes4
 } from "node:crypto";
-import { isAbsolute as isAbsolute2, join as join3 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join4 } from "node:path";
 function codedError14(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
@@ -45611,7 +46145,7 @@ function normalizeReference(keyReference) {
   }
   if (type === "protected-file" || type === "file") {
     const path = keyReference.path;
-    if (typeof path !== "string" || !isAbsolute2(path) || Object.keys(keyReference).some((key) => !["type", "provider", "path"].includes(key))) {
+    if (typeof path !== "string" || !isAbsolute3(path) || Object.keys(keyReference).some((key) => !["type", "provider", "path"].includes(key))) {
       throw codedError14("VAULT_KEY_REFERENCE_INVALID", TypeError);
     }
     return { type: "protected-file", path };
@@ -45627,7 +46161,7 @@ function protectedFileMaterial(path) {
   let descriptor;
   let contents;
   try {
-    if (lstatSync5(path).isSymbolicLink()) throw codedError14("VAULT_KEY_FILE_INVALID");
+    if (lstatSync6(path).isSymbolicLink()) throw codedError14("VAULT_KEY_FILE_INVALID");
     descriptor = openSync2(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
     const metadata = fstatSync2(descriptor);
     if (!metadata.isFile()) throw codedError14("VAULT_KEY_FILE_INVALID");
@@ -45743,7 +46277,7 @@ function eventIds(header, subjectKey2, expiredAt) {
   };
 }
 function eventPath(paths, eventId) {
-  return join3(paths.memoryEvents, `${eventId}.json`);
+  return join4(paths.memoryEvents, `${eventId}.json`);
 }
 function readJson(path, failureCode) {
   try {
@@ -45756,7 +46290,7 @@ function syncImmutableEvent(path, directory) {
   let descriptor;
   let directoryDescriptor;
   try {
-    const metadata = lstatSync5(path);
+    const metadata = lstatSync6(path);
     if (metadata.isSymbolicLink() || !metadata.isFile() || (metadata.mode & 146) !== 0) {
       throw new Error();
     }
@@ -45781,7 +46315,7 @@ function writeImmutableEvent(paths, event) {
     syncImmutableEvent(path, paths.memoryEvents);
     return false;
   }
-  const temporary = join3(paths.memoryEvents, `.${event.eventId}.${process.pid}.${randomBytes4(8).toString("hex")}.tmp`);
+  const temporary = join4(paths.memoryEvents, `.${event.eventId}.${process.pid}.${randomBytes4(8).toString("hex")}.tmp`);
   let descriptor;
   let directoryDescriptor;
   try {
@@ -45812,7 +46346,7 @@ function writeImmutableEvent(paths, event) {
 }
 function readRawRecord(path) {
   try {
-    const metadata = lstatSync5(path);
+    const metadata = lstatSync6(path);
     if (metadata.isSymbolicLink() || !metadata.isFile()) throw new Error();
     return readJson(path, "RAW_EVIDENCE_RECORD_INVALID");
   } catch (error51) {
@@ -45887,7 +46421,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
   try {
     canonicalPaths = validateAuditPaths(paths);
     ensureAuditPaths(canonicalPaths);
-    chmodSync2(join3(canonicalPaths.privateRaw, ".."), 448);
+    chmodSync2(join4(canonicalPaths.privateRaw, ".."), 448);
     for (const directory of [
       canonicalPaths.privateRaw,
       canonicalPaths.privateLogs,
@@ -45905,7 +46439,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
   };
   function completePending(event, now) {
     const header = validatePendingEvent(event, subjectKey2);
-    const recordPath = join3(canonicalPaths.privateRaw, `${header.opaqueRef}.json`);
+    const recordPath = join4(canonicalPaths.privateRaw, `${header.opaqueRef}.json`);
     let removed = false;
     if (existsSync3(recordPath)) {
       const record2 = readRawRecord(recordPath);
@@ -46044,7 +46578,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
       ciphertext.fill(0);
       try {
         writeFileSync3(
-          join3(canonicalPaths.privateRaw, `${opaqueRef}.json`),
+          join4(canonicalPaths.privateRaw, `${opaqueRef}.json`),
           `${canonicalJson(record2)}
 `,
           { encoding: "utf8", flag: "wx", mode: 384 }
@@ -46059,9 +46593,9 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
       validateExpiry(now);
       let purged = 0;
       const events = [];
-      for (const name of readdirSync(canonicalPaths.memoryEvents).sort()) {
+      for (const name of readdirSync2(canonicalPaths.memoryEvents).sort()) {
         if (!EVENT_FILE.test(name)) continue;
-        const event = readJson(join3(canonicalPaths.memoryEvents, name), "RAW_EXPIRY_EVENT_INVALID");
+        const event = readJson(join4(canonicalPaths.memoryEvents, name), "RAW_EXPIRY_EVENT_INVALID");
         if (event.phase !== "pending") continue;
         const header = validatePendingEvent(event, subjectKey2);
         const completedId = eventIds(header, subjectKey2, event.expiredAt).completedEventId;
@@ -46077,9 +46611,9 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
         if (recovered.removed) purged += 1;
         events.push(recovered.eventId);
       }
-      for (const name of readdirSync(canonicalPaths.privateRaw).sort()) {
+      for (const name of readdirSync2(canonicalPaths.privateRaw).sort()) {
         if (!RAW_FILE.test(name)) continue;
-        const recordPath = join3(canonicalPaths.privateRaw, name);
+        const recordPath = join4(canonicalPaths.privateRaw, name);
         const record2 = readRawRecord(recordPath);
         const expectedOpaqueRef = name.slice(0, -".json".length);
         const header = verifyRecord(record2, expectedOpaqueRef, cipherKey);
@@ -46141,45 +46675,45 @@ import {
   constants as constants3,
   existsSync as existsSync4,
   fstatSync as fstatSync3,
-  lstatSync as lstatSync6,
+  lstatSync as lstatSync7,
   mkdirSync as mkdirSync4,
   openSync as openSync3,
   readFileSync as readFileSync5,
-  realpathSync as realpathSync5,
+  realpathSync as realpathSync6,
   renameSync as renameSync2,
   writeFileSync as writeFileSync4
 } from "node:fs";
 import { createHmac as createHmac4, randomUUID, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import {
   dirname as dirname2,
-  isAbsolute as isAbsolute3,
-  join as join4,
+  isAbsolute as isAbsolute4,
+  join as join5,
   relative as relative4,
-  resolve as resolve4,
-  sep as sep4
+  resolve as resolve5,
+  sep as sep5
 } from "node:path";
 function codedError15(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject12(value) {
+function isPlainObject13(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
-function isWithin2(parent, candidate) {
+function isWithin3(parent, candidate) {
   const fromParent = relative4(parent, candidate);
-  return fromParent === "" || !isAbsolute3(fromParent) && fromParent !== ".." && !fromParent.startsWith(`..${sep4}`);
+  return fromParent === "" || !isAbsolute4(fromParent) && fromParent !== ".." && !fromParent.startsWith(`..${sep5}`);
 }
 function realWithin(parent, candidate, code) {
   let realParent;
   let realCandidate;
   try {
-    realParent = realpathSync5(parent);
-    realCandidate = realpathSync5(candidate);
+    realParent = realpathSync6(parent);
+    realCandidate = realpathSync6(candidate);
   } catch {
     throw codedError15(code);
   }
-  if (!isWithin2(realParent, realCandidate)) throw codedError15(code);
+  if (!isWithin3(realParent, realCandidate)) throw codedError15(code);
   return realCandidate;
 }
 function readRegularJson(pathname, code) {
@@ -46189,7 +46723,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync5(descriptor, "utf8"));
-    if (!isPlainObject12(parsed)) throw new Error();
+    if (!isPlainObject13(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError15(code);
@@ -46198,7 +46732,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject12(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject12(config2.frozenInputs) || !isPlainObject12(config2.context) || !isPlainObject12(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject13(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject13(config2.frozenInputs) || !isPlainObject13(config2.context) || !isPlainObject13(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -46206,7 +46740,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject12(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject12(rail.capabilityProofIndex) || !isPlainObject12(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject12(transport.responses) || !isPlainObject12(transport.toolsList))) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject13(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject13(rail.capabilityProofIndex) || !isPlainObject13(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject13(transport.responses) || !isPlainObject13(transport.toolsList))) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46236,7 +46770,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject12(frozenInputs)) fail2();
+  if (!isPlainObject13(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -46306,7 +46840,7 @@ function assertSealDocumentShape(document) {
   const fail2 = () => {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject12(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject12(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject13(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject13(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -46352,16 +46886,16 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject12(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
-  const project = resolve4(projectRoot);
-  const pathname = resolve4(project, declaration.relativePath);
-  if (!isWithin2(project, pathname)) fail2();
+  if (!isPlainObject13(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  const project = resolve5(projectRoot);
+  const pathname = resolve5(project, declaration.relativePath);
+  if (!isWithin3(project, pathname)) fail2();
   const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const declaredConfigPath = typeof providerDescriptor?.relativePath === "string" ? providerDescriptor.relativePath : null;
   if (declaredConfigPath !== null) {
     let realConfigPath;
     try {
-      realConfigPath = realpathSync5(resolve4(project, declaredConfigPath));
+      realConfigPath = realpathSync6(resolve5(project, declaredConfigPath));
     } catch {
       realConfigPath = null;
     }
@@ -46410,10 +46944,10 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject12(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
-  const project = resolve4(projectRoot);
-  const pathname = resolve4(project, descriptor.relativePath);
-  if (!isWithin2(project, pathname)) {
+  if (!isPlainObject13(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  const project = resolve5(projectRoot);
+  const pathname = resolve5(project, descriptor.relativePath);
+  if (!isWithin3(project, pathname)) {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46430,7 +46964,7 @@ function writeImmutable(pathname, value) {
     "utf8"
   );
   if (existsSync4(pathname)) {
-    const metadata = lstatSync6(pathname);
+    const metadata = lstatSync7(pathname);
     if (metadata.isSymbolicLink() || !metadata.isFile()) {
       throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
@@ -46445,7 +46979,7 @@ function writeImmutable(pathname, value) {
     writeFileSync4(temporary, bytes, { flag: "wx", mode: 384 });
   } catch (error51) {
     if (error51?.code !== "EEXIST") throw error51;
-    const metadata = existsSync4(temporary) ? lstatSync6(temporary) : void 0;
+    const metadata = existsSync4(temporary) ? lstatSync7(temporary) : void 0;
     if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync5(temporary).equals(bytes)) throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
   }
   renameSync2(temporary, pathname);
@@ -46460,9 +46994,9 @@ function publicationPublisher(scopeStatement) {
     verification,
     frozenInputs
   }) {
-    const publicationRoot = join4(paths.weekly, publicationId);
+    const publicationRoot = join5(paths.weekly, publicationId);
     if (existsSync4(publicationRoot)) {
-      const metadata = lstatSync6(publicationRoot);
+      const metadata = lstatSync7(publicationRoot);
       if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
         throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
       }
@@ -46486,10 +47020,10 @@ function publicationPublisher(scopeStatement) {
       compiledHash: sha256(compiled),
       verificationHash: sha256(verification)
     };
-    writeImmutable(join4(publicationRoot, "REPORT.md"), report);
-    writeImmutable(join4(publicationRoot, "coverage.json"), compiled.coverage);
-    writeImmutable(join4(publicationRoot, "result.json"), compiled);
-    writeImmutable(join4(publicationRoot, "manifest.json"), manifest);
+    writeImmutable(join5(publicationRoot, "REPORT.md"), report);
+    writeImmutable(join5(publicationRoot, "coverage.json"), compiled.coverage);
+    writeImmutable(join5(publicationRoot, "result.json"), compiled);
+    writeImmutable(join5(publicationRoot, "manifest.json"), manifest);
     return {
       publicationId,
       manifestHash: sha256(manifest),
@@ -46503,9 +47037,9 @@ function publicationPublisher(scopeStatement) {
   };
 }
 function localProviderDescriptor({ projectRoot, providerConfigPath, config: config2 }) {
-  const project = resolve4(projectRoot);
-  const pathname = resolve4(providerConfigPath);
-  if (!isWithin2(project, pathname)) {
+  const project = resolve5(projectRoot);
+  const pathname = resolve5(providerConfigPath);
+  if (!isWithin3(project, pathname)) {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46513,7 +47047,7 @@ function localProviderDescriptor({ projectRoot, providerConfigPath, config: conf
   return Object.freeze({
     kind: "project_file",
     configHash: sha256(config2),
-    relativePath: relative4(project, pathname).split(sep4).join("/")
+    relativePath: relative4(project, pathname).split(sep5).join("/")
   });
 }
 function createLocalAuditKernel({ initialRunId, internalClient = null } = {}) {
@@ -46611,7 +47145,7 @@ function publicConfigError() {
   throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject12(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject13(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -46630,17 +47164,45 @@ function validatePublicTransport(transport) {
   }
   publicConfigError();
 }
+function validatePublicInternalAudit(value) {
+  if (!isPlainObject13(value)) publicConfigError();
+  if (Object.keys(value).some((key) => !PUBLIC_INTERNAL_AUDIT_KEYS.includes(key))) {
+    publicConfigError();
+  }
+  if (!Object.hasOwn(value, "transport")) publicConfigError();
+  try {
+    validateInternalAuditTransport(value.transport);
+  } catch {
+    publicConfigError();
+  }
+  if (Object.hasOwn(value, "companyId")) {
+    if (typeof value.companyId !== "string" || !PUBLIC_LOCATION_ID.test(value.companyId)) {
+      publicConfigError();
+    }
+  }
+  if (Object.hasOwn(value, "runtimeWorkflowIds")) {
+    if (!Array.isArray(value.runtimeWorkflowIds) || value.runtimeWorkflowIds.some((id) => typeof id !== "string" || id.length === 0)) publicConfigError();
+  }
+  if (Object.hasOwn(value, "budgets")) {
+    if (!isPlainObject13(value.budgets)) publicConfigError();
+    for (const [key, limit] of Object.entries(value.budgets)) {
+      if (!Object.hasOwn(DEFAULT_BUDGETS, key)) publicConfigError();
+      if (!Number.isSafeInteger(limit) || limit < 1) publicConfigError();
+    }
+  }
+}
 function validatePublicConfig(config2) {
-  if (!isPlainObject12(config2)) publicConfigError();
+  if (!isPlainObject13(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject12(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject12(config2.frozenInputs) || !isPlainObject12(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject13(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject13(config2.frozenInputs) || !isPlainObject13(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
+  if (Object.hasOwn(config2, "internalAudit")) validatePublicInternalAudit(config2.internalAudit);
   if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
     publicConfigError();
   }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject12(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject13(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -46668,10 +47230,10 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject12(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
-  const project = resolve4(projectRoot);
-  const pathname = resolve4(project, descriptor.relativePath);
-  if (!isWithin2(project, pathname)) {
+  if (!isPlainObject13(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  const project = resolve5(projectRoot);
+  const pathname = resolve5(project, descriptor.relativePath);
+  if (!isWithin3(project, pathname)) {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46681,9 +47243,9 @@ function loadPublicProjectConfig({ descriptor, projectRoot }) {
   ));
 }
 function publicProviderDescriptor({ projectRoot, providerConfigPath, config: config2 }) {
-  const project = resolve4(projectRoot);
-  const pathname = resolve4(providerConfigPath);
-  if (!isWithin2(project, pathname)) {
+  const project = resolve5(projectRoot);
+  const pathname = resolve5(providerConfigPath);
+  if (!isWithin3(project, pathname)) {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46691,7 +47253,7 @@ function publicProviderDescriptor({ projectRoot, providerConfigPath, config: con
   return Object.freeze({
     kind: "project_file",
     configHash: sha256(config2),
-    relativePath: relative4(project, pathname).split(sep4).join("/")
+    relativePath: relative4(project, pathname).split(sep5).join("/")
   });
 }
 function publicKeyMaterial(reference, { keyProvider = null } = {}) {
@@ -46959,7 +47521,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject12(sealed)) return null;
+    if (!isPlainObject13(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -46974,6 +47536,34 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
     state?.close();
   }
 }
+function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectOverride, runtime }) {
+  if (!isPlainObject13(internalAudit)) return null;
+  const connect = connectOverride ?? createInternalAuditConnect({
+    serverPath: internalAudit.transport.serverPath,
+    tokenFilePath: internalAudit.transport.tokenFilePath
+  });
+  return {
+    async collectAuditEvidence(request) {
+      const client = await connect();
+      try {
+        const collector = createInternalAuditCollector({
+          rail: createInternalAuditAdapter({ client, expectedLocationId }),
+          boundLocationId: expectedLocationId,
+          companyId: internalAudit.companyId,
+          runtimeWorkflowIds: internalAudit.runtimeWorkflowIds ?? [],
+          budgets: internalAudit.budgets ?? {},
+          runtime
+        });
+        return await collector.collectAuditEvidence(request);
+      } finally {
+        try {
+          await client.close?.();
+        } catch {
+        }
+      }
+    }
+  };
+}
 function createPublicAuditKernel({
   initialRunId,
   // Set by the CLI's `resume` command, which is the only caller that knows which run is being
@@ -46983,6 +47573,10 @@ function createPublicAuditKernel({
   // A host-owned connect whose delegate is a RAW GHL MCP client. Mutually exclusive with
   // `transportConnect`; see `collectPublicEvidence`.
   ghlNativeConnect = null,
+  // A host-owned connect to the INTERNAL audit server. When supplied it wins over whatever the
+  // configuration declares, exactly as `ghlNativeConnect` does, so a hermetic test never launches
+  // a child process and never needs the plugin installed.
+  internalAuditConnect = null,
   credentialResolver = null,
   keyProvider = null,
   signal = null,
@@ -46997,7 +47591,7 @@ function createPublicAuditKernel({
     const key = sha256({
       configHash: sha256(config2),
       locationId: config2.expectedLocationId,
-      projectRoot: resolve4(args.projectRoot),
+      projectRoot: resolve5(args.projectRoot),
       vaultKeyReference: sha256(args.vaultKeyReference ?? null)
     });
     if (memo === null || memo.key !== key) {
@@ -47033,6 +47627,23 @@ function createPublicAuditKernel({
       collectPublic: async (args) => {
         if (adopted !== null) throw codedError15("AUDIT_PREFLIGHT_FAILED_PUBLIC_EVIDENCE_UNAVAILABLE");
         return (await collectionFor(args)).publicEvidence;
+      },
+      /**
+       * Returns `null` -- the byte-identical public-only path every existing configuration takes
+       * -- unless the configuration declares an internal rail. No credential is read here and no
+       * network access is introduced by this wiring: the session opens inside
+       * `collectAuditEvidence` and the GHL token is never handled by this process at all, because
+       * the audit server reads it from a file whose PATH the transport record names.
+       */
+      collectInternal: async (args) => {
+        const config2 = validatePublicConfig(args.providerConfig);
+        if (!Object.hasOwn(config2, "internalAudit")) return null;
+        return buildInternalAuditAdapter({
+          internalAudit: config2.internalAudit,
+          expectedLocationId: config2.expectedLocationId,
+          connectOverride: internalAuditConnect,
+          runtime
+        });
       }
     },
     analyzer: {
@@ -47042,7 +47653,7 @@ function createPublicAuditKernel({
         const resumingRunId = pendingResumeRunId;
         pendingResumeRunId = null;
         adopted = resumingRunId === null ? null : adoptSealedInventory({
-          projectRoot: resolve4(args.projectRoot),
+          projectRoot: resolve5(args.projectRoot),
           locationId: config2.expectedLocationId,
           runId: resumingRunId,
           declared
@@ -47103,13 +47714,16 @@ function createPublicAuditKernel({
     )
   });
 }
-var LOCAL_SCHEMA, INTERNAL_LIMITATIONS2, LOCAL_KEY_REFERENCE, LOCAL_KEY_BYTES, SEAL_DOMAIN, SEAL_KIND, SEALED_ANCHOR_FIELDS, UNSEALED_ANCHOR, localPublisher, PUBLIC_ADAPTER_KIND, PUBLIC_SOURCE, PUBLIC_HEX64, PUBLIC_LOCATION_ID, PUBLIC_OPERATION_ID, PUBLIC_KEY_REFERENCE, PUBLIC_REQUIRED_KEYS, PUBLIC_OPTIONAL_KEYS, PUBLIC_DERIVED_FROZEN_FIELDS, PUBLIC_DEFAULT_RETENTION_DAYS, PUBLIC_MAXIMUM_RETENTION_DAYS, PUBLIC_DAY_MS;
+var LOCAL_SCHEMA, INTERNAL_LIMITATIONS2, LOCAL_KEY_REFERENCE, LOCAL_KEY_BYTES, SEAL_DOMAIN, SEAL_KIND, SEALED_ANCHOR_FIELDS, UNSEALED_ANCHOR, localPublisher, PUBLIC_ADAPTER_KIND, PUBLIC_SOURCE, PUBLIC_HEX64, PUBLIC_LOCATION_ID, PUBLIC_OPERATION_ID, PUBLIC_KEY_REFERENCE, PUBLIC_REQUIRED_KEYS, PUBLIC_OPTIONAL_KEYS, PUBLIC_INTERNAL_AUDIT_KEYS, PUBLIC_DERIVED_FROZEN_FIELDS, PUBLIC_DEFAULT_RETENTION_DAYS, PUBLIC_MAXIMUM_RETENTION_DAYS, PUBLIC_DAY_MS;
 var init_local_runtime = __esm({
   "lib/local-runtime.mjs"() {
     init_canonical();
     init_internal_ghl();
     init_ghl_public_translator();
     init_ghl_native_session();
+    init_internal_audit_collector();
+    init_internal_audit();
+    init_internal_audit_session();
     init_mcp_transport();
     init_public_ghl();
     init_trusted_public_policy();
@@ -47171,11 +47785,21 @@ var init_local_runtime = __esm({
       "transport"
     ]);
     PUBLIC_OPTIONAL_KEYS = Object.freeze([
+      // The internal (builder API) rail. OPTIONAL, and its absence is the byte-identical public-only
+      // path that every existing configuration already takes. A run only reads workflows if its
+      // configuration asks to.
+      "internalAudit",
       "lateArrivalHours",
       "providerAvailableFrom",
       "rawEvidenceRetentionDays",
       "runId",
       "salesCycleDays"
+    ]);
+    PUBLIC_INTERNAL_AUDIT_KEYS = Object.freeze([
+      "budgets",
+      "companyId",
+      "runtimeWorkflowIds",
+      "transport"
     ]);
     PUBLIC_DERIVED_FROZEN_FIELDS = Object.freeze([
       "privateSourceInventory",
@@ -47198,7 +47822,7 @@ import {
   openSync as openSync4,
   readFileSync as readFileSync6
 } from "node:fs";
-import { resolve as resolve5 } from "node:path";
+import { resolve as resolve6 } from "node:path";
 import { fileURLToPath as fileURLToPath2 } from "node:url";
 var COMMAND_FLAGS = Object.freeze({
   replay: /* @__PURE__ */ new Set(["fixture", "output"]),
@@ -47299,7 +47923,7 @@ async function resumeAdapterKind({ projectRoot, locationId, runId }) {
     }
     if (descriptor?.kind === "inline_safe") return descriptor.config?.adapterKind;
     if (descriptor?.kind !== "project_file") return void 0;
-    const pathname = resolve5(projectRoot, descriptor.relativePath);
+    const pathname = resolve6(projectRoot, descriptor.relativePath);
     return readRegularJson2(pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG").adapterKind;
   } catch {
     return void 0;
@@ -47320,13 +47944,13 @@ async function runAuditCli({
   let result;
   if (command === "replay") {
     result = replayWeeklyFixture({
-      fixtureRoot: resolve5(flags.fixture),
-      outputRoot: resolve5(flags.output)
+      fixtureRoot: resolve6(flags.fixture),
+      outputRoot: resolve6(flags.output)
     });
   } else if (command === "review-request") {
     const { openState: openState2 } = await Promise.resolve().then(() => (init_state(), state_exports));
     const state = openState2({
-      projectRoot: resolve5(flags.project),
+      projectRoot: resolve6(flags.project),
       locationId: flags.location
     });
     try {
@@ -47350,9 +47974,9 @@ async function runAuditCli({
       Promise.resolve().then(() => (init_review_bridge(), review_bridge_exports)),
       Promise.resolve().then(() => (init_mechanisms(), mechanisms_exports))
     ]);
-    const response = readRegularJson2(resolve5(flags.response), "REVIEW_RESPONSE_MISMATCH_FILE");
+    const response = readRegularJson2(resolve6(flags.response), "REVIEW_RESPONSE_MISMATCH_FILE");
     const state = openState2({
-      projectRoot: resolve5(flags.project),
+      projectRoot: resolve6(flags.project),
       locationId: flags.location
     });
     try {
@@ -47386,7 +48010,7 @@ async function runAuditCli({
   } else {
     if (command === "run") {
       const providerConfig = readRegularJson2(
-        resolve5(flags["provider-config"]),
+        resolve6(flags["provider-config"]),
         "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG"
       );
       let providerDescriptor;
@@ -47396,8 +48020,8 @@ async function runAuditCli({
           initialRunId: providerConfig.runId
         });
         providerDescriptor = local.localProviderDescriptor({
-          projectRoot: resolve5(flags.project),
-          providerConfigPath: resolve5(flags["provider-config"]),
+          projectRoot: resolve6(flags.project),
+          providerConfigPath: resolve6(flags["provider-config"]),
           config: providerConfig
         });
       } else if (!runtimeKernel && providerConfig.adapterKind === PUBLIC_ADAPTER_KIND2) {
@@ -47407,8 +48031,8 @@ async function runAuditCli({
           ...publicRuntime
         });
         providerDescriptor = local.publicProviderDescriptor({
-          projectRoot: resolve5(flags.project),
-          providerConfigPath: resolve5(flags["provider-config"]),
+          projectRoot: resolve6(flags.project),
+          providerConfigPath: resolve6(flags["provider-config"]),
           config: providerConfig
         });
       }
@@ -47420,7 +48044,7 @@ async function runAuditCli({
           operatingProfile: flags.profile,
           locationId: flags.location
         },
-        projectRoot: resolve5(flags.project),
+        projectRoot: resolve6(flags.project),
         cutoff: providerConfig.cutoff,
         providerId: providerConfig.providerId,
         profile: flags.profile,
@@ -47430,7 +48054,7 @@ async function runAuditCli({
       });
     } else {
       const vaultKeyReference = flags["vault-key-ref"] ?? await vaultReferenceResolver?.({
-        projectRoot: resolve5(flags.project),
+        projectRoot: resolve6(flags.project),
         locationId: flags.location,
         runId: flags["run-id"]
       });
@@ -47440,14 +48064,14 @@ async function runAuditCli({
       if (!runtimeKernel) {
         const local = await Promise.resolve().then(() => (init_local_runtime(), local_runtime_exports));
         const adapterKind = await resumeAdapterKind({
-          projectRoot: resolve5(flags.project),
+          projectRoot: resolve6(flags.project),
           locationId: flags.location,
           runId: flags["run-id"]
         });
         runtimeKernel = adapterKind === PUBLIC_ADAPTER_KIND2 ? local.createPublicAuditKernel({ ...publicRuntime, resumeRunId: flags["run-id"] }) : local.createLocalAuditKernel();
       }
       result = await runtimeKernel.resume({
-        projectRoot: resolve5(flags.project),
+        projectRoot: resolve6(flags.project),
         locationId: flags.location,
         runId: flags["run-id"],
         vaultKeyReference

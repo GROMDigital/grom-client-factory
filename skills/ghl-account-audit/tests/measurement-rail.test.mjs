@@ -29,6 +29,7 @@ import { canonicalJson, sha256 } from '../lib/canonical.mjs';
 import { sourceCollectionsFromScopes } from '../lib/adapters/collection.mjs';
 import { measurePublicEvidence } from '../lib/measurement.mjs';
 import { buildWindows, computeJourneyMetrics } from '../lib/metrics.mjs';
+import { discoverAuditServerPaths } from '../lib/adapters/internal-audit-session.mjs';
 import { mergeInternalEvidence } from '../lib/modes/weekly.mjs';
 import { auditPaths } from '../lib/paths.mjs';
 import { loadMetricContracts, loadPublicReadAllowlist } from '../schemas/v1.mjs';
@@ -611,11 +612,11 @@ function decryptPhaseArtifact(projectRoot, runId, filename) {
   ]).toString('utf8'));
 }
 
-async function runPublicCli(rowsByAction) {
+async function runPublicCli(rowsByAction, { configOverrides = {}, extraRuntime = {} } = {}) {
   const projectRoot = realpathSync(mkdtempSync(join(tmpdir(), 'measurement-rail-')));
   try {
     const configPath = join(projectRoot, 'provider.json');
-    writeFileSync(configPath, `${JSON.stringify(cliConfig())}\n`);
+    writeFileSync(configPath, `${JSON.stringify({ ...cliConfig(), ...configOverrides })}\n`);
     const result = await runAuditCli({
       argv: [
         'run',
@@ -630,12 +631,26 @@ async function runPublicCli(rowsByAction) {
       publicRuntime: {
         transportConnect: hermeticTransport(rowsByAction).connect,
         credentialResolver: async () => 'private-token-canary',
+        ...extraRuntime,
       },
     });
+    const read = (filename) => {
+      try {
+        return decryptPhaseArtifact(projectRoot, result.runId, filename);
+      } catch {
+        return null;
+      }
+    };
     return {
       result,
-      collected: decryptPhaseArtifact(projectRoot, result.runId, '03-collecting_public.json'),
-      normalized: decryptPhaseArtifact(projectRoot, result.runId, '04-normalizing.json'),
+      projectRoot,
+      collected: read('03-collecting_public.json'),
+      // `phaseArtifactPath` bakes `PHASES.indexOf(phase)` into the filename, and the two internal
+      // phases were APPENDED to that array rather than inserted, so they are 14 and 15 even though
+      // they EXECUTE between `collecting_public` (03) and `normalizing` (04).
+      internalAuth: read('14-awaiting_internal_auth.json'),
+      internal: read('15-collecting_internal.json'),
+      normalized: read('04-normalizing.json'),
     };
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -816,4 +831,164 @@ test('an incomplete scope keeps its reason through the merge mapping too', () =>
     })],
   });
   assert.equal(sourceCollectionsFromScopes(silent)[0].incompleteReason, 'PUBLIC_SCOPE_INCOMPLETE');
+});
+
+// ---------------------------------------------------------------------------
+// The internal rail, reachable from the CLI at last.
+// ---------------------------------------------------------------------------
+
+const [INSTALLED_AUDIT_SERVER] = discoverAuditServerPaths();
+
+/**
+ * A hermetic stand-in for the audit server, answering in the envelope shape
+ * `tests/internal-audit-contract.test.mjs` proves against the real one. Nothing here launches a
+ * process, so the test needs no credential and makes no request.
+ */
+function internalDouble({ credentialSeconds = 3600, workflowIds = ['wf-1', 'wf-2'] } = {}) {
+  const calls = [];
+  return {
+    calls,
+    connect: async () => ({
+      async listTools() { return { tools: [] }; },
+      async callTool({ name, arguments: args }) {
+        calls.push({ name, args });
+        if (name === 'auth_status') {
+          return {
+            structuredContent: {
+              ok: true,
+              data: {
+                jwtClaims: { present: true, secondsRemaining: credentialSeconds },
+                tokenIdClaims: { present: true, secondsRemaining: credentialSeconds },
+              },
+            },
+          };
+        }
+        if (name === 'list_workflows_complete') {
+          return {
+            structuredContent: {
+              ok: true, boundLocationId: LOCATION, complete: true, data: { workflowIds },
+            },
+          };
+        }
+        if (name === 'get_workflow') {
+          return {
+            structuredContent: {
+              ok: true,
+              boundLocationId: LOCATION,
+              // A real definition would carry contact-shaped content; this proves the scrub runs
+              // at the boundary rather than being remembered by a later caller.
+              data: { workflowId: args.workflowId, ownerEmail: 'owner@example.test' },
+            },
+          };
+        }
+        if (name === 'get_ai_configuration_bundle') {
+          return { structuredContent: { ok: true, contractVersion: '1.0.0', data: { agents: [] } } };
+        }
+        throw new Error(`UNSTUBBED ${name}`);
+      },
+      async close() { calls.push({ name: '__close', args: null }); },
+    }),
+  };
+}
+
+function internalAuditBlock(projectRootForToken) {
+  const tokenFilePath = join(projectRootForToken, 'tok.txt');
+  writeFileSync(tokenFilePath, 'not-a-real-token\n');
+  return {
+    transport: {
+      kind: 'ghl-internal-audit-stdio',
+      serverPath: INSTALLED_AUDIT_SERVER,
+      tokenFilePath,
+    },
+  };
+}
+
+test('a config with no internal rail is the byte-identical public-only path', async () => {
+  const { result, internal, internalAuth } = await runPublicCli({
+    'contacts.search': CONTACTS,
+    'opportunities.list': OPPORTUNITIES,
+  });
+  assert.equal(result.status, 'complete_partial');
+  // Absence of the block must not merely be tolerated, it must change nothing: no internal phase
+  // is entered at all, so every configuration that exists today is unaffected.
+  assert.equal(internal, null);
+  assert.equal(internalAuth, null);
+});
+
+test('audit run reads workflows when the config asks, and stays honestly partial', {
+  skip: INSTALLED_AUDIT_SERVER === undefined ? 'uxie-ghl-factory plugin not installed' : false,
+}, async () => {
+  const tokenHome = realpathSync(mkdtempSync(join(tmpdir(), 'measurement-token-')));
+  const double = internalDouble();
+  try {
+    const { result, internal } = await runPublicCli(
+      { 'contacts.search': CONTACTS, 'opportunities.list': OPPORTUNITIES },
+      {
+        configOverrides: { internalAudit: internalAuditBlock(tokenHome) },
+        extraRuntime: { internalAuditConnect: double.connect },
+      },
+    );
+
+    // The rail RAN. This is the assertion whose absence meant the internal half was built, tested
+    // and reachable from nothing for the whole life of the project.
+    assert.ok(internal, 'the collecting_internal phase was never checkpointed');
+    assert.equal(internal.internalEvidence.source, 'internal_ghl');
+    assert.equal(internal.internalEvidence.boundLocationId, LOCATION);
+    assert.deepEqual(
+      internal.internalEvidence.workflows.map(({ workflowId }) => workflowId),
+      ['wf-1', 'wf-2'],
+    );
+
+    // Definitions for every workflow, no runtime window (none was asked for), and the session was
+    // closed even though the kernel has no notion of closing a transport.
+    assert.equal(double.calls.filter(({ name }) => name === 'get_workflow').length, 2);
+    assert.equal(double.calls.some(({ name }) => name === 'get_workflow_runtime_window'), false);
+    assert.equal(double.calls.at(-1).name, '__close', JSON.stringify(double.calls.map(({name}) => name)));
+
+    // `auth_status` came FIRST, before a single evidence call. On the real server an expired
+    // credential latches the shared circuit on its first read, so this ordering is what stops a
+    // stale token from burning the run and then blaming the transport.
+    assert.equal(double.calls[0].name, 'auth_status');
+
+    // Personal values do not survive the boundary, and nobody downstream has to remember to scrub.
+    assert.equal(JSON.stringify(internal.internalEvidence).includes('owner@example.test'), false);
+
+    /*
+     * STILL `complete_partial`, and that is the correct answer rather than a shortfall. The
+     * plugin's own documentation says the audit composites have never been run live and no
+     * capability receipt exists; the kernel machine-enforces "no receipt, no Full audit". For an
+     * internal tool the Full designation is compliance ceremony and the findings come out either
+     * way, so nothing here forges a coverage row to pass that gate.
+     */
+    assert.equal(result.status, 'complete_partial');
+    assert.deepEqual(internal.internalEvidence.capabilityCoverage, []);
+  } finally {
+    rmSync(tokenHome, { recursive: true, force: true });
+  }
+});
+
+test('an expired credential suspends the run instead of burning it', {
+  skip: INSTALLED_AUDIT_SERVER === undefined ? 'uxie-ghl-factory plugin not installed' : false,
+}, async () => {
+  const tokenHome = realpathSync(mkdtempSync(join(tmpdir(), 'measurement-token-')));
+  const double = internalDouble({ credentialSeconds: -259_083 });
+  try {
+    const { result, internalAuth, internal } = await runPublicCli(
+      { 'contacts.search': CONTACTS, 'opportunities.list': OPPORTUNITIES },
+      {
+        configOverrides: { internalAudit: internalAuditBlock(tokenHome) },
+        extraRuntime: { internalAuditConnect: double.connect },
+      },
+    );
+    assert.equal(result.status, 'awaiting_internal_auth');
+    assert.ok(internalAuth, 'the auth boundary was never checkpointed');
+    assert.equal(internal, null);
+    // Exactly one call, and it was the one that makes no request.
+    assert.deepEqual(
+      double.calls.map(({ name }) => name).filter((name) => name !== '__close'),
+      ['auth_status'],
+    );
+  } finally {
+    rmSync(tokenHome, { recursive: true, force: true });
+  }
 });
