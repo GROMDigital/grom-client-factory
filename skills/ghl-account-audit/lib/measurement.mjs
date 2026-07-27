@@ -54,6 +54,7 @@ import { buildEvidenceGraph } from './evidence-graph.mjs';
 import { projectJourneyEvents } from './journey-projection.mjs';
 import { buildWindows, computeJourneyMetrics } from './metrics.mjs';
 import { normalizeEvidence } from './normalize.mjs';
+import { computeSurfaceObservations } from './observations.mjs';
 import {
   loadMetricContracts,
   loadProfile,
@@ -215,6 +216,17 @@ export function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
   });
   const metrics = computeJourneyMetrics({ graph, metricContracts, windows });
 
+  /*
+   * The operational facts a journey event cannot carry, computed over the SAME rows the projector
+   * was handed so an observation and a metric can never disagree about what was read. Aggregate
+   * counts only; see `lib/observations.mjs` for the three locks that keep row content out.
+   */
+  const surfaceObservations = computeSurfaceObservations({
+    collections,
+    projection,
+    cutoffMs: Date.parse(cutoffSource),
+  });
+
   return {
     schemaVersion: MEASUREMENT_SCHEMA,
     profileId,
@@ -237,6 +249,7 @@ export function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
       .sort((left, right) => (
         left.actionId < right.actionId ? -1 : left.actionId > right.actionId ? 1 : 0
       )),
+    surfaceObservations,
     graph,
     windows,
     metrics,

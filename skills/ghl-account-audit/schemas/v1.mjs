@@ -461,6 +461,54 @@ const ProjectionEntitySchema = z.object({
   when: ProjectionEntityPredicateSchema,
 }).strict();
 
+/**
+ * SURFACE OBSERVATIONS — the operational facts a defect detector needs and a journey event cannot
+ * carry.
+ *
+ * The measurement chain projects raw rows into journey events, which is exactly right for measuring
+ * conversion and exactly wrong for diagnosing it. "Only 17 of 175 conversations end with an inbound
+ * message, and 132 of the outbound ones were automated" is the single most useful sentence about
+ * Grom's own UK account, and none of it survives projection: those fields say nothing about WHEN a
+ * subject moved, so no stage carries them.
+ *
+ * So a small set of AGGREGATE counters is computed over the raw rows alongside the projection.
+ * Three kinds, and deliberately no more -- the same discipline as the projector's `when` predicate,
+ * which is `always` / `field_equals` / `field_in` / `first_of_kind` and stops there:
+ *
+ *   distribution   value -> count over one field. For low-cardinality state, direction and source.
+ *   presence       how many rows carry a usable value at any of several paths.
+ *   stale_status    how many rows sit in one of a set of states past a time that has already passed.
+ *
+ * WHAT THIS MAY NEVER BECOME: a way to read row content. Only COUNTS leave here, every distribution
+ * value must match a narrow scalar charset or be bucketed as unsafe, and the distinct count is
+ * capped. A field whose values are free text therefore yields a count of unsafe values and no text.
+ */
+const ProjectionObservationSchema = z.discriminatedUnion('kind', [
+  z.object({
+    observationId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    kind: z.literal('distribution'),
+    path: z.string().min(1),
+    /** Overflow past this many distinct values is bucketed, never dropped. */
+    maxDistinct: z.number().int().min(1).max(100).optional(),
+  }).strict(),
+  z.object({
+    observationId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    kind: z.literal('presence'),
+    /** ORDERED candidates, like every other path list on this contract: first hit decides. */
+    paths: z.array(z.string().min(1)).min(1),
+    /** A number must be strictly positive to count as present. Default false: any value counts. */
+    requirePositiveNumber: z.boolean().optional(),
+  }).strict(),
+  z.object({
+    observationId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    kind: z.literal('stale_status'),
+    statusPath: z.string().min(1),
+    statusValues: z.array(z.string().min(1)).min(1),
+    /** Compared against the run's SEALED cutoff, never the wall clock. */
+    timePath: z.string().min(1),
+  }).strict(),
+]);
+
 const ProjectionSourceSchema = z.object({
   sourceId: z.string().min(1),
   capability: z.string().min(1),
@@ -469,6 +517,7 @@ const ProjectionSourceSchema = z.object({
   identity: ProjectionIdentitySchema,
   entities: z.array(ProjectionEntitySchema).optional(),
   events: z.array(ProjectionEventSchema).optional(),
+  observations: z.array(ProjectionObservationSchema).max(20).optional(),
 }).strict().superRefine((source, ctx) => {
   const eventIds = (source.events ?? []).map(({ eventId }) => eventId);
   if (new Set(eventIds).size !== eventIds.length) {
@@ -477,6 +526,10 @@ const ProjectionSourceSchema = z.object({
   const entityIds = (source.entities ?? []).map(({ entityId }) => entityId);
   if (new Set(entityIds).size !== entityIds.length) {
     ctx.addIssue({ code: 'custom', message: 'entity IDs must be unique within a source' });
+  }
+  const observationIds = (source.observations ?? []).map(({ observationId }) => observationId);
+  if (new Set(observationIds).size !== observationIds.length) {
+    ctx.addIssue({ code: 'custom', message: 'observation IDs must be unique within a source' });
   }
   if (eventIds.length === 0 && entityIds.length === 0) {
     ctx.addIssue({ code: 'custom', message: 'a source must declare at least one event or entity' });

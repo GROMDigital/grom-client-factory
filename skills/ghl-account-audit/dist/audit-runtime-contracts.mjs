@@ -392,6 +392,31 @@ var ProjectionEntitySchema = z.object({
   recordType: z.enum(["contact"]),
   when: ProjectionEntityPredicateSchema
 }).strict();
+var ProjectionObservationSchema = z.discriminatedUnion("kind", [
+  z.object({
+    observationId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    kind: z.literal("distribution"),
+    path: z.string().min(1),
+    /** Overflow past this many distinct values is bucketed, never dropped. */
+    maxDistinct: z.number().int().min(1).max(100).optional()
+  }).strict(),
+  z.object({
+    observationId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    kind: z.literal("presence"),
+    /** ORDERED candidates, like every other path list on this contract: first hit decides. */
+    paths: z.array(z.string().min(1)).min(1),
+    /** A number must be strictly positive to count as present. Default false: any value counts. */
+    requirePositiveNumber: z.boolean().optional()
+  }).strict(),
+  z.object({
+    observationId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+    kind: z.literal("stale_status"),
+    statusPath: z.string().min(1),
+    statusValues: z.array(z.string().min(1)).min(1),
+    /** Compared against the run's SEALED cutoff, never the wall clock. */
+    timePath: z.string().min(1)
+  }).strict()
+]);
 var ProjectionSourceSchema = z.object({
   sourceId: z.string().min(1),
   capability: z.string().min(1),
@@ -399,7 +424,8 @@ var ProjectionSourceSchema = z.object({
   operationIdPattern: ProjectionOperationPatternSchema,
   identity: ProjectionIdentitySchema,
   entities: z.array(ProjectionEntitySchema).optional(),
-  events: z.array(ProjectionEventSchema).optional()
+  events: z.array(ProjectionEventSchema).optional(),
+  observations: z.array(ProjectionObservationSchema).max(20).optional()
 }).strict().superRefine((source, ctx) => {
   const eventIds = (source.events ?? []).map(({ eventId }) => eventId);
   if (new Set(eventIds).size !== eventIds.length) {
@@ -408,6 +434,10 @@ var ProjectionSourceSchema = z.object({
   const entityIds = (source.entities ?? []).map(({ entityId }) => entityId);
   if (new Set(entityIds).size !== entityIds.length) {
     ctx.addIssue({ code: "custom", message: "entity IDs must be unique within a source" });
+  }
+  const observationIds = (source.observations ?? []).map(({ observationId }) => observationId);
+  if (new Set(observationIds).size !== observationIds.length) {
+    ctx.addIssue({ code: "custom", message: "observation IDs must be unique within a source" });
   }
   if (eventIds.length === 0 && entityIds.length === 0) {
     ctx.addIssue({ code: "custom", message: "a source must declare at least one event or entity" });

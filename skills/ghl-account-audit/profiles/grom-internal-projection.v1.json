@@ -2,7 +2,9 @@
   "profileId": "grom_internal",
   "version": "1.0.0",
   "revenueBasis": "opportunity_monetary_value",
-  "suppressionSignal": { "recordType": "collection_status" },
+  "suppressionSignal": {
+    "recordType": "collection_status"
+  },
   "unmeasurableEdges": [
     "contacted_to_qualified",
     "qualified_to_strategy_call",
@@ -18,14 +20,38 @@
     "launch_to_first_value"
   ],
   "unprojectedActions": [
-    { "actionId": "calendars-v3__get-appointment", "reason": "single-appointment fetch by id; the weekly rail reads the location-wide event feed instead" },
-    { "actionId": "calendars-v3__get-calendars", "reason": "calendar definitions, not subject events" },
-    { "actionId": "contacts-v3__get-appointments-for-contact", "reason": "per-contact appointment fetch; the weekly rail reads the location-wide event feed instead" },
-    { "actionId": "conversations-v3__export-messages-by-location", "reason": "message bodies; engagement is taken from the conversation index, not from message content" },
-    { "actionId": "conversations-v3__get-messages", "reason": "message bodies; engagement is taken from the conversation index, not from message content" },
-    { "actionId": "opportunities-v3__get-pipelines", "reason": "pipeline definitions, not opportunities; reading these as journey evidence is exactly the misroute this list exists to prevent" },
-    { "actionId": "payments-v3__list-orders", "reason": "revenueBasis is opportunity_monetary_value for this profile" },
-    { "actionId": "payments-v3__list-transactions", "reason": "revenueBasis is opportunity_monetary_value for this profile" }
+    {
+      "actionId": "calendars-v3__get-appointment",
+      "reason": "single-appointment fetch by id; the weekly rail reads the location-wide event feed instead"
+    },
+    {
+      "actionId": "calendars-v3__get-calendars",
+      "reason": "calendar definitions, not subject events"
+    },
+    {
+      "actionId": "contacts-v3__get-appointments-for-contact",
+      "reason": "per-contact appointment fetch; the weekly rail reads the location-wide event feed instead"
+    },
+    {
+      "actionId": "conversations-v3__export-messages-by-location",
+      "reason": "message bodies; engagement is taken from the conversation index, not from message content"
+    },
+    {
+      "actionId": "conversations-v3__get-messages",
+      "reason": "message bodies; engagement is taken from the conversation index, not from message content"
+    },
+    {
+      "actionId": "opportunities-v3__get-pipelines",
+      "reason": "pipeline definitions, not opportunities; reading these as journey evidence is exactly the misroute this list exists to prevent"
+    },
+    {
+      "actionId": "payments-v3__list-orders",
+      "reason": "revenueBasis is opportunity_monetary_value for this profile"
+    },
+    {
+      "actionId": "payments-v3__list-transactions",
+      "reason": "revenueBasis is opportunity_monetary_value for this profile"
+    }
   ],
   "sources": [
     {
@@ -34,16 +60,28 @@
       "evidenceSource": "public_ghl",
       "operationIdPattern": "contacts.search",
       "identity": {
-        "nativeId": ["id", "_id"],
-        "subjectNativeId": ["id", "_id"],
-        "normalizedEmail": ["email"],
-        "normalizedPhone": ["phone"]
+        "nativeId": [
+          "id",
+          "_id"
+        ],
+        "subjectNativeId": [
+          "id",
+          "_id"
+        ],
+        "normalizedEmail": [
+          "email"
+        ],
+        "normalizedPhone": [
+          "phone"
+        ]
       },
       "entities": [
         {
           "entityId": "grom_contact_entity",
           "recordType": "contact",
-          "when": { "kind": "always" }
+          "when": {
+            "kind": "always"
+          }
         }
       ],
       "events": [
@@ -51,9 +89,34 @@
           "eventId": "contact_enquiry",
           "stage": "enquiry",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["dateAdded", "createdAt", "dateCreated"],
-          "when": { "kind": "always" },
-          "cohortFrom": ["id", "_id"]
+          "eventTimeField": [
+            "dateAdded",
+            "createdAt",
+            "dateCreated"
+          ],
+          "when": {
+            "kind": "always"
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "observationId": "source_mix",
+          "kind": "distribution",
+          "path": "source",
+          "maxDistinct": 25
+        },
+        {
+          "observationId": "has_attribution",
+          "kind": "presence",
+          "paths": [
+            "attributionSource.utmSource",
+            "attributionSource.adSource"
+          ]
         }
       ]
     },
@@ -63,16 +126,27 @@
       "evidenceSource": "public_ghl",
       "operationIdPattern": "conversations-v3__search-conversation",
       "identity": {
-        "nativeId": ["id", "_id"],
-        "subjectNativeId": ["contactId"],
-        "normalizedEmail": ["email"],
-        "normalizedPhone": ["phone"]
+        "nativeId": [
+          "id",
+          "_id"
+        ],
+        "subjectNativeId": [
+          "contactId"
+        ],
+        "normalizedEmail": [
+          "email"
+        ],
+        "normalizedPhone": [
+          "phone"
+        ]
       },
       "entities": [
         {
           "entityId": "grom_conversation_subject_entity",
           "recordType": "contact",
-          "when": { "kind": "always" }
+          "when": {
+            "kind": "always"
+          }
         }
       ],
       "events": [
@@ -80,9 +154,44 @@
           "eventId": "conversation_contacted",
           "stage": "contacted",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["dateAdded", "lastMessageDate", "dateUpdated"],
-          "when": { "kind": "first_of_kind" },
-          "cohortFrom": ["contactId"]
+          "eventTimeField": [
+            "dateAdded",
+            "lastMessageDate",
+            "dateUpdated"
+          ],
+          "when": {
+            "kind": "first_of_kind"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "observationId": "last_message_direction",
+          "kind": "distribution",
+          "path": "lastMessageDirection",
+          "maxDistinct": 8
+        },
+        {
+          "observationId": "last_outbound_action",
+          "kind": "distribution",
+          "path": "lastOutboundMessageAction",
+          "maxDistinct": 8
+        },
+        {
+          "observationId": "last_message_channel",
+          "kind": "distribution",
+          "path": "lastMessageType",
+          "maxDistinct": 20
+        },
+        {
+          "observationId": "has_manual_message",
+          "kind": "presence",
+          "paths": [
+            "lastManualMessageDate"
+          ]
         }
       ]
     },
@@ -92,16 +201,27 @@
       "evidenceSource": "public_ghl",
       "operationIdPattern": "calendars-v3__get-calendar-events",
       "identity": {
-        "nativeId": ["id", "_id"],
-        "subjectNativeId": ["contactId"],
-        "normalizedEmail": ["email"],
-        "normalizedPhone": ["phone"]
+        "nativeId": [
+          "id",
+          "_id"
+        ],
+        "subjectNativeId": [
+          "contactId"
+        ],
+        "normalizedEmail": [
+          "email"
+        ],
+        "normalizedPhone": [
+          "phone"
+        ]
       },
       "entities": [
         {
           "entityId": "grom_appointment_subject_entity",
           "recordType": "contact",
-          "when": { "kind": "always" }
+          "when": {
+            "kind": "always"
+          }
         }
       ],
       "events": [
@@ -109,17 +229,68 @@
           "eventId": "appointment_strategy_call",
           "stage": "strategy_call",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["dateAdded", "createdAt", "startTime"],
-          "when": { "kind": "always" },
-          "cohortFrom": ["id", "_id"]
+          "eventTimeField": [
+            "dateAdded",
+            "createdAt",
+            "startTime"
+          ],
+          "when": {
+            "kind": "always"
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
         },
         {
           "eventId": "appointment_showed",
           "stage": "showed",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["startTime", "dateUpdated", "updatedAt"],
-          "when": { "kind": "field_equals", "field": "appointmentStatus", "value": "showed" },
-          "cohortFrom": ["id", "_id"]
+          "eventTimeField": [
+            "startTime",
+            "dateUpdated",
+            "updatedAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "appointmentStatus",
+            "value": "showed"
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "observationId": "appointment_status",
+          "kind": "distribution",
+          "path": "appointmentStatus",
+          "maxDistinct": 20
+        },
+        {
+          "observationId": "booked_via",
+          "kind": "distribution",
+          "path": "createdBy.source",
+          "maxDistinct": 20
+        },
+        {
+          "observationId": "has_assigned_user",
+          "kind": "presence",
+          "paths": [
+            "assignedUserId"
+          ]
+        },
+        {
+          "observationId": "unresolved_past_appointments",
+          "kind": "stale_status",
+          "statusPath": "appointmentStatus",
+          "statusValues": [
+            "confirmed",
+            "new"
+          ],
+          "timePath": "startTime"
         }
       ]
     },
@@ -129,17 +300,32 @@
       "evidenceSource": "public_ghl",
       "operationIdPattern": "opportunities.list",
       "identity": {
-        "nativeId": ["id", "_id"],
-        "subjectNativeId": ["contactId", "contact.id"],
-        "opportunityNativeId": ["id", "_id"],
-        "normalizedEmail": ["contact.email"],
-        "normalizedPhone": ["contact.phone"]
+        "nativeId": [
+          "id",
+          "_id"
+        ],
+        "subjectNativeId": [
+          "contactId",
+          "contact.id"
+        ],
+        "opportunityNativeId": [
+          "id",
+          "_id"
+        ],
+        "normalizedEmail": [
+          "contact.email"
+        ],
+        "normalizedPhone": [
+          "contact.phone"
+        ]
       },
       "entities": [
         {
           "entityId": "grom_opportunity_subject_entity",
           "recordType": "contact",
-          "when": { "kind": "always" }
+          "when": {
+            "kind": "always"
+          }
         }
       ],
       "events": [
@@ -147,26 +333,102 @@
           "eventId": "opportunity_decision",
           "stage": "decision",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["lastStatusChangeAt", "updatedAt", "dateUpdated"],
-          "when": { "kind": "field_in", "field": "status", "values": ["won", "lost", "abandoned"] },
-          "cohortFrom": ["id", "_id"]
+          "eventTimeField": [
+            "lastStatusChangeAt",
+            "updatedAt",
+            "dateUpdated"
+          ],
+          "when": {
+            "kind": "field_in",
+            "field": "status",
+            "values": [
+              "won",
+              "lost",
+              "abandoned"
+            ]
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
         },
         {
           "eventId": "opportunity_won",
           "stage": "won",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["lastStatusChangeAt", "updatedAt", "dateUpdated"],
-          "when": { "kind": "field_equals", "field": "status", "value": "won" },
-          "cohortFrom": ["id", "_id"]
+          "eventTimeField": [
+            "lastStatusChangeAt",
+            "updatedAt",
+            "dateUpdated"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "status",
+            "value": "won"
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
         },
         {
           "eventId": "opportunity_collected_revenue",
           "stage": "collected_revenue",
           "journeyId": "agency_new_business",
-          "eventTimeField": ["lastStatusChangeAt", "updatedAt", "dateUpdated"],
-          "when": { "kind": "field_equals", "field": "status", "value": "won" },
-          "revenueFrom": ["monetaryValue"],
-          "cohortFrom": ["id", "_id"]
+          "eventTimeField": [
+            "lastStatusChangeAt",
+            "updatedAt",
+            "dateUpdated"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "status",
+            "value": "won"
+          },
+          "revenueFrom": [
+            "monetaryValue"
+          ],
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "observationId": "opportunity_status",
+          "kind": "distribution",
+          "path": "status",
+          "maxDistinct": 12
+        },
+        {
+          "observationId": "has_monetary_value",
+          "kind": "presence",
+          "paths": [
+            "monetaryValue"
+          ],
+          "requirePositiveNumber": true
+        },
+        {
+          "observationId": "has_lost_reason",
+          "kind": "presence",
+          "paths": [
+            "lostReasonId",
+            "lostReason"
+          ]
+        },
+        {
+          "observationId": "has_owner",
+          "kind": "presence",
+          "paths": [
+            "assignedTo"
+          ]
+        },
+        {
+          "observationId": "attribution_source",
+          "kind": "distribution",
+          "path": "source",
+          "maxDistinct": 25
         }
       ]
     }

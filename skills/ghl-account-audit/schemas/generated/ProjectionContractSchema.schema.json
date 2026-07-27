@@ -433,6 +433,109 @@
               ],
               "additionalProperties": false
             }
+          },
+          "observations": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "observationId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "distribution"
+                    },
+                    "path": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "maxDistinct": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    }
+                  },
+                  "required": [
+                    "observationId",
+                    "kind",
+                    "path"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "observationId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "presence"
+                    },
+                    "paths": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "requirePositiveNumber": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "observationId",
+                    "kind",
+                    "paths"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "observationId": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+                    },
+                    "kind": {
+                      "type": "string",
+                      "const": "stale_status"
+                    },
+                    "statusPath": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "statusValues": {
+                      "minItems": 1,
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "timePath": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": [
+                    "observationId",
+                    "kind",
+                    "statusPath",
+                    "statusValues",
+                    "timePath"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
           }
         },
         "required": [
