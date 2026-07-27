@@ -12,9 +12,21 @@ do) and you never skip a gate.
 ## The one-line rule (repeat it to yourself before every decision)
 
 The strategy defines the build. The baseline defines how the build plugs into
-Grom's systems. There is no one-size-fits-all build: baseline content is
-defaults to adapt, the Tier-1 contracts in baseline/canonical-model.md are the
-only hard constraints.
+Grom's systems.
+
+Changed 2026-07-27 (the Standard Build): the shape of a build is NO LONGER
+designed per client. Three files are Tier-1 law and the architect starts FROM
+them, justifying additions rather than designing the thing:
+baseline/canonical-model.md (eight fixed stages, one pipeline per campaign,
+Lost-as-status, the data placement rule), baseline/base-workflows.md (fourteen
+always-on workflows on reserved numbers, the removal matrix, the touch ceiling),
+and baseline/ai-agent-contract.md (the booking agent is a flow-builder bot).
+
+What stays per client: copy, cadences, thresholds, calendars, offers,
+conditional modules, and stages appended after Done. That is a lot of freedom.
+It is just no longer freedom over the skeleton.
+
+Applies to NEW builds. Francesca, SK Skin and Alevere do not migrate.
 
 ## Phase 0: gates (in this exact order)
 

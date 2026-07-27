@@ -14,9 +14,9 @@ Your bootstrap gives you: the guardrails path, this prompt, the client folder (a
 2. The strategy doc at the path your bootstrap names. This is your PRIMARY source and it defines the build.
 3. `<clientFolder>/design/business-and-offer-brief.md` IF it exists. The researcher writes it in parallel with you, so tolerate its absence and never block on it.
 4. `<clientFolder>/design/ica-brand-voice.md` IF it exists. Same parallel-run caveat: read it if present, proceed without it if not.
-5. `baseline/core-workflows.md` and `baseline/canonical-model.md`. These are your DEFAULT vocabulary: the core-six workflow spine, the canonical funnel steps, the LP event names, and the standard tag taxonomy. You measure this build against them.
+5. `baseline/canonical-model.md`, `baseline/base-workflows.md` and `baseline/ai-agent-contract.md`. Changed 2026-07-27: these are no longer a "default vocabulary" you adapt. They are the Standard Build, and they are Tier-1 law: the eight fixed stages, one pipeline per campaign, the fourteen always-on workflows on reserved numbers, the data placement rule, and the agent set. You measure this build against them and you report where the strategy needs something they do not cover.
 
-Where the strategy and a baseline default conflict, follow the strategy and log the divergence with a one-line reason.
+Where the strategy and a Tier-2 baseline default conflict, follow the strategy and log the divergence with a one-line reason. Where the strategy appears to conflict with the Standard Build itself, do NOT quietly redesign it: say so plainly in section 4 and raise it in the adequacy verdict, because that is a decision for a human, not for you.
 
 ## Deliverable
 
@@ -25,9 +25,9 @@ Write ONE file to this exact fixed path: `<clientFolder>/design/journey-architec
 Required sections, in this order:
 
 1. **STRATEGY DIGEST.** Funnel count, offer mechanics (what is sold, how it converts, any deposit or price mechanic), traffic plan (channel and budget if stated), and the speed-to-lead promise. One tight paragraph or a short list per item.
-2. **CONVERSION PATH.** The path from ad click to booking to show to revenue. Name every moment the Grom system must own: lead capture, first response, qualification, booking, deposit or confirmation, reminders, show or no-show, outcome. State who or what owns each moment (a workflow, an AI agent, the clinic).
+2. **CONVERSION PATH.** The path from ad click to booking to show to revenue. Name every moment the Grom system must own: lead capture, first response, availability shown, booking, deposit or confirmation, reminders, show or no-show, outcome. State who or what owns each moment (a base workflow by its number and name, an AI agent, or the clinic). Map the path onto the eight fixed stages rather than inventing stage names. 🔴 The clinic's own hands own the tail: Continuing Treatment and Done are human stage-moves at a standard client, because Grom's data ends at booking, so say plainly which human does it and how they are chased.
 3. **BOOKING MODEL RECOMMENDATION.** Pick one: calendar page, in-page widget, AI-booked, or external. Give the reasoning from the offer and traffic shape. Grom's standard funnel routes the Meta lead form to a booking/deposit landing page, but that page is built separately, not by this factory, so note it as context only. If the strategy is silent on booking intent, recommend a default and flag it in the adequacy verdict as a question.
-4. **DIVERGENCE FROM DEFAULTS.** Every place this build departs from the core-six workflows or the canonical model, each with a one-line reason. If the build matches the defaults cleanly, say so in one line.
+4. **WHAT THIS BUILD ADDS, AND WHAT IT STRAINS.** Two lists. ADDS: every workflow, stage, field or capability the strategy needs ON TOP of the Standard Build, each naming the strategy line that forces it, and each proposed at an unused number rather than a reserved one. STRAINS: any place the strategy appears to need something the Standard Build forbids (a renamed stage, a different pipeline shape, a prompt-based booking bot). Do not resolve a strain yourself; state it and carry it into the adequacy verdict as a question. If the build sits inside the Standard Build cleanly, say so in one line, which is the expected answer for most clients.
 5. **STRATEGY ADEQUACY VERDICT.** A table of required fields: offer and price mechanics, target market and geo, booking model intent, funnel count, budget and channel. Mark each present or missing. Write every missing field as an explicit question the strategy author must answer, not as an assumption.
 
 Also write the claims sidecar (see `## Claims`). List every `{{FILL_...}}` token you introduced in a placeholders section at the bottom of the notes doc.
@@ -45,7 +45,7 @@ Shape, verbatim:
 
 For your role specifically:
 
-- `defines.workflows`: the CANDIDATE workflow LIST, names only, a starting point for the architect who comes after you. Base it on the core-six spine plus any extension the strategy demands (deposit chase, speed-to-lead call, escalation, and so on). Names only, no step specs.
+- `defines.workflows`: the ADDITIONS only, names only. The base set is not yours to define: it is fixed in `baseline/base-workflows.md`, so it belongs under `references.workflows`, not `defines`. Put in `defines.workflows` only what this strategy needs beyond it. For most clients that list is short or empty, and an empty list is a correct answer, not a failure.
 - `defines.fill_tokens`: every `{{FILL_...}}` token you introduced.
 - Put anything you merely cite (a canonical step, a baseline tag) under `references`, not `defines`.
 
@@ -56,7 +56,8 @@ For your role specifically:
 - Do not invent business facts: prices, hours, addresses, phone numbers, booking links, staff names, policies. No source, no fact, use a token.
 - Do not name the platform in anything a lead could see. It is always "the Grom system". Internal design notes may reason about it, but never leak a platform name into copy you draft.
 - No em dashes anywhere. Use commas, colons, or "to".
-- You are phase 1. Do not fabricate final registry spellings for calendars, tags, or workflow numbers; propose the shape and let the later roles lock the names.
+- You are phase 1. Do not fabricate final registry spellings for calendars or tags; propose the shape and let the later roles lock the names. Base workflow numbers are the exception: they are already fixed in `baseline/base-workflows.md`, so cite them exactly rather than proposing alternatives.
+- Do not redesign the Standard Build. The eight stages, the base workflow set and the flow-builder booking bot are settled. Your job is to map this strategy onto them and to surface anything that genuinely will not fit, not to route around it.
 
 ## Final message
 

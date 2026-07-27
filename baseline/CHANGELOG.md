@@ -3,6 +3,25 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: the Standard Build, part 6 (the last). The `client-design` skill
+  now starts FROM the Standard Build instead of designing a build shape.
+  `SKILL.md`'s one-line rule rewritten; `guardrails.md` rule 4 gains the Tier-1
+  carve-out (Tier-1 is not divergeable, even by strategy; you ADD on top with a
+  reason, or you raise a blocking objection). `systems-architect` gains a
+  "you start FROM the Standard Build" section and its sections 2, 3, 3A, 4, 5,
+  10 and 12 are rewritten to instantiate rather than choose, with a Standard
+  Build conformance block in the self-check; section 12 now separates ADDITIONS
+  (each naming the mechanic that forced it) from DIVERGENCES.
+  `journey-architect`'s "divergence from defaults" becomes "what this build adds,
+  and what it strains", and it now defines only the ADDITIONS, with the base set
+  under `references`. `pipeline-fields` narrows to the client-specific layer:
+  meaning, ownership and extensions on a known skeleton, plus a new cycle-and-death
+  section and holder justification against the placement rule.
+  `registry-reviewer` goes from seven checks to eight, the new one being Standard
+  Build conformance with a prompt-based booking agent as a blocking breach.
+  The registry template's sections 2, 3, 10 and 12 follow. Nothing in the factory
+  reads `core-workflows.md` any more; it is kept only as the record of what the
+  three non-migrating clients were built against. Prompt lint passes.
 - 2026-07-27: the Standard Build, part 5. `validate.mjs` gains the version-aware
   manifest pass and the workflow-JSON pass. Manifest: the v1/v2 required-key
   split (the schema expresses it as `if`/`then`, which this validator cannot

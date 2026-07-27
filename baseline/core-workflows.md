@@ -4,11 +4,10 @@
 use the Standard Build's fourteen-workflow set, its reserved numbering, the
 removal matrix and the touch ceiling. Do not design a new client from this page.
 
-Kept only until the `client-design` prompts are repointed
-(`skills/client-design/prompts/systems-architect.md`,
-`skills/client-design/prompts/journey-architect.md`), and as the reference for
-what Francesca, SK Skin and Alevere were built against, since they do not
-migrate.
+**Repointed 2026-07-27: nothing in the factory reads this file any more.** The
+`client-design` prompts now read `baseline/base-workflows.md`. It is kept for one
+reason only: it is the record of what Francesca, SK Skin and Alevere were built
+against, and they do not migrate. Do not wire anything back to it.
 
 ---
 

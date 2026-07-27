@@ -9,15 +9,24 @@ Client, location ID (or "not provisioned"), strategy doc path, one-paragraph
 strategy digest, funnel count, offer mechanics, booking model.
 
 ## 2. Pipelines and stages
-Every pipeline, every stage in order, entry/exit criteria, and the BINDING
-stage -> canonical-step map (Tier-1; steps from baseline/canonical-model.md).
+ONE pipeline per campaign/offer (not per product). Every pipeline carries the
+SAME eight fixed stages from baseline/canonical-model.md section 6, in order,
+nothing renamed or removed; stages may be APPENDED after Done, mapping to an
+explicit NULL. Entry/exit criteria per stage, plus the BINDING
+stage -> canonical-step map (Tier-1) and the one-owner-per-transition move map.
+State Lost-as-status with a native reason (card stays where it died), Done sets
+status Won, and one card per CYCLE (only Done or Lost mint a new one).
 Brownfield: the disposition table (keep / rename / retire / archive) for every
 existing object, from captures/<date>/audit-report.md.
 
 ## 3. Workflow list
-Numbered, flat chronological. Number, exact name, trigger(s), one-line job,
-kill-switch relationships. This list IS the workflow roster; module docs may
-not invent workflows absent here.
+STARTS FROM the base set in baseline/base-workflows.md: the fourteen always-on
+workflows on their reserved numbers, plus the conditional ones whose condition
+this client meets. Numbered, flat chronological. Number, exact name, trigger(s),
+one-line job, kill-switch relationships reproducing the removal matrix (nothing
+removes the 20-series). Additions go at UNUSED numbers and are justified in
+section 12; nothing is renumbered and gaps are information. This list IS the
+workflow roster; module docs may not invent workflows absent here.
 
 ## 3A. Mechanism policies (binding)
 Concrete policy, with numbers, for each key journey moment, decided HERE and never
@@ -57,15 +66,24 @@ catalog doc). Tier-1: notifications are steps inside their triggering
 workflows, never standalone.
 
 ## 10. Manifest skeleton
-The design-time client-manifest.json values this build commits to, with
-field_lifecycle tags (design-time / harvest / execution-discovered).
+manifest_version 2. The design-time client-manifest.json values this build
+commits to, with field_lifecycle tags (design-time / harvest /
+execution-discovered): pipelines[] with per-pipeline stage_ids keyed by the
+eight fixed stage NAMES, base_workflows (absent key = not built),
+lost_reason_ids, per_cycle_fields with their staging-slot pointers, and knobs.
+No per-client stage -> canonical map: at version 2 that lives in the schema.
 
 ## 11. Doc index (binding)
 Every design doc: NN filename, owner role, one-line contents. Assigned BEFORE
 any module agent writes; cross-references use these names only.
 
-## 12. Divergence log + amendments
-Every departure from a baseline default with a one-line reason (Tier-2 rule).
+## 12. Divergence log, additions + amendments
+ADDITIONS: every workflow, stage, field or tag added on top of the Standard
+Build, each naming the strategy mechanic that forced it.
+DIVERGENCES: every departure from a Tier-2 baseline default with a one-line
+reason. Tier-1 (canonical-model.md, base-workflows.md, ai-agent-contract.md) is
+not divergeable; a strategy that cannot be served inside it is a blocking
+objection recorded here, not a quiet redesign.
 Registry amendments append here dated, and invalidate dependent docs via the
 run manifest.
 
