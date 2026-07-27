@@ -1,4 +1,16 @@
-# Core-Six Workflows (Tier-2 defaults)
+# Core-Six Workflows (Tier-2 defaults) - SUPERSEDED
+
+🔴 **Superseded 2026-07-26 by `baseline/base-workflows.md` (Tier-1).** New builds
+use the Standard Build's fourteen-workflow set, its reserved numbering, the
+removal matrix and the touch ceiling. Do not design a new client from this page.
+
+Kept only until the `client-design` prompts are repointed
+(`skills/client-design/prompts/systems-architect.md`,
+`skills/client-design/prompts/journey-architect.md`), and as the reference for
+what Francesca, SK Skin and Alevere were built against, since they do not
+migrate.
+
+---
 
 The median clinic's automation spine. Adapt freely per strategy; record
 divergences. Flat chronological naming: `01 Name` .. `NN Name`, no folders.

@@ -3,6 +3,22 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-26: the Standard Build, part 2. `baseline/base-workflows.md` added
+  (Tier-1): fourteen always-on workflows with reserved numbering and gaps, the
+  shared one-card-per-cycle guard and the five build rules under it, per-workflow
+  ownership, the removal matrix, the touch ceiling, the estate-wide hygiene
+  flags, and the fixed/knob split. `baseline/core-workflows.md` marked SUPERSEDED
+  and kept only until the `client-design` prompts are repointed. The pipeline
+  tail (13) is written as primarily manual with payment-driven advancement as an
+  off-by-default knob, per the 2026-07-26 decision that Grom's data ends at
+  booking; this overrides the design spec's payment-driven tail. Motivated by
+  every client's workflow set being re-decided from scratch, so "check 07" meant
+  a different workflow at every account.
+- 2026-07-26: the Standard Build, part 1. `baseline/canonical-model.md` sections
+  5 to 9 promoted from Tier-2 "adapt freely" to Tier-1 contracts: eight fixed
+  stages, one pipeline per campaign, Lost as a status with the stage restated,
+  one card per cycle, the data placement rule with the AI staging-slot
+  exception, and the standard tag/value/field/lost-reason sets.
 - 2026-07-14: landing-page build machinery removed from the factory and the new
   `reconcile-lp-tracking` skill added. Landing pages are built outside the
   factory, directly with the user; the factory records each LP as context only
