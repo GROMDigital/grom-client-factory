@@ -8018,7 +8018,7 @@ function createConversationReviewRequest({
   const promptHash = inputHash(prompt, "promptId", "content");
   const rubricHash = inputHash(rubric, "rubricId", "content");
   const modelPolicyHash = sha256(modelPolicy);
-  const evidenceRefs = [...selectionByEvidence.keys()].sort();
+  const evidenceRefs2 = [...selectionByEvidence.keys()].sort();
   const nonce = randomBytes(16).toString("hex");
   const sealedGrants = grants.map((grant) => ({
     ...grant,
@@ -8033,7 +8033,7 @@ function createConversationReviewRequest({
     rubricHash,
     modelPolicyHash,
     codeHash: run.codeHash,
-    evidenceSetHash: sha256(evidenceRefs),
+    evidenceSetHash: sha256(evidenceRefs2),
     cutoff: run.cutoff,
     grants: sealedGrants,
     nonce,
@@ -8359,9 +8359,9 @@ function canonicalFalsification(values, overallCoverage) {
   const byFamily = /* @__PURE__ */ new Map();
   for (const value of values) {
     if (!exactKeys2(value, ["family", "state", "evidenceRefs", "reasonCode"]) || !FAMILIES.includes(value.family) || !FALSIFICATION_STATES.has(value.state) || !safeCode(value.reasonCode) || byFamily.has(value.family)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
-    const evidenceRefs = strings(value.evidenceRefs, EVIDENCE);
-    if (["RULED_OUT", "SUPPORTED"].includes(value.state) && evidenceRefs.length === 0 || value.state === "NOT_APPLICABLE" && value.reasonCode === "CAPABILITY_INCOMPLETE") throw codedError6("MECHANISM_INPUT_INVALID");
-    byFamily.set(value.family, { ...value, evidenceRefs });
+    const evidenceRefs2 = strings(value.evidenceRefs, EVIDENCE);
+    if (["RULED_OUT", "SUPPORTED"].includes(value.state) && evidenceRefs2.length === 0 || value.state === "NOT_APPLICABLE" && value.reasonCode === "CAPABILITY_INCOMPLETE") throw codedError6("MECHANISM_INPUT_INVALID");
+    byFamily.set(value.family, { ...value, evidenceRefs: evidenceRefs2 });
   }
   return FAMILIES.map((family) => byFamily.get(family) ?? {
     family,
@@ -8436,8 +8436,8 @@ function exactOperationalEdge(edge) {
 }
 function relevantGraphDoubt(graph, edges, scope) {
   const nodeIds = new Set(edges.flatMap(({ fromNodeId, toNodeId }) => [fromNodeId, toNodeId]));
-  const evidenceRefs = new Set(edges.flatMap(({ evidenceRefs: refs }) => refs ?? []));
-  const relevant = (item) => item.journeyInstanceId === scope.journeyInstanceId || item.recordNodeId && nodeIds.has(item.recordNodeId) || Array.isArray(item.nodeIds) && item.nodeIds.some((id) => nodeIds.has(id)) || Array.isArray(item.evidenceRefs) && item.evidenceRefs.some((ref) => evidenceRefs.has(ref));
+  const evidenceRefs2 = new Set(edges.flatMap(({ evidenceRefs: refs }) => refs ?? []));
+  const relevant = (item) => item.journeyInstanceId === scope.journeyInstanceId || item.recordNodeId && nodeIds.has(item.recordNodeId) || Array.isArray(item.nodeIds) && item.nodeIds.some((id) => nodeIds.has(id)) || Array.isArray(item.evidenceRefs) && item.evidenceRefs.some((ref) => evidenceRefs2.has(ref));
   return graph.conflicts.some(relevant) || graph.unresolvedJoins.some(relevant);
 }
 function failurePatterns(code) {
@@ -8597,7 +8597,7 @@ function validComparators(graph, scope) {
   return graph.nodes.filter((node) => node.journeyInstanceId === scope.journeyInstanceId && ["converted", "completed", "collected_revenue", "campaign_launch_ready"].includes(node.stage ?? node.milestone) && node.classification === "OBSERVED" && node.provenance?.completeness === "COMPLETE").sort((left, right) => Number(!requested.has(left.nodeId)) - Number(!requested.has(right.nodeId)) || (Date.parse(right.eventTime ?? "") || 0) - (Date.parse(left.eventTime ?? "") || 0) || left.nodeId.localeCompare(right.nodeId)).slice(0, 3).map(({ nodeId }) => nodeId).sort();
 }
 function eligibleEvidence(graph) {
-  return new Set(graph.nodes.filter((node) => node.classification === "OBSERVED" && node.provenance?.completeness === "COMPLETE").flatMap(({ evidenceRefs }) => evidenceRefs ?? []));
+  return new Set(graph.nodes.filter((node) => node.classification === "OBSERVED" && node.provenance?.completeness === "COMPLETE").flatMap(({ evidenceRefs: evidenceRefs2 }) => evidenceRefs2 ?? []));
 }
 function coverageFor(coverage, scope, effectiveState) {
   if (effectiveState === "complete_full") {
@@ -8714,13 +8714,13 @@ function nominateMechanisms({
       scope.falsificationResults,
       coverageState.effectiveState
     ).map((result) => {
-      const evidenceRefs = result.evidenceRefs.filter((ref) => eligibleEvidenceRefs.has(ref));
-      if (evidenceRefs.length === result.evidenceRefs.length) return result;
+      const evidenceRefs2 = result.evidenceRefs.filter((ref) => eligibleEvidenceRefs.has(ref));
+      if (evidenceRefs2.length === result.evidenceRefs.length) return result;
       rejectedEvidence = true;
       return {
         family: result.family,
         state: "INCONCLUSIVE",
-        evidenceRefs,
+        evidenceRefs: evidenceRefs2,
         reasonCode: "EVIDENCE_INELIGIBLE"
       };
     });
@@ -9103,7 +9103,7 @@ function buildMechanismReviewRequest({
       eligibleEvidenceRefs: [.../* @__PURE__ */ new Set([
         ...packet.supportingEvidenceRefs,
         ...packet.counterEvidenceRefs,
-        ...packet.falsificationResults.flatMap(({ evidenceRefs: evidenceRefs2 }) => evidenceRefs2)
+        ...packet.falsificationResults.flatMap(({ evidenceRefs: evidenceRefs3 }) => evidenceRefs3)
       ])].sort(),
       supplementalReadDescriptorIds: packet.supplementalReadAllowlist.map(({ descriptorId }) => descriptorId).sort(),
       supplementalReadAllowlistHash: sha256(packet.supplementalReadAllowlist),
@@ -9122,7 +9122,7 @@ function buildMechanismReviewRequest({
     packetId,
     packetHash
   })));
-  const evidenceRefs = [...new Set(sealedPackets.flatMap((packet) => packet.eligibleEvidenceRefs))].sort();
+  const evidenceRefs2 = [...new Set(sealedPackets.flatMap((packet) => packet.eligibleEvidenceRefs))].sort();
   const body = {
     schemaVersion: "1.0.0",
     requestId: stable("mreview", {
@@ -9137,7 +9137,7 @@ function buildMechanismReviewRequest({
     codeHash: run.codeHash,
     packets: sealedPackets,
     packetSetHash,
-    evidenceSetHash: sha256(evidenceRefs),
+    evidenceSetHash: sha256(evidenceRefs2),
     rubric: {
       rubricId: rubric.rubricId,
       version: rubric.version,
@@ -26727,8 +26727,271 @@ function snapshotHash(snapshot) {
   const { canonicalSha256: _ignored, ...payload } = snapshot;
   return createHash2("sha256").update(canonicalJson2(payload)).digest("hex");
 }
+function projectionFilename(profileId) {
+  return `${profileId.replace(/_/gu, "-")}-projection.v1.json`;
+}
 function readProfileFile(filename) {
   return JSON.parse(readFileSync2(new URL(`../profiles/${filename}`, import.meta.url), "utf8"));
+}
+function readProfileFileIfPresent(filename) {
+  try {
+    return readProfileFile(filename);
+  } catch (error51) {
+    if (error51?.code === "ENOENT") return null;
+    throw error51;
+  }
+}
+function normalizeProfileId(profileId) {
+  if (profileId === "grom-internal") return "grom_internal";
+  return profileId;
+}
+function loadProfile(profileId) {
+  const normalized = normalizeProfileId(profileId);
+  const filename = PROFILE_FILES[normalized];
+  if (!filename) throw new Error(`UNKNOWN_PROFILE:${profileId}`);
+  return CoverageProfileSchema.parse(readProfileFile(filename));
+}
+function loadMetricContracts(profileId) {
+  const normalized = normalizeProfileId(profileId);
+  const filename = METRIC_FILES[normalized];
+  if (!filename) throw new Error(`UNKNOWN_METRIC_PROFILE:${profileId}`);
+  const profile = loadProfile(normalized);
+  const contracts = validateMetricContractsForProfile(profile, readProfileFile(filename));
+  const rawProjection = readProfileFileIfPresent(projectionFilename(normalized));
+  if (rawProjection === null) {
+    if (contracts.edges.some(({ nativeMapping }) => nativeMapping === "MAPPED")) {
+      throw new Error(`METRIC_CONTRACTS_UNGATED:${profileId}`);
+    }
+    return contracts;
+  }
+  assertMetricStageCoverage(profile, ProjectionContractSchema.parse(rawProjection), contracts);
+  return contracts;
+}
+function validateMetricContractsForProfile(profile, contracts) {
+  const parsedProfile = CoverageProfileSchema.parse(profile);
+  const parsedContracts = MetricContractsSchema.parse(contracts);
+  if (parsedProfile.profileId !== parsedContracts.profileId) {
+    throw new Error("PROFILE_METRIC_MISMATCH");
+  }
+  const journeyInstances = new Map(parsedProfile.journeys.map((journey) => [
+    journey.journeyId,
+    journey.journeyInstanceId
+  ]));
+  for (const edge of parsedContracts.edges) {
+    if (journeyInstances.get(edge.journeyId) !== edge.journeyInstanceId) {
+      throw new Error(`JOURNEY_INSTANCE_MISMATCH:${edge.edgeId}`);
+    }
+  }
+  return parsedContracts;
+}
+function loadProjection(profileId) {
+  const normalized = normalizeProfileId(profileId);
+  const raw = readProfileFileIfPresent(projectionFilename(normalized));
+  if (raw === null) throw new Error(`UNKNOWN_PROJECTION_PROFILE:${profileId}`);
+  return validateProjectionForProfile(
+    loadProfile(normalized),
+    raw,
+    loadMetricContracts(normalized)
+  );
+}
+function matchesOperationIdPattern(pattern, text) {
+  if (typeof text !== "string") return false;
+  const literal2 = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join(".*");
+  return new RegExp(`^${literal2}$`, "u").test(text);
+}
+function publicReadAllowlist() {
+  cachedAllowlist ??= loadPublicReadAllowlist();
+  return cachedAllowlist;
+}
+function isCatchAllPattern(pattern) {
+  return pattern.split("*").every((part) => part.length === 0);
+}
+function patternsCanOverlap(left, right) {
+  const memo = /* @__PURE__ */ new Map();
+  const decide = (leftIndex, rightIndex) => {
+    const key = `${leftIndex}:${rightIndex}`;
+    if (memo.has(key)) return memo.get(key);
+    let result;
+    if (leftIndex === left.length && rightIndex === right.length) {
+      result = true;
+    } else if (leftIndex < left.length && left[leftIndex] === "*") {
+      result = decide(leftIndex + 1, rightIndex) || rightIndex < right.length && decide(leftIndex, rightIndex + 1);
+    } else if (rightIndex < right.length && right[rightIndex] === "*") {
+      result = decide(leftIndex, rightIndex + 1) || leftIndex < left.length && decide(leftIndex + 1, rightIndex);
+    } else {
+      result = leftIndex < left.length && rightIndex < right.length && left[leftIndex] === right[rightIndex] && decide(leftIndex + 1, rightIndex + 1);
+    }
+    memo.set(key, result);
+    return result;
+  };
+  return decide(0, 0);
+}
+function assertActionRouting(projection) {
+  const allowlist = publicReadAllowlist();
+  const publicSources = projection.sources.filter(
+    ({ evidenceSource }) => evidenceSource === "public_ghl"
+  );
+  const routed = /* @__PURE__ */ new Map();
+  for (const source of publicSources) {
+    const matched = allowlist.actions.filter(
+      ({ actionId }) => matchesOperationIdPattern(source.operationIdPattern, actionId)
+    );
+    if (matched.length === 0) {
+      throw new Error(
+        `PROJECTION_SOURCE_MATCHES_NO_ACTION:${source.sourceId}:${source.operationIdPattern}`
+      );
+    }
+    const categories = [...new Set(matched.map(({ category }) => category))].sort();
+    if (categories.length > 1) {
+      throw new Error(
+        `PROJECTION_SOURCE_SPANS_CATEGORIES:${source.sourceId}:${categories.join(",")}`
+      );
+    }
+    for (const { actionId } of matched) {
+      if (routed.has(actionId)) {
+        throw new Error(
+          `PROJECTION_ACTION_MULTIPLY_MATCHED:${actionId}:${routed.get(actionId)}:${source.sourceId}`
+        );
+      }
+      routed.set(actionId, source.sourceId);
+    }
+  }
+  const known = new Set(allowlist.actions.map(({ actionId }) => actionId));
+  for (const { actionId } of projection.unprojectedActions) {
+    if (!known.has(actionId)) throw new Error(`PROJECTION_UNPROJECTED_ACTION_UNKNOWN:${actionId}`);
+    if (routed.has(actionId)) throw new Error(`PROJECTION_UNPROJECTED_ACTION_MATCHED:${actionId}`);
+  }
+  const excluded = new Set(projection.unprojectedActions.map(({ actionId }) => actionId));
+  for (const { actionId } of allowlist.actions) {
+    if (!routed.has(actionId) && !excluded.has(actionId)) {
+      throw new Error(`PROJECTION_ACTION_UNCLASSIFIED:${actionId}`);
+    }
+  }
+  for (const source of projection.sources) {
+    if (isCatchAllPattern(source.operationIdPattern)) {
+      throw new Error(`PROJECTION_SOURCE_PATTERN_CATCH_ALL:${source.sourceId}`);
+    }
+  }
+  for (let index = 0; index < projection.sources.length; index += 1) {
+    for (let other = index + 1; other < projection.sources.length; other += 1) {
+      const left = projection.sources[index];
+      const right = projection.sources[other];
+      if (left.evidenceSource !== right.evidenceSource) continue;
+      if (patternsCanOverlap(left.operationIdPattern, right.operationIdPattern)) {
+        throw new Error(
+          `PROJECTION_SOURCE_PATTERNS_OVERLAP:${left.sourceId}:${right.sourceId}`
+        );
+      }
+    }
+  }
+}
+function comparableScalar(value) {
+  if (typeof value === "string") return `t:${value.trim().toLowerCase()}`;
+  if (typeof value === "number") return Number.isFinite(value) ? `n:${value === 0 ? 0 : value}` : "x";
+  if (typeof value === "boolean") return `b:${value}`;
+  if (value === null) return "empty";
+  return "x";
+}
+function canonicalPredicate(when) {
+  if (when.kind === "field_equals") {
+    return canonicalJson2({ kind: "field_in", field: when.field, values: [comparableScalar(when.value)] });
+  }
+  if (when.kind === "field_in") {
+    return canonicalJson2({
+      kind: "field_in",
+      field: when.field,
+      values: [...new Set(when.values.map(comparableScalar))].sort()
+    });
+  }
+  return canonicalJson2(when);
+}
+function sameTimeReading(left, right) {
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  return shorter.every((path, index) => path === longer[index]);
+}
+function tautologicalStagePairs(projection) {
+  const byRecordFamily = /* @__PURE__ */ new Map();
+  for (const source of projection.sources) {
+    const family = canonicalJson2([source.evidenceSource, source.capability]);
+    const events = byRecordFamily.get(family) ?? [];
+    events.push(...source.events ?? []);
+    byRecordFamily.set(family, events);
+  }
+  const pairs = /* @__PURE__ */ new Set();
+  for (const events of byRecordFamily.values()) {
+    for (let index = 0; index < events.length; index += 1) {
+      for (let other = index + 1; other < events.length; other += 1) {
+        const left = events[index];
+        const right = events[other];
+        if (left.stage === right.stage) continue;
+        if (canonicalPredicate(left.when) !== canonicalPredicate(right.when)) continue;
+        if (!sameTimeReading(left.eventTimeField, right.eventTimeField)) continue;
+        pairs.add(`${left.stage}>${right.stage}`);
+        pairs.add(`${right.stage}>${left.stage}`);
+      }
+    }
+  }
+  return pairs;
+}
+function assertMetricStageCoverage(profile, projection, metricContracts) {
+  const emitted = new Set(projection.sources.flatMap(
+    (source) => (source.events ?? []).map(({ stage }) => stage)
+  ));
+  const tautological = tautologicalStagePairs(projection);
+  const declaredUnmeasurable = new Set(projection.unmeasurableEdges);
+  const edgeIds = new Set(metricContracts.edges.map(({ edgeId }) => edgeId));
+  for (const edgeId of declaredUnmeasurable) {
+    if (!edgeIds.has(edgeId)) throw new Error(`PROJECTION_UNMEASURABLE_EDGE_UNKNOWN:${edgeId}`);
+  }
+  for (const edge of metricContracts.edges) {
+    const measurable = emitted.has(edge.fromStage) && emitted.has(edge.toStage);
+    if (!measurable && !declaredUnmeasurable.has(edge.edgeId)) {
+      throw new Error(`PROJECTION_EDGE_UNMEASURABLE_UNDECLARED:${edge.edgeId}`);
+    }
+    if (measurable && declaredUnmeasurable.has(edge.edgeId)) {
+      throw new Error(`PROJECTION_EDGE_MEASURABLE_DECLARED_UNMEASURABLE:${edge.edgeId}`);
+    }
+    if (declaredUnmeasurable.has(edge.edgeId) && edge.nativeMapping === "MAPPED") {
+      throw new Error(`PROJECTION_UNMEASURABLE_EDGE_MAPPED:${edge.edgeId}`);
+    }
+    if (edge.nativeMapping === "MAPPED" && tautological.has(`${edge.fromStage}>${edge.toStage}`) && edge.measure !== "VALUE") {
+      throw new Error(`PROJECTION_EDGE_TAUTOLOGICAL:${edge.edgeId}`);
+    }
+  }
+  void profile;
+}
+function validateProjectionForProfile(profile, projection, metricContracts) {
+  const parsedProfile = ProjectionTargetProfileSchema.parse(profile);
+  const parsedProjection = ProjectionContractSchema.parse(projection);
+  if (parsedProfile.profileId !== parsedProjection.profileId) {
+    throw new Error("PROFILE_PROJECTION_MISMATCH");
+  }
+  const declared = new Set(parsedProfile.journeys.map(({ journeyId }) => journeyId));
+  const outcomesByJourney = new Map(parsedProfile.journeys.map(
+    ({ journeyId, outcomes }) => [journeyId, new Set(outcomes)]
+  ));
+  for (const source of parsedProjection.sources) {
+    for (const event of source.events ?? []) {
+      if (!declared.has(event.journeyId)) {
+        throw new Error(`PROJECTION_JOURNEY_UNDECLARED:${source.sourceId}:${event.eventId}`);
+      }
+      if (Array.isArray(event.revenueFrom) && !outcomesByJourney.get(event.journeyId)?.has(event.stage)) {
+        throw new Error(
+          `PROJECTION_REVENUE_STAGE_NOT_AN_OUTCOME:${source.sourceId}:${event.eventId}`
+        );
+      }
+    }
+  }
+  assertActionRouting(parsedProjection);
+  if (metricContracts === void 0 || metricContracts === null) {
+    throw new Error("PROJECTION_METRIC_CONTRACTS_REQUIRED");
+  }
+  if (!Array.isArray(metricContracts.edges)) {
+    throw new Error("PROJECTION_METRIC_CONTRACTS_INVALID");
+  }
+  assertMetricStageCoverage(parsedProfile, parsedProjection, metricContracts);
+  return parsedProjection;
 }
 function loadCollectionBudgets() {
   return CollectionBudgetsSchema.parse(readProfileFile("collection-budgets.v1.json"));
@@ -26756,7 +27019,7 @@ function loadPublicCatalogSnapshot() {
 function loadPublicReadAllowlist() {
   return PublicReadAllowlistSchema.parse(readProfileFile("public-read-allowlist.v1.json"));
 }
-var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, EligibilityRuleSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, schemaSourcePath;
+var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, EligibilityRuleSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, cachedAllowlist, schemaSourcePath;
 var init_v1 = __esm({
   "schemas/v1.mjs"() {
     init_zod();
@@ -27327,6 +27590,7 @@ var init_v1 = __esm({
       profileId: external_exports.string().min(1),
       journeys: external_exports.array(JourneySchema).min(1)
     }).loose();
+    cachedAllowlist = null;
     schemaSourcePath = fileURLToPath(import.meta.url);
   }
 });
@@ -43151,8 +43415,2078 @@ var init_kernel = __esm({
   }
 });
 
-// lib/private-source-authority.mjs
+// lib/evidence-graph.mjs
 function codedError8(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function stableId(prefix, value) {
+  return `${prefix}_${sha256(value).slice(0, 32)}`;
+}
+function deepFreeze6(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze6(nested, seen);
+  return Object.freeze(value);
+}
+function evidenceRefs(...records) {
+  return [...new Set(records.flatMap((record2) => typeof record2?.evidenceRef === "string" ? [record2.evidenceRef] : []))].sort();
+}
+function makeEdge({
+  type,
+  fromNodeId,
+  toNodeId,
+  eventTime = null,
+  capturedAt: capturedAt2,
+  refs,
+  joinMethod,
+  joinConfidence,
+  workflowDefinitionHash = null
+}) {
+  if (!EDGE_TYPES.has(type)) throw codedError8("EVIDENCE_EDGE_TYPE_INVALID");
+  const body = {
+    type,
+    fromNodeId,
+    toNodeId,
+    eventTime,
+    capturedAt: capturedAt2,
+    evidenceRefs: [...refs].sort(),
+    joinMethod,
+    joinConfidence,
+    workflowDefinitionHash
+  };
+  return { edgeId: stableId("edge", body), ...body };
+}
+function compositeKey(record2) {
+  if (record2.organizationNativeId && record2.opportunityNativeId) {
+    return `organization:${record2.organizationNativeId}|opportunity:${record2.opportunityNativeId}`;
+  }
+  if (record2.organizationNativeId && record2.projectNativeId) {
+    return `organization:${record2.organizationNativeId}|project:${record2.projectNativeId}`;
+  }
+  return null;
+}
+function fuzzyKey(record2) {
+  if (typeof record2.normalizedEmail === "string" && record2.normalizedEmail.length > 0) {
+    return `email:${record2.normalizedEmail.trim().toLowerCase()}`;
+  }
+  if (typeof record2.normalizedPhone === "string" && record2.normalizedPhone.length > 0) {
+    return `phone:${record2.normalizedPhone.replace(/\D/gu, "")}`;
+  }
+  return null;
+}
+function recordNode(record2) {
+  const node = {
+    nodeId: `node_${record2.recordId}`,
+    type: record2.recordType,
+    source: record2.provenance.source,
+    classification: record2.classification,
+    journeyId: record2.journeyId ?? null,
+    journeyInstanceId: record2.journeyInstanceId ?? null,
+    eventTime: record2.eventTime ?? null,
+    capturedAt: record2.provenance.capturedAt,
+    provenance: record2.provenance,
+    evidenceRefs: evidenceRefs(record2)
+  };
+  for (const field of [
+    "nativeId",
+    "subjectNativeId",
+    "organizationNativeId",
+    "opportunityNativeId",
+    "projectNativeId",
+    "workflowNativeId",
+    "stage",
+    "milestone",
+    "definitionHash",
+    "effectiveDefinitionHash",
+    "cohortInstanceRef"
+  ]) {
+    if (typeof record2[field] === "string") node[field] = record2[field];
+  }
+  if (Number.isFinite(record2.revenueAmount) && record2.revenueAmount >= 0) {
+    node.revenueAmount = record2.revenueAmount;
+  }
+  return node;
+}
+function addUnresolved(collection, value) {
+  collection.push({
+    unresolvedId: stableId("unresolved", value),
+    ...value
+  });
+}
+function assertGraphInput(records, context, profile) {
+  if (!Array.isArray(records) || !context || typeof context.locationId !== "string" || !profile || !Array.isArray(profile.journeys)) throw codedError8("EVIDENCE_GRAPH_INPUT_INVALID", TypeError);
+  for (const record2 of records) {
+    if (record2?.provenance?.boundLocationId !== context.locationId || !record2.recordId || !record2.evidenceRef) throw codedError8("EVIDENCE_LOCATION_MISMATCH");
+  }
+}
+function sortGraphPart(values, id) {
+  return values.sort((left, right) => left[id].localeCompare(right[id]) || canonicalJson(left).localeCompare(canonicalJson(right)));
+}
+function buildEvidenceGraph({ records, context, profile }) {
+  assertGraphInput(records, context, profile);
+  const nodes = [];
+  const nodeIds = /* @__PURE__ */ new Set();
+  const edges = [];
+  const conflicts = [];
+  const unresolvedJoins = [];
+  const recordNodes = /* @__PURE__ */ new Map();
+  function addNode(node) {
+    if (!nodeIds.has(node.nodeId)) {
+      nodes.push(node);
+      nodeIds.add(node.nodeId);
+    }
+    return node;
+  }
+  for (const journey of profile.journeys) {
+    addNode({
+      nodeId: stableId("journey", {
+        locationId: context.locationId,
+        journeyInstanceId: journey.journeyInstanceId
+      }),
+      type: "journey_instance",
+      journeyId: journey.journeyId,
+      journeyInstanceId: journey.journeyInstanceId,
+      denominator: journey.denominator,
+      evidenceRefs: []
+    });
+  }
+  for (const record2 of records) {
+    const node = addNode(recordNode(record2));
+    recordNodes.set(record2.recordId, node);
+    if (record2.recordType === "collection_status") {
+      addUnresolved(unresolvedJoins, {
+        reason: record2.reason,
+        classification: "UNKNOWN",
+        source: record2.provenance.source,
+        recordNodeId: node.nodeId,
+        evidenceRefs: evidenceRefs(record2)
+      });
+    }
+    if (record2.provenance.completeness === "INCOMPLETE" && record2.recordType !== "collection_status") {
+      addUnresolved(unresolvedJoins, {
+        reason: "INCOMPLETE_EVIDENCE",
+        classification: "UNKNOWN",
+        source: record2.provenance.source,
+        recordNodeId: node.nodeId,
+        evidenceRefs: evidenceRefs(record2)
+      });
+    }
+    if (record2.provenance.completeness === "COMPLETE" && record2.classification === "UNKNOWN") {
+      addUnresolved(unresolvedJoins, {
+        reason: "SOURCE_CLASSIFICATION_UNKNOWN",
+        classification: "UNKNOWN",
+        source: record2.provenance.source,
+        recordNodeId: node.nodeId,
+        evidenceRefs: evidenceRefs(record2)
+      });
+    }
+  }
+  const observed = records.filter((record2) => record2.provenance.completeness === "COMPLETE" && record2.classification === "OBSERVED");
+  const contacts = observed.filter(({ recordType, nativeId }) => recordType === "contact" && typeof nativeId === "string");
+  const contactsByNativeId = /* @__PURE__ */ new Map();
+  const contactsByFuzzyKey = /* @__PURE__ */ new Map();
+  for (const contact of contacts) {
+    contactsByNativeId.set(
+      contact.nativeId,
+      [...contactsByNativeId.get(contact.nativeId) ?? [], contact]
+    );
+  }
+  for (const [nativeId, claimsValue] of contactsByNativeId) {
+    const claims = [...claimsValue].sort((left, right) => left.recordId.localeCompare(right.recordId));
+    const entity = addNode({
+      nodeId: stableId("contact", {
+        locationId: context.locationId,
+        nativeId
+      }),
+      type: "contact_entity",
+      nativeId,
+      evidenceRefs: evidenceRefs(...claims)
+    });
+    contactsByNativeId.set(nativeId, { claims, entity });
+    const contradictoryFields = {};
+    for (const field of [
+      "normalizedEmail",
+      "normalizedPhone",
+      "organizationNativeId",
+      "opportunityNativeId",
+      "projectNativeId"
+    ]) {
+      const values = [...new Set(claims.map((claim) => claim[field]).filter(Boolean))].sort();
+      if (values.length > 1) {
+        contradictoryFields[field] = values.map((value) => sha256({ field, value }));
+      }
+    }
+    if (Object.keys(contradictoryFields).length > 0) {
+      const conflict = {
+        type: "contradictory_native_identity_claim",
+        nativeIdHash: sha256(nativeId),
+        contradictoryFields,
+        nodeIds: [entity.nodeId],
+        evidenceRefs: evidenceRefs(...claims)
+      };
+      conflicts.push({ conflictId: stableId("conflict", conflict), ...conflict });
+    }
+    for (const contact of claims) {
+      const key = fuzzyKey(contact);
+      if (key) {
+        const byEntity = contactsByFuzzyKey.get(key) ?? /* @__PURE__ */ new Map();
+        const prior = byEntity.get(entity.nodeId) ?? { claims: [], entity };
+        byEntity.set(entity.nodeId, { claims: [...prior.claims, contact], entity });
+        contactsByFuzzyKey.set(key, byEntity);
+      }
+      edges.push(makeEdge({
+        type: "identity_exact",
+        fromNodeId: entity.nodeId,
+        toNodeId: recordNodes.get(contact.recordId).nodeId,
+        eventTime: contact.eventTime ?? null,
+        capturedAt: contact.provenance.capturedAt,
+        refs: evidenceRefs(...claims),
+        joinMethod: "native_id",
+        joinConfidence: "exact"
+      }));
+    }
+  }
+  for (const [key, claimsByEntity] of contactsByFuzzyKey) {
+    const claims = [...claimsByEntity.values()].sort((left, right) => left.entity.nodeId.localeCompare(right.entity.nodeId));
+    if (claims.length > 1) {
+      const conflict = {
+        type: "duplicate_identity_claim",
+        identityKeyHash: sha256(key),
+        nodeIds: claims.map(({ entity }) => entity.nodeId).sort(),
+        evidenceRefs: evidenceRefs(...claims.flatMap((claim) => claim.claims))
+      };
+      conflicts.push({ conflictId: stableId("conflict", conflict), ...conflict });
+    }
+  }
+  const compositeRecords = /* @__PURE__ */ new Map();
+  for (const record2 of observed) {
+    const key = compositeKey(record2);
+    if (key) compositeRecords.set(key, [...compositeRecords.get(key) ?? [], record2]);
+  }
+  const compositeIdentities = /* @__PURE__ */ new Map();
+  for (const [key, claims] of compositeRecords) {
+    const subjectIds = new Set(claims.map(({ subjectNativeId }) => subjectNativeId).filter(Boolean));
+    if (subjectIds.size > 1) {
+      const conflict = {
+        type: "ambiguous_composite_identity",
+        identityKeyHash: sha256(key),
+        nodeIds: claims.map((record2) => recordNodes.get(record2.recordId).nodeId).sort(),
+        evidenceRefs: evidenceRefs(...claims)
+      };
+      conflicts.push({ conflictId: stableId("conflict", conflict), ...conflict });
+      continue;
+    }
+    compositeIdentities.set(key, addNode({
+      nodeId: stableId("composite", {
+        locationId: context.locationId,
+        key
+      }),
+      type: "composite_identity",
+      identityKeyHash: sha256(key),
+      evidenceRefs: evidenceRefs(...claims)
+    }));
+  }
+  for (const record2 of observed) {
+    if (record2.recordType === "contact") continue;
+    const recordId2 = recordNodes.get(record2.recordId).nodeId;
+    const nativeContact = contactsByNativeId.get(record2.subjectNativeId);
+    if (nativeContact) {
+      edges.push(makeEdge({
+        type: "identity_exact",
+        fromNodeId: nativeContact.entity.nodeId,
+        toNodeId: recordId2,
+        eventTime: record2.eventTime ?? null,
+        capturedAt: record2.provenance.capturedAt,
+        refs: evidenceRefs(...nativeContact.claims, record2),
+        joinMethod: "native_id",
+        joinConfidence: "exact"
+      }));
+      continue;
+    }
+    const composite = compositeKey(record2);
+    if (composite) {
+      const identity = compositeIdentities.get(composite);
+      if (identity) {
+        edges.push(makeEdge({
+          type: "identity_exact",
+          fromNodeId: identity.nodeId,
+          toNodeId: recordId2,
+          eventTime: record2.eventTime ?? null,
+          capturedAt: record2.provenance.capturedAt,
+          refs: evidenceRefs(...compositeRecords.get(composite) ?? []),
+          joinMethod: "deterministic_composite",
+          joinConfidence: "exact"
+        }));
+        continue;
+      }
+      addUnresolved(unresolvedJoins, {
+        reason: "AMBIGUOUS_COMPOSITE_IDENTITY",
+        classification: "UNKNOWN",
+        source: record2.provenance.source,
+        recordNodeId: recordId2,
+        evidenceRefs: evidenceRefs(record2)
+      });
+      continue;
+    }
+    const fuzzy = fuzzyKey(record2);
+    const fuzzyCandidates = fuzzy ? [...contactsByFuzzyKey.get(fuzzy)?.values() ?? []].sort((left, right) => left.entity.nodeId.localeCompare(right.entity.nodeId)) : [];
+    if (fuzzyCandidates.length > 0) {
+      for (const candidate of fuzzyCandidates) {
+        edges.push(makeEdge({
+          type: "inferred_match",
+          fromNodeId: candidate.entity.nodeId,
+          toNodeId: recordId2,
+          eventTime: record2.eventTime ?? null,
+          capturedAt: record2.provenance.capturedAt,
+          refs: evidenceRefs(...candidate.claims, record2),
+          joinMethod: "fuzzy_candidate",
+          joinConfidence: "candidate"
+        }));
+      }
+      addUnresolved(unresolvedJoins, {
+        reason: fuzzyCandidates.length > 1 ? "AMBIGUOUS_IDENTITY" : "FUZZY_ONLY",
+        classification: "UNKNOWN",
+        source: record2.provenance.source,
+        recordNodeId: recordId2,
+        candidateNodeIds: fuzzyCandidates.map(({ entity }) => entity.nodeId).sort(),
+        evidenceRefs: evidenceRefs(record2, ...fuzzyCandidates.flatMap(({ claims }) => claims))
+      });
+    }
+  }
+  const definitions = new Map(observed.filter(({ recordType, nativeId, definitionHash }) => recordType === "workflow_definition" && nativeId && definitionHash).map((record2) => [`${record2.nativeId}:${record2.definitionHash}`, record2]));
+  for (const execution of observed.filter(({ recordType }) => recordType === "workflow_execution")) {
+    if (!execution.effectiveDefinitionHash) {
+      addUnresolved(unresolvedJoins, {
+        reason: "WORKFLOW_DEFINITION_HASH_UNKNOWN",
+        classification: "UNKNOWN",
+        source: execution.provenance.source,
+        recordNodeId: recordNodes.get(execution.recordId).nodeId,
+        workflowDefinitionHash: null,
+        evidenceRefs: evidenceRefs(execution)
+      });
+      continue;
+    }
+    const definition = definitions.get(
+      `${execution.workflowNativeId}:${execution.effectiveDefinitionHash}`
+    );
+    if (!definition) {
+      addUnresolved(unresolvedJoins, {
+        reason: "WORKFLOW_EFFECTIVE_DEFINITION_NOT_CAPTURED",
+        classification: "UNKNOWN",
+        source: execution.provenance.source,
+        recordNodeId: recordNodes.get(execution.recordId).nodeId,
+        workflowDefinitionHash: execution.effectiveDefinitionHash,
+        evidenceRefs: evidenceRefs(execution)
+      });
+      continue;
+    }
+    edges.push(makeEdge({
+      type: "execution_emitted",
+      fromNodeId: recordNodes.get(definition.recordId).nodeId,
+      toNodeId: recordNodes.get(execution.recordId).nodeId,
+      eventTime: execution.eventTime ?? null,
+      capturedAt: execution.provenance.capturedAt,
+      refs: evidenceRefs(definition, execution),
+      joinMethod: "workflow_definition_hash",
+      joinConfidence: "exact",
+      workflowDefinitionHash: execution.effectiveDefinitionHash
+    }));
+  }
+  const journeyEvents = observed.filter((record2) => ["journey_event", "portal_milestone"].includes(record2.recordType) && typeof record2.journeyId === "string" && typeof record2.journeyInstanceId === "string");
+  const profileJourneys = new Map(profile.journeys.map((journey) => [journey.journeyId, journey]));
+  for (const event of journeyEvents) {
+    const declared = profileJourneys.get(event.journeyId);
+    if (!declared || declared.journeyInstanceId !== event.journeyInstanceId) {
+      throw codedError8("JOURNEY_INSTANCE_INVALID");
+    }
+  }
+  const bySubject = /* @__PURE__ */ new Map();
+  for (const event of journeyEvents) {
+    const identity = event.subjectNativeId ? `native:${event.subjectNativeId}` : compositeKey(event);
+    if (!identity) continue;
+    bySubject.set(
+      identity,
+      [...bySubject.get(identity) ?? [], event]
+    );
+  }
+  const handoffs = observed.filter(({ recordType }) => recordType === "handoff");
+  for (const [identity, subjectEvents] of bySubject) {
+    const journeyIds = new Set(subjectEvents.map(({ journeyId }) => journeyId));
+    if (journeyIds.size > 1) {
+      const handoff = handoffs.find((candidate) => (candidate.subjectNativeId ? `native:${candidate.subjectNativeId}` : compositeKey(candidate)) === identity && journeyIds.has(candidate.fromJourneyId) && journeyIds.has(candidate.toJourneyId));
+      if (!handoff) throw codedError8("JOURNEY_HANDOFF_REQUIRED");
+    }
+  }
+  for (const handoff of handoffs) {
+    const from = profile.journeys.find(({ journeyId }) => journeyId === handoff.fromJourneyId);
+    const to2 = profile.journeys.find(({ journeyId }) => journeyId === handoff.toJourneyId);
+    if (!from || !to2 || from.journeyInstanceId === to2.journeyInstanceId) continue;
+    const fromNode = nodes.find(({ journeyInstanceId, type }) => journeyInstanceId === from.journeyInstanceId && type === "journey_instance");
+    const toNode = nodes.find(({ journeyInstanceId, type }) => journeyInstanceId === to2.journeyInstanceId && type === "journey_instance");
+    edges.push(makeEdge({
+      type: "preceded",
+      fromNodeId: fromNode.nodeId,
+      toNodeId: toNode.nodeId,
+      eventTime: handoff.eventTime ?? null,
+      capturedAt: handoff.provenance.capturedAt,
+      refs: evidenceRefs(handoff),
+      joinMethod: "explicit_handoff",
+      joinConfidence: "exact"
+    }));
+  }
+  if (records.some(({ provenance }) => provenance.source === "onboarding_portal" && provenance.completeness === "INCOMPLETE")) {
+    const onboarding = profile.journeys.find(({ journeyId }) => journeyId === "client_onboarding");
+    for (const unresolved of unresolvedJoins.filter(({ source }) => source === "onboarding_portal")) {
+      if (onboarding) {
+        unresolved.journeyId = onboarding.journeyId;
+        unresolved.journeyInstanceId = onboarding.journeyInstanceId;
+        const { unresolvedId: _oldId, ...body } = unresolved;
+        unresolved.unresolvedId = stableId("unresolved", body);
+      }
+    }
+  }
+  const progressionGroups = /* @__PURE__ */ new Map();
+  for (const event of journeyEvents) {
+    const composite = compositeKey(event);
+    const subject = event.subjectNativeId ?? (composite && compositeIdentities.has(composite) ? composite : null);
+    if (!subject) continue;
+    const key = `${event.journeyInstanceId}:${subject}`;
+    progressionGroups.set(key, [...progressionGroups.get(key) ?? [], event]);
+  }
+  for (const events of progressionGroups.values()) {
+    events.sort((left, right) => Date.parse(left.eventTime) - Date.parse(right.eventTime) || left.recordId.localeCompare(right.recordId));
+    for (let index = 1; index < events.length; index += 1) {
+      const prior = events[index - 1];
+      const current = events[index];
+      edges.push(makeEdge({
+        type: "preceded",
+        fromNodeId: recordNodes.get(prior.recordId).nodeId,
+        toNodeId: recordNodes.get(current.recordId).nodeId,
+        eventTime: current.eventTime ?? null,
+        capturedAt: current.provenance.capturedAt,
+        refs: evidenceRefs(prior, current),
+        joinMethod: current.subjectNativeId ? "native_id" : "deterministic_composite",
+        joinConfidence: "exact"
+      }));
+    }
+  }
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.fromNodeId) || !nodeIds.has(edge.toNodeId)) {
+      throw codedError8("EVIDENCE_EDGE_DANGLING");
+    }
+  }
+  return deepFreeze6({
+    nodes: sortGraphPart(nodes, "nodeId"),
+    edges: sortGraphPart(edges, "edgeId"),
+    conflicts: sortGraphPart(conflicts, "conflictId"),
+    unresolvedJoins: sortGraphPart(unresolvedJoins, "unresolvedId")
+  });
+}
+var EDGE_TYPES;
+var init_evidence_graph = __esm({
+  "lib/evidence-graph.mjs"() {
+    init_canonical();
+    EDGE_TYPES = /* @__PURE__ */ new Set([
+      "identity_exact",
+      "configured_to_trigger",
+      "enrolled_in",
+      "execution_emitted",
+      "preceded",
+      "attributed_by_source",
+      "intended_by",
+      "contradicts",
+      "inferred_match"
+    ]);
+  }
+});
+
+// lib/journey-projection.mjs
+function codedError9(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function isPlainObject10(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  );
+}
+function deepFreeze7(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze7(nested, seen);
+  return Object.freeze(value);
+}
+function byteCompare(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
+}
+function readPath(record2, path) {
+  let current = record2;
+  for (const key of path.split(".")) {
+    if (!isPlainObject10(current) || !Object.hasOwn(current, key)) return void 0;
+    current = current[key];
+  }
+  return current;
+}
+function readFirstPath(record2, paths) {
+  for (const path of paths) {
+    const value = readPath(record2, path);
+    if (value !== void 0 && value !== null) return value;
+  }
+  return void 0;
+}
+function asText(value) {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+function asAddressText(value) {
+  const text = asText(value);
+  return text === null ? null : text.toLowerCase();
+}
+function asDialText(value) {
+  const text = asText(value);
+  if (text === null) return null;
+  const international = text.startsWith("+") ? "+" : "";
+  const digits = text.replace(/\D/gu, "");
+  return digits.length > 0 ? `${international}${digits}` : null;
+}
+function resolveIdentity(declaration, record2) {
+  const identity = {};
+  for (const field of IDENTITY_FIELDS) {
+    const paths = declaration[field];
+    if (!Array.isArray(paths)) continue;
+    const read = FIELD_READERS[field] ?? asText;
+    const value = read(readFirstPath(record2, paths));
+    if (value !== null) identity[field] = value;
+  }
+  return identity;
+}
+function hasUsableIdentity(identity) {
+  return Boolean(identity.subjectNativeId) || Boolean(identity.normalizedEmail) || Boolean(identity.normalizedPhone) || Boolean(identity.organizationNativeId) && (Boolean(identity.opportunityNativeId) || Boolean(identity.projectNativeId));
+}
+function identityGroupKey(identity) {
+  if (identity.subjectNativeId) return `subject:${identity.subjectNativeId}`;
+  if (identity.organizationNativeId && identity.opportunityNativeId) {
+    return `org:${identity.organizationNativeId}|opp:${identity.opportunityNativeId}`;
+  }
+  if (identity.organizationNativeId && identity.projectNativeId) {
+    return `org:${identity.organizationNativeId}|proj:${identity.projectNativeId}`;
+  }
+  if (identity.normalizedEmail) return `email:${identity.normalizedEmail}`;
+  return `dial:${identity.normalizedPhone}`;
+}
+function utcFromParts(year, month, day, hour, minute, second, millisecond) {
+  const epoch = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  if (!Number.isFinite(epoch)) return null;
+  const probe = new Date(epoch);
+  if (probe.getUTCFullYear() !== year || probe.getUTCMonth() !== month - 1 || probe.getUTCDate() !== day || probe.getUTCHours() !== hour || probe.getUTCMinutes() !== minute || probe.getUTCSeconds() !== second || probe.getUTCMilliseconds() !== millisecond) return null;
+  return epoch;
+}
+function epochFromText(text) {
+  const zoned2 = ZONED_INSTANT.exec(text);
+  if (zoned2) {
+    const [, year, month, day2, hour, minute, second, fraction, zulu, sign, offsetHour, offsetMinute] = zoned2;
+    const millisecond = fraction === void 0 ? 0 : Number(`${fraction}000`.slice(0, 3));
+    const base = utcFromParts(
+      Number(year),
+      Number(month),
+      Number(day2),
+      Number(hour),
+      Number(minute),
+      Number(second),
+      millisecond
+    );
+    if (base === null) return { epochMs: null, reason: REASON_NO_INSTANT };
+    if (zulu !== void 0) return { epochMs: base, reason: null };
+    if (Number(offsetHour) > 23 || Number(offsetMinute) > 59) {
+      return { epochMs: null, reason: REASON_NO_INSTANT };
+    }
+    const offsetMs = (Number(offsetHour) * 60 + Number(offsetMinute)) * 6e4;
+    return { epochMs: sign === "-" ? base + offsetMs : base - offsetMs, reason: null };
+  }
+  const day = CALENDAR_DAY.exec(text);
+  if (day) {
+    const base = utcFromParts(Number(day[1]), Number(day[2]), Number(day[3]), 0, 0, 0, 0);
+    return base === null ? { epochMs: null, reason: REASON_NO_INSTANT } : { epochMs: base, reason: null };
+  }
+  if (ZONE_FREE.test(text)) return { epochMs: null, reason: REASON_ZONE_UNSPECIFIED };
+  if (DIGIT_RUN.test(text)) return epochFromNumber(Number(text));
+  return { epochMs: null, reason: REASON_NO_INSTANT };
+}
+function epochFromNumber(value) {
+  if (!Number.isInteger(value) || value < EPOCH_FLOOR_MS || value > EPOCH_CEILING_MS) {
+    return { epochMs: null, reason: REASON_EPOCH_AMBIGUOUS };
+  }
+  return { epochMs: value, reason: null };
+}
+function canonicalInstant(value) {
+  let read = { epochMs: null, reason: REASON_NO_INSTANT };
+  if (typeof value === "number") {
+    read = Number.isFinite(value) ? epochFromNumber(value) : { epochMs: null, reason: REASON_EPOCH_AMBIGUOUS };
+  } else if (typeof value === "string") {
+    const text = value.trim();
+    if (text.length > 0) read = epochFromText(text);
+  }
+  if (read.epochMs === null) return { instant: null, reason: read.reason };
+  return { instant: new Date(read.epochMs).toISOString(), reason: null };
+}
+function isCanonicalTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+function withinWindow(instant2, window) {
+  const at2 = Date.parse(instant2);
+  return at2 >= Date.parse(window.from) && at2 <= Date.parse(window.to);
+}
+function firstCanonicalInstant(record2, paths) {
+  let firstReason = null;
+  for (const path of paths) {
+    const raw = readPath(record2, path);
+    if (raw === void 0 || raw === null) continue;
+    const { instant: instant2, reason } = canonicalInstant(raw);
+    if (instant2 !== null) return { instant: instant2, reason: null };
+    if (firstReason === null) firstReason = reason;
+  }
+  return { instant: null, reason: firstReason ?? REASON_NO_INSTANT };
+}
+function comparableKey(value) {
+  if (typeof value === "string") return `t:${value.trim().toLowerCase()}`;
+  if (typeof value === "number") return Number.isFinite(value) ? `n:${value === 0 ? 0 : value}` : null;
+  if (typeof value === "boolean") return `b:${value}`;
+  if (value === null) return "empty";
+  return null;
+}
+function predicateHolds(when, record2) {
+  if (when.kind === "always" || when.kind === "first_of_kind") return true;
+  const observed = comparableKey(readPath(record2, when.field));
+  if (observed === null) return false;
+  if (when.kind === "field_equals") return observed === comparableKey(when.value);
+  if (when.kind === "field_in") {
+    return when.values.some((candidate) => comparableKey(candidate) === observed);
+  }
+  throw codedError9("PROJECTION_CONTRACT_INVALID");
+}
+function patternMatches(pattern, text) {
+  if (typeof text !== "string") return false;
+  const literal2 = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join(".*");
+  return new RegExp(`^${literal2}$`, "u").test(text);
+}
+function matchSource(sources, collection) {
+  const matched = sources.filter((source) => source.evidenceSource === collection.source && patternMatches(source.operationIdPattern, collection.operationId));
+  if (matched.length > 1) throw codedError9("PROJECTION_SOURCE_AMBIGUOUS");
+  return matched[0] ?? null;
+}
+function readAmount(record2, paths, zeroPolicy) {
+  const value = readFirstPath(record2, paths);
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    if (value === 0 && zeroPolicy !== "OBSERVED") {
+      return { amount: null, note: NOTE_AMOUNT_ZERO, suppress: true };
+    }
+    return { amount: value === 0 ? 0 : value, note: null, suppress: false };
+  }
+  return { amount: null, note: NOTE_AMOUNT_UNUSABLE, suppress: false };
+}
+function entityIdentity(identity) {
+  const stable2 = {};
+  for (const field of IDENTITY_FIELDS) {
+    if (ENTITY_SCOPED_IDENTITY_FIELDS.includes(field)) continue;
+    if (Object.hasOwn(identity, field)) stable2[field] = identity[field];
+  }
+  return stable2;
+}
+function cohortReference(journeyId, journeyInstanceId, value) {
+  const text = asText(value);
+  if (text === null) return null;
+  return `${COHORT_PREFIX}${sha256({ journeyId, journeyInstanceId, value: text }).slice(0, 32)}`;
+}
+function orderingKey(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (value === null) return "null";
+  const kind = typeof value;
+  if (kind === "string") return `t${JSON.stringify(value)}`;
+  if (kind === "number") return Number.isFinite(value) ? `n${value === 0 ? 0 : value}` : `n!${String(value)}`;
+  if (kind === "boolean") return `b${value}`;
+  if (kind === "undefined") return "absent";
+  if (kind !== "object") return `other:${kind}`;
+  if (seen.has(value)) return "cycle";
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) return `[${value.map((entry) => orderingKey(entry, seen)).join(",")}]`;
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${orderingKey(value[key], seen)}`).join(",")}}`;
+  } finally {
+    seen.delete(value);
+  }
+}
+function envelopeOrderingKey(collection) {
+  if (!isPlainObject10(collection)) return orderingKey(collection);
+  const rows = Array.isArray(collection.items) ? collection.items : [];
+  const withoutRows = Object.fromEntries(
+    Object.entries(collection).filter(([key]) => key !== "items")
+  );
+  const rowKeys = rows.map((row) => orderingKey(row)).sort(byteCompare);
+  return `${orderingKey(withoutRows)}|rows[${rowKeys.join(",")}]`;
+}
+function tally(counter, key, amount = 1) {
+  counter.set(key, (counter.get(key) ?? 0) + amount);
+}
+function talliedSuppressions(counter) {
+  return [...counter.entries()].sort(([left], [right]) => byteCompare(left, right)).map(([reason, count]) => ({ reason, unit: SUPPRESSION_UNITS[reason] ?? UNIT_EMISSION, count }));
+}
+function talliedAnnotations(counter) {
+  return [...counter.entries()].sort(([left], [right]) => byteCompare(left, right)).map(([code, count]) => ({ code, count }));
+}
+function assertInput({ collections, context, profile, projection }) {
+  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject10(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject10(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject10(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject10(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError9("PROJECTION_INPUT_INVALID", TypeError);
+}
+function assertWindowShape(window) {
+  if (!isPlainObject10(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+}
+function copyWindow(window) {
+  return { ...window };
+}
+function assertSourceCollection(collection, locationId) {
+  if (!isPlainObject10(collection)) {
+    throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  }
+  if (collection.boundLocationId !== locationId) {
+    throw codedError9("PROJECTION_LOCATION_MISMATCH");
+  }
+  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject10(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  assertWindowShape(collection.requestedWindow);
+  assertWindowShape(collection.appliedWindow);
+  if (Date.parse(collection.appliedWindow.from) < Date.parse(collection.requestedWindow.from) || Date.parse(collection.appliedWindow.to) > Date.parse(collection.requestedWindow.to)) throw codedError9("PROJECTION_WINDOW_MISMATCH");
+  if (collection.page.collectedCount !== collection.items.length) {
+    throw codedError9("PROJECTION_SOURCE_COLLECTION_INCOHERENT");
+  }
+  if (collection.page.complete) {
+    if (collection.page.truncated === true || collection.page.nextCursor !== null && collection.page.nextCursor !== void 0 || collection.page.reportedCount !== collection.items.length || Object.hasOwn(collection, "incompleteReason")) throw codedError9("PROJECTION_SOURCE_COLLECTION_INCOHERENT");
+    return;
+  }
+  if (typeof collection.incompleteReason !== "string" || collection.incompleteReason.length === 0) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+}
+function resolveJourneyInstances(profile, projection) {
+  const declared = /* @__PURE__ */ new Map();
+  for (const journey of profile.journeys) {
+    if (typeof journey?.journeyId !== "string" || typeof journey?.journeyInstanceId !== "string" || journey.journeyInstanceId.length === 0) throw codedError9("PROJECTION_INPUT_INVALID", TypeError);
+    declared.set(journey.journeyId, journey.journeyInstanceId);
+  }
+  for (const source of projection.sources) {
+    const events = source?.events ?? [];
+    const entities = source?.entities ?? [];
+    if (!Array.isArray(events) || !Array.isArray(entities) || events.length + entities.length === 0) {
+      throw codedError9("PROJECTION_CONTRACT_INVALID", TypeError);
+    }
+    for (const entity of entities) {
+      if (typeof entity?.recordType !== "string" || entity.recordType.length === 0) {
+        throw codedError9("PROJECTION_CONTRACT_INVALID");
+      }
+      if (!isPlainObject10(entity.when) || typeof entity.when.kind !== "string") {
+        throw codedError9("PROJECTION_CONTRACT_INVALID");
+      }
+    }
+    for (const event of events) {
+      if (!declared.has(event.journeyId)) throw codedError9("PROJECTION_JOURNEY_UNKNOWN");
+      if (typeof event.stage !== "string" || !IDENTIFIER_PATTERN.test(event.stage)) {
+        throw codedError9("PROJECTION_CONTRACT_INVALID");
+      }
+      if (!Array.isArray(event.eventTimeField) || event.eventTimeField.length === 0) {
+        throw codedError9("PROJECTION_CONTRACT_INVALID");
+      }
+      if (!isPlainObject10(event.when) || typeof event.when.kind !== "string") {
+        throw codedError9("PROJECTION_CONTRACT_INVALID");
+      }
+      if (Object.hasOwn(event, "revenueFrom") && !Array.isArray(event.revenueFrom)) {
+        throw codedError9("PROJECTION_CONTRACT_INVALID");
+      }
+    }
+  }
+  return declared;
+}
+function projectJourneyEvents({ collections, context, profile, projection } = {}) {
+  assertInput({ collections, context, profile, projection });
+  const instanceByJourney = resolveJourneyInstances(profile, projection);
+  const zeroAmountPolicy = projection.zeroAmountPolicy === "OBSERVED" ? "OBSERVED" : "UNUSABLE";
+  const ordered = [...collections].map((collection, arrivalIndex) => ({
+    collection,
+    key: envelopeOrderingKey(collection),
+    arrivalIndex
+  })).sort((left, right) => byteCompare(left.key, right.key) || left.arrivalIndex - right.arrivalIndex).map(({ collection }) => collection);
+  const plans = ordered.map((collection, planIndex) => {
+    assertSourceCollection(collection, context.locationId);
+    return {
+      collection,
+      planIndex,
+      spec: matchSource(projection.sources, collection),
+      suppressed: /* @__PURE__ */ new Map(),
+      annotated: /* @__PURE__ */ new Map(),
+      recordsWithEmissions: 0
+    };
+  });
+  const emissions = [];
+  for (const plan of plans) {
+    if (plan.spec === null) {
+      if (plan.collection.items.length > 0) {
+        tally(plan.suppressed, REASON_NO_SOURCE, plan.collection.items.length);
+      }
+      continue;
+    }
+    const entities = plan.spec.entities ?? [];
+    const events = plan.spec.events ?? [];
+    for (const record2 of plan.collection.items) {
+      if (!isPlainObject10(record2)) {
+        tally(plan.suppressed, REASON_NOT_AN_OBJECT);
+        continue;
+      }
+      const identity = resolveIdentity(plan.spec.identity, record2);
+      if (!hasUsableIdentity(identity)) {
+        tally(plan.suppressed, REASON_NO_IDENTITY);
+        continue;
+      }
+      const groupIdentity = identityGroupKey(identity);
+      let produced = 0;
+      for (const entity of entities) {
+        if (!predicateHolds(entity.when, record2)) continue;
+        if (typeof identity.subjectNativeId !== "string" || identity.subjectNativeId.length === 0) {
+          tally(plan.suppressed, REASON_NO_ENTITY_KEY);
+          continue;
+        }
+        produced += 1;
+        emissions.push(emission({
+          plan,
+          // `entityIdentity`, never the raw identity: see its doc comment. A commercial-record id
+          // on a derived CONTACT entity is what made a repeat customer contradict itself.
+          item: {
+            recordType: entity.recordType,
+            ...entityIdentity(identity),
+            nativeId: identity.subjectNativeId
+          },
+          eventTime: "",
+          isEvent: false,
+          entityKey: identity.subjectNativeId,
+          group: null
+        }));
+      }
+      for (const event of events) {
+        if (!predicateHolds(event.when, record2)) continue;
+        const { instant: eventTime, reason } = firstCanonicalInstant(record2, event.eventTimeField);
+        if (eventTime === null) {
+          tally(plan.suppressed, reason);
+          continue;
+        }
+        if (!withinWindow(eventTime, plan.collection.appliedWindow)) {
+          tally(plan.suppressed, REASON_OUTSIDE_WINDOW);
+          continue;
+        }
+        const journeyInstanceId = instanceByJourney.get(event.journeyId);
+        const item = {
+          recordType: RECORD_TYPE,
+          stage: event.stage,
+          journeyId: event.journeyId,
+          journeyInstanceId,
+          eventTime,
+          ...identity
+        };
+        if (Array.isArray(event.cohortFrom)) {
+          const reference = cohortReference(
+            event.journeyId,
+            journeyInstanceId,
+            readFirstPath(record2, event.cohortFrom)
+          );
+          if (reference !== null) item.cohortInstanceRef = reference;
+        }
+        if (Array.isArray(event.revenueFrom)) {
+          const { amount, note, suppress } = readAmount(
+            record2,
+            event.revenueFrom,
+            zeroAmountPolicy
+          );
+          if (suppress) {
+            tally(plan.suppressed, note);
+            continue;
+          }
+          if (note === null) {
+            item.revenueAmount = amount;
+          } else {
+            item.classification = "UNKNOWN";
+            item.projectionReasons = [note];
+            tally(plan.annotated, note);
+          }
+        }
+        produced += 1;
+        emissions.push(emission({
+          plan,
+          item,
+          eventTime,
+          isEvent: true,
+          // Exactly the two things `evidence-graph.mjs:327-361` can build a proving join out of.
+          subjectKey: typeof identity.subjectNativeId === "string" ? identity.subjectNativeId : null,
+          provableByComposite: Boolean(
+            identity.organizationNativeId && (identity.opportunityNativeId || identity.projectNativeId)
+          ),
+          group: event.when.kind === "first_of_kind" ? `${event.journeyId} ${event.stage} ${groupIdentity}` : null
+        }));
+      }
+      if (produced === 0) tally(plan.suppressed, REASON_NO_OUTPUT);
+      else plan.recordsWithEmissions += 1;
+    }
+  }
+  const earliest = /* @__PURE__ */ new Map();
+  for (const candidate of emissions) {
+    if (candidate.group === null) continue;
+    const held = earliest.get(candidate.group);
+    if (held === void 0 || compareEmissions(candidate, held) < 0) {
+      earliest.set(candidate.group, candidate);
+    }
+  }
+  const emittedSubjects = new Set(emissions.filter(({ isEvent }) => !isEvent).map(({ entityKey }) => entityKey));
+  const itemsByPlan = new Map(plans.map((plan) => [plan.planIndex, []]));
+  for (const candidate of emissions) {
+    if (candidate.group !== null && earliest.get(candidate.group) !== candidate) {
+      tally(candidate.plan.suppressed, REASON_NOT_FIRST);
+      continue;
+    }
+    let { item } = candidate;
+    if (candidate.isEvent && !hasProvableSubject(candidate, emittedSubjects)) {
+      item = withProjectionNote(item, NOTE_SUBJECT_UNPROVABLE);
+      tally(candidate.plan.annotated, NOTE_SUBJECT_UNPROVABLE);
+    }
+    itemsByPlan.get(candidate.plan.planIndex).push(item);
+  }
+  const projected = plans.map((plan) => {
+    const items = itemsByPlan.get(plan.planIndex).map((item, index) => ({ item, key: canonicalJson(item), index })).sort((left, right) => byteCompare(left.key, right.key) || left.index - right.index).map(({ item }) => item);
+    const complete = plan.collection.page.complete === true;
+    const envelope = {
+      source: plan.collection.source,
+      operationId: plan.collection.operationId,
+      boundLocationId: plan.collection.boundLocationId,
+      requestedWindow: copyWindow(plan.collection.requestedWindow),
+      appliedWindow: copyWindow(plan.collection.appliedWindow),
+      capturedAt: plan.collection.capturedAt,
+      items,
+      page: {
+        cursor: plan.collection.page.cursor ?? null,
+        // Rule 4 in both directions: a complete envelope can carry no resume state, and an
+        // incomplete one keeps the exact resume state it arrived with.
+        nextCursor: complete ? null : plan.collection.page.nextCursor ?? null,
+        // Recomputed for the PROJECTED items, because one input record can fan out to several.
+        // `normalize.mjs:78-106` rejects the collection outright if these drift.
+        reportedCount: items.length,
+        collectedCount: items.length,
+        complete,
+        truncated: complete ? false : plan.collection.page.truncated === true
+      },
+      projection: projectionBlock(plan, projection, items.length, KIND_RECORDS)
+    };
+    if (!complete) envelope.incompleteReason = plan.collection.incompleteReason;
+    return envelope;
+  });
+  const signals = [];
+  for (const plan of plans) {
+    if (plan.collection.page.complete !== true || plan.suppressed.size === 0) continue;
+    const items = talliedSuppressions(plan.suppressed).map(({ reason, unit, count }) => ({
+      recordType: projection.suppressionSignal.recordType,
+      classification: "OBSERVED",
+      reason: `${SIGNAL_REASON_PREFIX}:${reason}`,
+      suppressedReason: reason,
+      suppressedUnit: unit,
+      suppressedCount: count,
+      inputItemCount: plan.collection.items.length
+    }));
+    signals.push({
+      source: plan.collection.source,
+      operationId: plan.collection.operationId,
+      boundLocationId: plan.collection.boundLocationId,
+      requestedWindow: copyWindow(plan.collection.requestedWindow),
+      appliedWindow: copyWindow(plan.collection.appliedWindow),
+      capturedAt: plan.collection.capturedAt,
+      items,
+      page: {
+        cursor: null,
+        nextCursor: null,
+        reportedCount: items.length,
+        collectedCount: items.length,
+        complete: true,
+        truncated: false
+      },
+      projection: projectionBlock(plan, projection, items.length, KIND_SIGNAL)
+    });
+  }
+  return deepFreeze7([...projected, ...signals]);
+}
+function projectionBlock(plan, projection, emittedCount, kind) {
+  return {
+    kind,
+    profileId: projection.profileId ?? null,
+    revenueBasis: projection.revenueBasis,
+    sourceId: plan.spec === null ? null : plan.spec.sourceId,
+    capability: plan.spec === null ? null : plan.spec.capability,
+    inputItemCount: plan.collection.items.length,
+    // Rows that yielded at least one emission candidate. The reconciliation invariant is
+    // `recordsWithEmissions + sum(record-unit suppressions) === inputItemCount`.
+    recordsWithEmissions: plan.recordsWithEmissions,
+    emittedCount,
+    suppressed: talliedSuppressions(plan.suppressed),
+    annotations: talliedAnnotations(plan.annotated)
+  };
+}
+function emission(fields) {
+  return { ...fields, contentKey: canonicalJson(fields.item) };
+}
+function compareEmissions(left, right) {
+  return byteCompare(left.eventTime, right.eventTime) || byteCompare(left.contentKey, right.contentKey) || left.plan.planIndex - right.plan.planIndex;
+}
+function hasProvableSubject(candidate, emittedSubjects) {
+  if (candidate.provableByComposite) return true;
+  return candidate.subjectKey !== null && emittedSubjects.has(candidate.subjectKey);
+}
+function withProjectionNote(item, note) {
+  return {
+    ...item,
+    classification: "UNKNOWN",
+    projectionReasons: [...item.projectionReasons ?? [], note]
+  };
+}
+var IDENTIFIER_PATTERN, COHORT_PREFIX, RECORD_TYPE, IDENTITY_FIELDS, REASON_NO_SOURCE, REASON_NOT_AN_OBJECT, REASON_NO_IDENTITY, REASON_NO_OUTPUT, REASON_NO_INSTANT, REASON_ZONE_UNSPECIFIED, REASON_EPOCH_AMBIGUOUS, REASON_NOT_FIRST, REASON_NO_ENTITY_KEY, REASON_OUTSIDE_WINDOW, NOTE_AMOUNT_UNUSABLE, NOTE_AMOUNT_ZERO, NOTE_SUBJECT_UNPROVABLE, SIGNAL_REASON_PREFIX, UNIT_RECORD, UNIT_EMISSION, SUPPRESSION_UNITS, KIND_RECORDS, KIND_SIGNAL, FIELD_READERS, ZONED_INSTANT, CALENDAR_DAY, ZONE_FREE, DIGIT_RUN, EPOCH_FLOOR_MS, EPOCH_CEILING_MS, ENTITY_SCOPED_IDENTITY_FIELDS;
+var init_journey_projection = __esm({
+  "lib/journey-projection.mjs"() {
+    init_canonical();
+    IDENTIFIER_PATTERN = /^[a-z][a-z0-9_]{0,127}$/u;
+    COHORT_PREFIX = "cohort_";
+    RECORD_TYPE = "journey_event";
+    IDENTITY_FIELDS = Object.freeze([
+      "nativeId",
+      "subjectNativeId",
+      "organizationNativeId",
+      "opportunityNativeId",
+      "projectNativeId",
+      "normalizedEmail",
+      "normalizedPhone"
+    ]);
+    REASON_NO_SOURCE = "COLLECTION_MATCHED_NO_PROJECTION_SOURCE";
+    REASON_NOT_AN_OBJECT = "RECORD_NOT_AN_OBJECT";
+    REASON_NO_IDENTITY = "IDENTITY_UNRESOLVED";
+    REASON_NO_OUTPUT = "RECORD_YIELDED_NO_EVENT";
+    REASON_NO_INSTANT = "EVENT_TIME_UNPARSEABLE";
+    REASON_ZONE_UNSPECIFIED = "EVENT_TIME_ZONE_UNSPECIFIED";
+    REASON_EPOCH_AMBIGUOUS = "EVENT_TIME_EPOCH_AMBIGUOUS";
+    REASON_NOT_FIRST = "NOT_FIRST_OF_KIND";
+    REASON_NO_ENTITY_KEY = "ENTITY_NATIVE_ID_UNRESOLVED";
+    REASON_OUTSIDE_WINDOW = "EVENT_TIME_OUTSIDE_APPLIED_WINDOW";
+    NOTE_AMOUNT_UNUSABLE = "REVENUE_NOT_FINITE";
+    NOTE_AMOUNT_ZERO = "REVENUE_ZERO_ON_OUTCOME_STAGE";
+    NOTE_SUBJECT_UNPROVABLE = "SUBJECT_ENTITY_UNRESOLVED";
+    SIGNAL_REASON_PREFIX = "PROJECTION_SUPPRESSED";
+    UNIT_RECORD = "record";
+    UNIT_EMISSION = "emission";
+    SUPPRESSION_UNITS = Object.freeze({
+      [REASON_NO_SOURCE]: UNIT_RECORD,
+      [REASON_NOT_AN_OBJECT]: UNIT_RECORD,
+      [REASON_NO_IDENTITY]: UNIT_RECORD,
+      [REASON_NO_OUTPUT]: UNIT_RECORD,
+      [REASON_NO_INSTANT]: UNIT_EMISSION,
+      [REASON_ZONE_UNSPECIFIED]: UNIT_EMISSION,
+      [REASON_EPOCH_AMBIGUOUS]: UNIT_EMISSION,
+      [REASON_NOT_FIRST]: UNIT_EMISSION,
+      [REASON_NO_ENTITY_KEY]: UNIT_EMISSION,
+      [REASON_OUTSIDE_WINDOW]: UNIT_EMISSION,
+      // Rule 1b, round 3. An unfilled amount suppresses the AMOUNT-BEARING EVENT and nothing else, so
+      // it is an emission-unit reason: one row can carry several events and only this one is dropped.
+      [NOTE_AMOUNT_ZERO]: UNIT_EMISSION
+    });
+    KIND_RECORDS = "projected_records";
+    KIND_SIGNAL = "suppression_signal";
+    FIELD_READERS = Object.freeze({
+      normalizedEmail: asAddressText,
+      normalizedPhone: asDialText
+    });
+    ZONED_INSTANT = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:([Zz])|([+-])(\d{2}):?(\d{2}))$/u;
+    CALENDAR_DAY = /^(\d{4})-(\d{2})-(\d{2})$/u;
+    ZONE_FREE = /^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?$/u;
+    DIGIT_RUN = /^-?\d+$/u;
+    EPOCH_FLOOR_MS = 1e12;
+    EPOCH_CEILING_MS = 41024448e5;
+    ENTITY_SCOPED_IDENTITY_FIELDS = Object.freeze(["opportunityNativeId", "projectNativeId"]);
+  }
+});
+
+// lib/metrics.mjs
+function codedError10(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function deepFreeze8(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const child of Object.values(value)) deepFreeze8(child, seen);
+  return Object.freeze(value);
+}
+function assertDeepFrozen2(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  if (!Object.isFrozen(value)) throw codedError10("METRICS_GRAPH_NOT_FROZEN", TypeError);
+  seen.add(value);
+  for (const child of Object.values(value)) assertDeepFrozen2(child, seen);
+}
+function zoned(value, timezone) {
+  try {
+    return qi.Instant.from(value).toZonedDateTimeISO(timezone);
+  } catch {
+    try {
+      return qi.ZonedDateTime.from(value).withTimeZone(timezone);
+    } catch {
+      throw codedError10("METRICS_TIME_INVALID", TypeError);
+    }
+  }
+}
+function windowOf(start, end) {
+  return {
+    start: start.toString(),
+    end: end.toString(),
+    durationHours: Number(end.epochNanoseconds - start.epochNanoseconds) / 36e11
+  };
+}
+function buildWindows({ cutoff, timezone, maturityDays, capturedThrough }) {
+  if (typeof cutoff !== "string" || typeof timezone !== "string" || !Number.isInteger(maturityDays) || maturityDays < 0 || capturedThrough !== void 0 && typeof capturedThrough !== "string") throw codedError10("METRICS_WINDOW_INVALID", TypeError);
+  let localCutoff;
+  try {
+    localCutoff = zoned(cutoff, timezone);
+  } catch {
+    throw codedError10("METRICS_WINDOW_INVALID", TypeError);
+  }
+  let localCapturedThrough = localCutoff;
+  if (capturedThrough !== void 0) {
+    try {
+      localCapturedThrough = zoned(capturedThrough, timezone);
+    } catch {
+      throw codedError10("METRICS_WINDOW_INVALID", TypeError);
+    }
+  }
+  const currentEnd = localCutoff.subtract({ days: localCutoff.dayOfWeek - 1 }).startOfDay();
+  const currentStart = currentEnd.subtract({ weeks: 1 });
+  const previousStart = currentStart.subtract({ weeks: 1 });
+  const trailingStart = currentEnd.subtract({ days: 28 });
+  const midTrailingStart = currentEnd.subtract({ days: 60 });
+  const longTrailingStart = currentEnd.subtract({ days: 90 });
+  const settledTrailingStart = currentEnd.subtract({ days: 180 });
+  const matureAsOf = currentEnd.subtract({ days: maturityDays });
+  return deepFreeze8({
+    timezone,
+    cutoff: localCutoff.toString(),
+    currentClosedWeek: windowOf(currentStart, currentEnd),
+    previousClosedWeek: windowOf(previousStart, currentStart),
+    trailing28Days: windowOf(trailingStart, currentEnd),
+    /*
+     * THE MATURITY LADDER — 60 / 90 / 180, decided by Xander on 2026-07-27.
+     *
+     * A window no longer than an edge's `allowedLag` can almost never mature anybody: only a
+     * subject entering on the window's very first instant has had the whole lag elapse by the
+     * cutoff. `showed_to_opportunity_outcome` allows 90 days and the longest window was 90 days, so
+     * over 52 simulated weekly runs it reported nothing at all in the weeks the cutoff landed on
+     * the closed-week Monday, and where it did fire it averaged a denominator of 1 to 2 against the
+     * ~23 subjects that actually qualified for the window.
+     *
+     * The fix is not to shorten the lag, which would silently drop slow-closing deals — a real
+     * share of a clinic's revenue. It is to report the SAME measurement at three maturities, each
+     * over a lookback roughly DOUBLE its lag, so roughly half of every window can mature:
+     *
+     *   allowed lag 30 days -> trailing 60 days   reacts fast; says whether a recent change works
+     *   allowed lag 60 days -> trailing 90 days   the middle read
+     *   allowed lag 90 days -> trailing 180 days  the true settled number, too slow to attribute
+     *
+     * All three are needed. The 90/180 number is the honest one but it moves too slowly to credit
+     * or blame anything done this month; the 30/60 number moves within weeks but under-counts deals
+     * that close late. A single long window would hide recent movement entirely, which is the
+     * failure this ladder exists to prevent.
+     *
+     * Every one of them is anchored to the SAME closed-week Monday boundary as every other window
+     * and then counted back in account-local calendar days, so `durationHours` is real elapsed
+     * hours (e.g. 2159 or 2161 for the 90-day window across a DST transition), never a constant.
+     */
+    trailing60Days: windowOf(midTrailingStart, currentEnd),
+    trailing90Days: windowOf(longTrailingStart, currentEnd),
+    trailing180Days: windowOf(settledTrailingStart, currentEnd),
+    matureAsOf: matureAsOf.toString(),
+    maturityDays,
+    // The COLLECTION boundary, kept beside the EVENT boundary rather than folded into it. It plays
+    // no part in placing any window — every window above is anchored to the closed-week Monday and
+    // is byte-identical whether this is declared or not — and exists only so the no-lookahead rule
+    // can be applied to the clock it is actually about.
+    capturedThrough: localCapturedThrough.toString()
+  });
+}
+function instant(value) {
+  try {
+    return qi.Instant.from(value);
+  } catch {
+    throw codedError10("METRICS_EVENT_TIME_INVALID", TypeError);
+  }
+}
+function inside(eventTime, window) {
+  const value = instant(eventTime);
+  return qi.Instant.compare(value, instant(window.start)) >= 0 && qi.Instant.compare(value, instant(window.end)) < 0;
+}
+function lagDuration(allowedLag) {
+  if (!allowedLag || !Number.isFinite(allowedLag.amount) || allowedLag.amount < 0 || !["minutes", "hours", "days", "weeks"].includes(allowedLag.unit)) throw codedError10("METRICS_CONTRACT_INVALID", TypeError);
+  return qi.Duration.from({ [allowedLag.unit]: allowedLag.amount });
+}
+function addLag(eventTime, allowedLag, window) {
+  const duration3 = lagDuration(allowedLag);
+  const timeZoneId = qi.ZonedDateTime.from(window.start).timeZoneId;
+  return instant(eventTime).toZonedDateTimeISO(timeZoneId).add(duration3).toInstant();
+}
+function subjectKey(node) {
+  if (node.organizationNativeId && (node.opportunityNativeId || node.projectNativeId)) {
+    return `${node.journeyInstanceId}:organization:${node.organizationNativeId}:commercial:${node.opportunityNativeId ?? node.projectNativeId}`;
+  }
+  const subject = node.subjectRef ?? node.subjectNativeId ?? node.organizationNativeId ?? node.nodeId;
+  return `${node.journeyInstanceId}:${subject}`;
+}
+function eventKey2(node, reentryRule = "new_journey_instance") {
+  return reentryRule === "new_journey_instance" ? node.cohortInstanceRef ?? subjectKey(node) : subjectKey(node);
+}
+function isObserved(node) {
+  return node.classification === "OBSERVED" && node.provenance?.completeness === "COMPLETE" && typeof node.eventTime === "string";
+}
+function stageOf(node) {
+  return node.stage ?? node.milestone;
+}
+function sortEvents(left, right) {
+  return qi.Instant.compare(instant(left.eventTime), instant(right.eventTime)) || left.nodeId.localeCompare(right.nodeId);
+}
+function carriesIdentity(type) {
+  return EDGE_IDENTITY_POLICY[type] !== "SHARED_ORIGIN";
+}
+function reportingWindowsFor(contract) {
+  const declared = contract.reportingWindows;
+  if (declared === void 0) return DEFAULT_REPORTING_WINDOWS;
+  if (!Array.isArray(declared) || declared.length === 0 || new Set(declared).size !== declared.length || declared.some((name) => !WINDOW_NAMES.includes(name))) throw codedError10("METRICS_CONTRACT_INVALID", TypeError);
+  return declared;
+}
+function coverageFloorFor(contract, profileFloor) {
+  const rule = contract.eligibilityRule;
+  const declared = rule && typeof rule === "object" && Object.hasOwn(rule, "minimumCoverage") ? rule.minimumCoverage : profileFloor;
+  if (declared === void 0) return DEFAULT_COVERAGE_FLOOR;
+  if (typeof declared !== "number" || !Number.isFinite(declared) || declared < 0 || declared > 1) {
+    throw codedError10("METRICS_CONTRACT_INVALID", TypeError);
+  }
+  return declared;
+}
+function emptyCounts() {
+  return {
+    eligible: null,
+    excluded: null,
+    immature: null,
+    exclusions: {},
+    coverageRatio: null,
+    maturityRatio: null
+  };
+}
+function unknownMetric(window, threshold, coverageFloor, reasonCode = "MISSING_REQUIRED_EVIDENCE", counts = emptyCounts()) {
+  return {
+    ...UNKNOWN,
+    reasonCode,
+    eligible: counts.eligible,
+    excluded: counts.excluded,
+    immature: counts.immature,
+    exclusions: counts.exclusions,
+    threshold,
+    rankEligible: false,
+    window,
+    coverage: "INCOMPLETE",
+    coverageRatio: counts.coverageRatio,
+    maturityRatio: counts.maturityRatio,
+    coverageFloor,
+    ...floorDisclosure(coverageFloor)
+  };
+}
+function coverageLabel(excluded, immature) {
+  return excluded === 0 && immature === 0 ? "COMPLETE" : "INCOMPLETE";
+}
+function emptyValueReason(eligible, excluded) {
+  if (eligible === 0) return "NO_ELIGIBLE_POPULATION";
+  if (excluded === eligible) return "ALL_SUBJECTS_EXCLUDED";
+  return "RATE_NOT_DERIVABLE";
+}
+function floorDisclosure(coverageFloor) {
+  return coverageFloor === 0 ? { coverageFloorDisabled: true } : {};
+}
+function placeable(value) {
+  if (typeof value !== "string") return null;
+  try {
+    return qi.Instant.from(value);
+  } catch {
+    return null;
+  }
+}
+function subjectOwners(graph, subjectNodes) {
+  const owners = /* @__PURE__ */ new Map();
+  const add = (nodeId, key) => {
+    const current = owners.get(nodeId);
+    if (current) {
+      if (current.has(key)) return false;
+      current.add(key);
+      return true;
+    }
+    owners.set(nodeId, /* @__PURE__ */ new Set([key]));
+    return true;
+  };
+  for (const node of subjectNodes) add(node.nodeId, subjectKey(node));
+  const identityEdges = graph.edges.filter(({ type }) => carriesIdentity(type));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const { fromNodeId, toNodeId } of identityEdges) {
+      for (const key of [...owners.get(fromNodeId) ?? []]) {
+        if (add(toNodeId, key)) changed = true;
+      }
+      for (const key of [...owners.get(toNodeId) ?? []]) {
+        if (add(fromNodeId, key)) changed = true;
+      }
+    }
+  }
+  return owners;
+}
+function taintedSubjects(graph, nodes) {
+  const subjectNodes = nodes.filter(isMetricCandidate);
+  const owners = subjectOwners(graph, subjectNodes);
+  const byJourney = /* @__PURE__ */ new Map();
+  const byEvidenceRef = /* @__PURE__ */ new Map();
+  const tainted = /* @__PURE__ */ new Map();
+  const mark = (key, reason) => tainted.set(key, moreSpecific(tainted.get(key), reason));
+  for (const node of subjectNodes) {
+    const key = subjectKey(node);
+    const journey = byJourney.get(node.journeyInstanceId) ?? /* @__PURE__ */ new Set();
+    journey.add(key);
+    byJourney.set(node.journeyInstanceId, journey);
+    for (const ref of node.evidenceRefs ?? []) {
+      const refSubjects = byEvidenceRef.get(ref) ?? /* @__PURE__ */ new Set();
+      refSubjects.add(key);
+      byEvidenceRef.set(ref, refSubjects);
+    }
+    if (!isObserved(node)) mark(key, "NON_OBSERVED_EVIDENCE");
+  }
+  const attribute = (item, reason) => {
+    const keys = /* @__PURE__ */ new Set();
+    if (typeof item.journeyInstanceId === "string") {
+      for (const key of byJourney.get(item.journeyInstanceId) ?? []) keys.add(key);
+    }
+    const named = [
+      ...typeof item.recordNodeId === "string" ? [item.recordNodeId] : [],
+      ...Array.isArray(item.nodeIds) ? item.nodeIds : []
+    ];
+    for (const nodeId of named) {
+      for (const key of owners.get(nodeId) ?? []) keys.add(key);
+    }
+    for (const ref of Array.isArray(item.evidenceRefs) ? item.evidenceRefs : []) {
+      for (const key of byEvidenceRef.get(ref) ?? []) keys.add(key);
+    }
+    for (const key of keys) mark(key, reason);
+  };
+  for (const item of graph.unresolvedJoins) attribute(item, "UNRESOLVED_JOIN");
+  for (const item of graph.conflicts) attribute(item, "IDENTITY_CONFLICT");
+  for (const { type, fromNodeId, toNodeId } of graph.edges) {
+    if (type !== "inferred_match") continue;
+    for (const nodeId of [fromNodeId, toNodeId]) {
+      for (const key of owners.get(nodeId) ?? []) mark(key, "INFERRED_MATCH");
+    }
+  }
+  return tainted;
+}
+function hasProvingJoin(graph, nodeId) {
+  return graph.edges.some(({ type, toNodeId, joinMethod, joinConfidence }) => type === "identity_exact" && toNodeId === nodeId && ["native_id", "deterministic_composite"].includes(joinMethod) && joinConfidence === "exact");
+}
+function isMetricCandidate(node) {
+  return METRIC_EVENT_TYPES.includes(node.type) || typeof node.journeyInstanceId === "string" && typeof stageOf(node) === "string";
+}
+function untrustedReason(graph, node, tainted) {
+  if (!METRIC_EVENT_TYPES.includes(node.type)) return "NON_METRIC_EVENT_TYPE";
+  if (!isObserved(node)) return "NON_OBSERVED_EVIDENCE";
+  const subjectTaint = tainted.get(subjectKey(node));
+  if (subjectTaint) return subjectTaint;
+  return hasProvingJoin(graph, node.nodeId) ? null : "UNPROVEN_JOIN";
+}
+function moreSpecific(current, reason) {
+  return current === void 0 || EXCLUSION_REASONS.indexOf(reason) < EXCLUSION_REASONS.indexOf(current) ? reason : current;
+}
+function metricPopulation(graph) {
+  const all = graph.nodes;
+  const tainted = taintedSubjects(graph, all);
+  const reasons = /* @__PURE__ */ new Map();
+  for (const node of all) reasons.set(node.nodeId, untrustedReason(graph, node, tainted));
+  return Object.freeze({
+    all,
+    countable: Object.freeze(all.filter((node) => reasons.get(node.nodeId) === null)),
+    reasonFor(node) {
+      if (!reasons.has(node.nodeId)) throw codedError10("METRICS_POPULATION_UNKNOWN_NODE", TypeError);
+      return reasons.get(node.nodeId);
+    },
+    isCountable(node) {
+      return reasons.get(node.nodeId) === null;
+    }
+  });
+}
+function countsFor(keyed, matureKeys, exclusionByKey, unplaceable, placed) {
+  const tally2 = {};
+  const bump = (reason) => {
+    tally2[reason] = (tally2[reason] ?? 0) + 1;
+  };
+  const measurable = [];
+  let immature = 0;
+  for (const [key, node] of keyed) {
+    const reason = exclusionByKey.get(key);
+    if (reason) {
+      bump(reason);
+      continue;
+    }
+    if (!matureKeys.has(key)) {
+      immature += 1;
+      continue;
+    }
+    measurable.push([key, node]);
+  }
+  let eligible = keyed.length;
+  for (const key of [...unplaceable].sort()) {
+    if (placed.has(key)) continue;
+    eligible += 1;
+    bump("UNPLACEABLE_EVENT_TIME");
+  }
+  const denominator = measurable.length;
+  const answerable = eligible - immature;
+  return {
+    measurable,
+    counts: {
+      eligible,
+      excluded: answerable - denominator,
+      immature,
+      answerable,
+      exclusions: Object.fromEntries(EXCLUSION_REASONS.filter((reason) => tally2[reason]).map((reason) => [reason, tally2[reason]])),
+      coverageRatio: answerable === 0 ? null : denominator / answerable,
+      maturityRatio: eligible === 0 ? null : answerable / eligible
+    }
+  };
+}
+function computeEdge(population, contract, window, analysisCutoff, matureAsOf, profileFloor, captureHorizon) {
+  const rule = contract.eligibilityRule;
+  const configuredThreshold = rule?.minimumSample;
+  if (rule && typeof rule === "object" && Object.hasOwn(rule, "minimumSample") && (!Number.isInteger(configuredThreshold) || configuredThreshold < 0)) throw codedError10("METRICS_CONTRACT_INVALID", TypeError);
+  const threshold = Number.isInteger(configuredThreshold) && configuredThreshold >= 0 ? configuredThreshold : 0;
+  const coverageFloor = coverageFloorFor(contract, profileFloor);
+  if (contract.nativeMapping !== "MAPPED") return unknownMetric(window, threshold, coverageFloor);
+  const journeyNodes = population.all.filter((node) => node.journeyInstanceId === contract.journeyInstanceId && node.journeyId === contract.journeyId);
+  const visible = (node) => {
+    const captured = placeable(node.capturedAt ?? node.eventTime);
+    return !captured || qi.Instant.compare(captured, instant(captureHorizon)) <= 0;
+  };
+  const events = journeyNodes.filter((node) => population.isCountable(node) && qi.Instant.compare(
+    instant(node.capturedAt ?? node.eventTime),
+    instant(captureHorizon)
+  ) <= 0).sort(sortEvents);
+  if (contract.reentryRule === "new_journey_instance" && events.some((node) => [contract.fromStage, contract.toStage].includes(stageOf(node)) && typeof node.cohortInstanceRef !== "string")) return unknownMetric(window, threshold, coverageFloor, "MISSING_COHORT_INSTANCE");
+  const consumedStages = [contract.fromStage, contract.toStage];
+  const participants = journeyNodes.filter((node) => consumedStages.includes(stageOf(node)) && visible(node));
+  const exclusionByKey = /* @__PURE__ */ new Map();
+  for (const node of participants) {
+    const reason = population.reasonFor(node);
+    if (!reason) continue;
+    const key = eventKey2(node, contract.reentryRule);
+    exclusionByKey.set(key, moreSpecific(exclusionByKey.get(key), reason));
+  }
+  const fromByKey = /* @__PURE__ */ new Map();
+  const unplaceable = /* @__PURE__ */ new Set();
+  const placed = /* @__PURE__ */ new Set();
+  for (const node of participants) {
+    if (stageOf(node) !== contract.fromStage) continue;
+    const key = eventKey2(node, contract.reentryRule);
+    if (!placeable(node.eventTime)) {
+      unplaceable.add(key);
+      continue;
+    }
+    placed.add(key);
+    if (!inside(node.eventTime, window)) continue;
+    const prior = fromByKey.get(key);
+    if (!prior || sortEvents(node, prior) < 0) fromByKey.set(key, node);
+  }
+  const entrants = [...fromByKey.entries()].sort(([, left], [, right]) => sortEvents(left, right));
+  const isRevenueMetric = contract.toStage === "collected_revenue" || contract.edgeId.toLowerCase().includes("revenue");
+  const isValueMeasure = contract.measure === "VALUE";
+  const matureKeys = /* @__PURE__ */ new Set();
+  for (const [key, node] of entrants) {
+    if (isValueMeasure) {
+      matureKeys.add(key);
+      continue;
+    }
+    const maturity = addLag(node.eventTime, contract.allowedLag, window);
+    if (qi.Instant.compare(instant(node.eventTime), instant(matureAsOf)) < 0 && qi.Instant.compare(maturity, instant(analysisCutoff)) <= 0) matureKeys.add(key);
+  }
+  const { measurable, counts } = countsFor(
+    entrants,
+    matureKeys,
+    exclusionByKey,
+    unplaceable,
+    placed
+  );
+  const {
+    eligible,
+    excluded,
+    immature,
+    answerable,
+    exclusions,
+    coverageRatio,
+    maturityRatio
+  } = counts;
+  const denominator = measurable.length;
+  const emptyReason = () => {
+    if (eligible === 0) return "NO_ELIGIBLE_POPULATION";
+    if (excluded === eligible) return "ALL_SUBJECTS_EXCLUDED";
+    return "IMMATURE_COHORT";
+  };
+  if (!isValueMeasure) {
+    if (eligible > 0 && denominator === 0) {
+      return unknownMetric(window, threshold, coverageFloor, emptyReason(), counts);
+    }
+    if (answerable > 0 && coverageRatio < coverageFloor) {
+      return unknownMetric(window, threshold, coverageFloor, "COVERAGE_BELOW_FLOOR", counts);
+    }
+  }
+  let numerator = 0;
+  let value = 0;
+  let valueSubjects = 0;
+  for (const [key, from] of measurable) {
+    const fromTime = instant(from.eventTime);
+    const deadline = addLag(from.eventTime, contract.allowedLag, window);
+    const to2 = events.find((candidate) => eventKey2(candidate, contract.reentryRule) === key && stageOf(candidate) === contract.toStage && qi.Instant.compare(instant(candidate.eventTime), fromTime) >= 0 && qi.Instant.compare(instant(candidate.eventTime), deadline) <= 0 && qi.Instant.compare(
+      instant(candidate.capturedAt ?? candidate.eventTime),
+      instant(captureHorizon)
+    ) <= 0);
+    if (to2) {
+      if (isRevenueMetric && (!Number.isFinite(to2.revenueAmount) || to2.revenueAmount < 0)) {
+        return unknownMetric(
+          window,
+          threshold,
+          coverageFloor,
+          "INVALID_REVENUE_EVIDENCE",
+          counts
+        );
+      }
+      numerator += 1;
+      if (Number.isFinite(to2.revenueAmount)) {
+        value += to2.revenueAmount;
+        valueSubjects += 1;
+      }
+    }
+  }
+  if (isValueMeasure) {
+    return {
+      ...UNKNOWN,
+      reasonCode: emptyValueReason(eligible, excluded),
+      value: valueSubjects === 0 ? null : value,
+      valueSubjects,
+      eligible,
+      excluded,
+      immature,
+      exclusions,
+      threshold,
+      // A value can never satisfy a RATE sample threshold, and claiming it could would let a
+      // constant back into the ranking by the side door.
+      rankEligible: false,
+      window,
+      coverage: coverageLabel(excluded, immature),
+      coverageRatio,
+      maturityRatio,
+      coverageFloor,
+      ...floorDisclosure(coverageFloor)
+    };
+  }
+  const result = {
+    state: "OBSERVED",
+    numerator,
+    denominator,
+    rate: denominator === 0 ? null : numerator / denominator,
+    eligible,
+    excluded,
+    immature,
+    exclusions,
+    threshold,
+    rankEligible: denominator >= threshold,
+    window,
+    // `denominator === 0` here can only mean `eligible === 0`: a collapsed denominator was
+    // returned as UNKNOWN above, so this zero is a measured zero and never a false one.
+    coverage: coverageLabel(excluded, immature),
+    coverageRatio,
+    maturityRatio,
+    coverageFloor,
+    ...floorDisclosure(coverageFloor),
+    reasonCode: denominator === 0 ? "NO_ELIGIBLE_POPULATION" : null
+  };
+  if (isRevenueMetric || value !== 0) result.value = denominator === 0 ? null : value;
+  return result;
+}
+function stockFor(population, end, captureHorizon) {
+  const latest = /* @__PURE__ */ new Map();
+  for (const node of [...population.countable].sort(sortEvents)) {
+    if (qi.Instant.compare(instant(node.eventTime), instant(end)) >= 0) continue;
+    if (qi.Instant.compare(
+      instant(node.capturedAt ?? node.eventTime),
+      instant(captureHorizon)
+    ) > 0) continue;
+    latest.set(subjectKey(node), node);
+  }
+  const counts = {};
+  for (const node of latest.values()) {
+    const stage = stageOf(node);
+    const journey = counts[node.journeyInstanceId] ?? {};
+    journey[stage] = (journey[stage] ?? 0) + 1;
+    counts[node.journeyInstanceId] = journey;
+  }
+  return counts;
+}
+function cohortCounts(population, contracts, window, captureHorizon) {
+  const stagesByJourney = /* @__PURE__ */ new Map();
+  for (const contract of contracts) {
+    const current = stagesByJourney.get(contract.journeyInstanceId) ?? {
+      from: /* @__PURE__ */ new Set(),
+      to: /* @__PURE__ */ new Set()
+    };
+    current.from.add(contract.fromStage);
+    current.to.add(contract.toStage);
+    stagesByJourney.set(contract.journeyInstanceId, current);
+  }
+  const entriesByJourney = new Map([...stagesByJourney].map(([journey, stages]) => {
+    const roots = [...stages.from].filter((stage) => !stages.to.has(stage));
+    return [journey, new Set(roots.length > 0 ? roots : stages.from)];
+  }));
+  const byJourney = /* @__PURE__ */ new Map();
+  for (const node of population.countable.filter(({ eventTime, capturedAt: capturedAt2 }) => (
+    // The EVENT clock places the entrant in the window; the COLLECTION clock decides whether this
+    // run had read it yet. See `buildWindows`.
+    inside(eventTime, window) && qi.Instant.compare(
+      instant(capturedAt2 ?? eventTime),
+      instant(captureHorizon)
+    ) <= 0
+  ))) {
+    const key = node.journeyInstanceId;
+    if (!entriesByJourney.get(key)?.has(stageOf(node))) continue;
+    const subjects = byJourney.get(key) ?? /* @__PURE__ */ new Set();
+    subjects.add(eventKey2(node));
+    byJourney.set(key, subjects);
+  }
+  return Object.fromEntries([...byJourney].sort(([a2], [b2]) => a2.localeCompare(b2)).map(([key, values]) => [key, values.size]));
+}
+function computeJourneyMetrics({ graph, metricContracts, windows }) {
+  if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges) || !Array.isArray(graph.conflicts) || !Array.isArray(graph.unresolvedJoins) || !metricContracts || !Array.isArray(metricContracts.edges) || !windows?.currentClosedWeek) throw codedError10("METRICS_INPUT_INVALID", TypeError);
+  assertDeepFrozen2(graph);
+  const windowsByEdge = metricContracts.edges.map(
+    (contract) => [contract, new Set(reportingWindowsFor(contract))]
+  );
+  const reported = new Set(DEFAULT_REPORTING_WINDOWS);
+  for (const [, declared] of windowsByEdge) for (const name of declared) reported.add(name);
+  const namedWindows = WINDOW_NAMES.filter((name) => windows[name] && reported.has(name)).map((name) => [
+    name,
+    windows[name],
+    windowsByEdge.filter(([, declared]) => declared.has(name)).map(([contract]) => contract)
+  ]);
+  const population = metricPopulation(graph);
+  const captureHorizon = windows.capturedThrough ?? windows.cutoff;
+  const horizon = instant(captureHorizon);
+  const candidates = population.all.filter(isMetricCandidate);
+  if (candidates.length > 0 && candidates.every((node) => {
+    const captured = placeable(node.capturedAt ?? node.eventTime);
+    return captured !== null && qi.Instant.compare(captured, horizon) > 0;
+  })) throw codedError10("METRICS_CAPTURE_HORIZON_PRECEDES_EVIDENCE", TypeError);
+  const metrics = {};
+  const cohorts = {};
+  for (const [name, window, edges] of namedWindows) {
+    metrics[name] = {};
+    for (const contract of edges) {
+      metrics[name][contract.edgeId] = computeEdge(
+        population,
+        contract,
+        window,
+        windows.cutoff,
+        windows.matureAsOf,
+        metricContracts.coverageFloor,
+        captureHorizon
+      );
+    }
+    cohorts[name] = cohortCounts(
+      population,
+      edges,
+      window,
+      captureHorizon
+    );
+  }
+  return deepFreeze8({
+    metrics,
+    cohorts,
+    currentStock: stockFor(
+      population,
+      windows.currentClosedWeek.end,
+      captureHorizon
+    )
+  });
+}
+var UNKNOWN, DEFAULT_COVERAGE_FLOOR, EXCLUSION_REASONS, METRIC_EVENT_TYPES, EDGE_IDENTITY_POLICY;
+var init_metrics = __esm({
+  "lib/metrics.mjs"() {
+    init_index_esm();
+    init_window_names();
+    UNKNOWN = Object.freeze({
+      state: "UNKNOWN",
+      numerator: null,
+      denominator: null,
+      rate: null,
+      reasonCode: "MISSING_REQUIRED_EVIDENCE"
+    });
+    DEFAULT_COVERAGE_FLOOR = 0.8;
+    EXCLUSION_REASONS = Object.freeze([
+      "NON_METRIC_EVENT_TYPE",
+      "NON_OBSERVED_EVIDENCE",
+      "UNRESOLVED_JOIN",
+      "IDENTITY_CONFLICT",
+      "INFERRED_MATCH",
+      "UNPROVEN_JOIN",
+      "UNPLACEABLE_EVENT_TIME"
+    ]);
+    METRIC_EVENT_TYPES = Object.freeze(["journey_event", "portal_milestone"]);
+    EDGE_IDENTITY_POLICY = Object.freeze({
+      attributed_by_source: "SHARED_ORIGIN",
+      configured_to_trigger: "SHARED_ORIGIN",
+      contradicts: "IDENTITY",
+      enrolled_in: "SHARED_ORIGIN",
+      execution_emitted: "SHARED_ORIGIN",
+      identity_exact: "IDENTITY",
+      inferred_match: "IDENTITY",
+      intended_by: "SHARED_ORIGIN",
+      preceded: "IDENTITY"
+    });
+  }
+});
+
+// lib/normalize.mjs
+function codedError11(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function isPlainObject11(value) {
+  return Boolean(
+    value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+function clone2(value, code = "EVIDENCE_VALUE_INVALID") {
+  try {
+    return JSON.parse(canonicalJson(value));
+  } catch {
+    throw codedError11(code, TypeError);
+  }
+}
+function isCanonicalTimestamp2(value) {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+function deepFreeze9(value, seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value)) deepFreeze9(nested, seen);
+  return Object.freeze(value);
+}
+function assertLocation(value, locationId, seen = /* @__PURE__ */ new WeakSet()) {
+  if (!value || typeof value !== "object") return;
+  if (seen.has(value)) throw codedError11("EVIDENCE_VALUE_INVALID", TypeError);
+  seen.add(value);
+  try {
+    for (const [key, nested] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, "");
+      if (["boundlocationid", "ghllocationid", "locationid"].includes(normalizedKey) && nested !== locationId) throw codedError11("EVIDENCE_LOCATION_MISMATCH");
+      assertLocation(nested, locationId, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+function assertWindow(window, code) {
+  if (!isPlainObject11(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError11(code, TypeError);
+}
+function validateCollection(collection, locationId) {
+  if (!isPlainObject11(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject11(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError11(
+    collection?.boundLocationId !== locationId ? "EVIDENCE_LOCATION_MISMATCH" : "EVIDENCE_COLLECTION_INVALID",
+    TypeError
+  );
+  assertWindow(collection.requestedWindow, "EVIDENCE_COLLECTION_INVALID");
+  assertWindow(collection.appliedWindow, "EVIDENCE_COLLECTION_INVALID");
+  if (Date.parse(collection.appliedWindow.from) < Date.parse(collection.requestedWindow.from) || Date.parse(collection.appliedWindow.to) > Date.parse(collection.requestedWindow.to)) throw codedError11("EVIDENCE_WINDOW_MISMATCH");
+  if (collection.page.complete && (collection.page.truncated || collection.page.nextCursor !== null || collection.page.reportedCount !== collection.items.length || Object.hasOwn(collection, "incompleteReason"))) throw codedError11("EVIDENCE_COLLECTION_INVALID");
+  if (!collection.page.complete && typeof collection.incompleteReason !== "string") {
+    throw codedError11("EVIDENCE_COLLECTION_INVALID");
+  }
+}
+function normalizeItem(item, provenance, occurrenceOrdinal) {
+  if (!isPlainObject11(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
+    throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  }
+  if (Object.hasOwn(item, "eventTime") && !isCanonicalTimestamp2(item.eventTime) || Object.hasOwn(item, "evidenceRef") && (typeof item.evidenceRef !== "string" || !/^ev_[a-f0-9]{16,64}$/u.test(item.evidenceRef)) || Object.hasOwn(item, "definitionHash") && !/^[a-f0-9]{64}$/u.test(item.definitionHash) || Object.hasOwn(item, "effectiveDefinitionHash") && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash) || Object.hasOwn(item, "cohortInstanceRef") && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef) || Object.hasOwn(item, "revenueAmount") && (typeof item.revenueAmount !== "number" || !Number.isFinite(item.revenueAmount) || item.revenueAmount < 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  const effectiveClassification = provenance.completeness === "COMPLETE" ? item.classification ?? "OBSERVED" : "UNKNOWN";
+  const eventTypes = /* @__PURE__ */ new Set([
+    "journey_event",
+    "portal_milestone",
+    "workflow_execution",
+    "handoff"
+  ]);
+  if (eventTypes.has(item.recordType) && !isCanonicalTimestamp2(item.eventTime)) {
+    throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  }
+  if (["journey_event", "portal_milestone"].includes(item.recordType) && (typeof item.journeyId !== "string" || item.journeyId.length === 0 || typeof item.journeyInstanceId !== "string" || item.journeyInstanceId.length === 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  const identifierPattern = /^[a-z][a-z0-9_]{0,127}$/u;
+  if (effectiveClassification === "OBSERVED" && item.recordType === "journey_event" && (typeof item.stage !== "string" || !identifierPattern.test(item.stage))) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  if (effectiveClassification === "OBSERVED" && item.recordType === "journey_event" && item.stage === "collected_revenue" && (typeof item.revenueAmount !== "number" || !Number.isFinite(item.revenueAmount) || item.revenueAmount < 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  if (effectiveClassification === "OBSERVED" && item.recordType === "portal_milestone" && (typeof item.milestone !== "string" || !identifierPattern.test(item.milestone))) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  if (effectiveClassification === "OBSERVED" && ["journey_event", "portal_milestone"].includes(item.recordType) && !(typeof item.subjectNativeId === "string" && item.subjectNativeId.length > 0 || typeof item.organizationNativeId === "string" && item.organizationNativeId.length > 0 && (typeof item.opportunityNativeId === "string" && item.opportunityNativeId.length > 0 || typeof item.projectNativeId === "string" && item.projectNativeId.length > 0) || typeof item.normalizedEmail === "string" && item.normalizedEmail.length > 0 || typeof item.normalizedPhone === "string" && item.normalizedPhone.length > 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  if (item.recordType === "handoff" && (typeof item.fromJourneyId !== "string" || item.fromJourneyId.length === 0 || typeof item.toJourneyId !== "string" || item.toJourneyId.length === 0 || item.fromJourneyId === item.toJourneyId)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  if (item.recordType === "workflow_execution" && (typeof item.workflowNativeId !== "string" || item.workflowNativeId.length === 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  for (const field of [
+    "nativeId",
+    "subjectNativeId",
+    "organizationNativeId",
+    "opportunityNativeId",
+    "projectNativeId",
+    "workflowNativeId",
+    "normalizedEmail",
+    "normalizedPhone",
+    "cohortInstanceRef"
+  ]) {
+    if (Object.hasOwn(item, field) && (typeof item[field] !== "string" || item[field].length === 0)) {
+      throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+    }
+  }
+  if (Object.hasOwn(item, "classification") && !["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"].includes(item.classification)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+  const sourceItem = clone2(item, "EVIDENCE_RECORD_INVALID");
+  const evidenceRef = typeof sourceItem.evidenceRef === "string" ? sourceItem.evidenceRef : `ev_${sha256({ provenance, occurrenceOrdinal, sourceItem }).slice(0, 32)}`;
+  const canonical = {
+    ...sourceItem,
+    evidenceRef,
+    source: provenance.source,
+    operationId: provenance.operationId,
+    boundLocationId: provenance.boundLocationId,
+    requestedWindow: provenance.requestedWindow,
+    appliedWindow: provenance.appliedWindow,
+    capturedAt: provenance.capturedAt,
+    classification: effectiveClassification,
+    provenance
+  };
+  canonical.recordId = `record_${sha256({ canonical, occurrenceOrdinal }).slice(0, 32)}`;
+  return canonical;
+}
+function normalizeEvidence(records, context) {
+  if (!Array.isArray(records) || records.length === 0 || !isPlainObject11(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError11("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
+  const pending = [];
+  for (const collection of records) {
+    validateCollection(collection, context.locationId);
+    const provenance = {
+      source: collection.source,
+      operationId: collection.operationId,
+      boundLocationId: collection.boundLocationId,
+      requestedWindow: clone2(collection.requestedWindow),
+      appliedWindow: clone2(collection.appliedWindow),
+      capturedAt: collection.capturedAt,
+      completeness: collection.page.complete ? "COMPLETE" : "INCOMPLETE",
+      incompleteReason: collection.page.complete ? null : collection.incompleteReason
+    };
+    assertLocation(collection.items, context.locationId);
+    if (collection.items.length === 0 && !collection.page.complete) {
+      const item = {
+        recordType: "collection_status",
+        status: "UNKNOWN",
+        reason: collection.incompleteReason
+      };
+      pending.push({
+        item,
+        provenance,
+        sortKey: canonicalJson({ item, provenance })
+      });
+      continue;
+    }
+    for (const item of collection.items) {
+      let sortKey;
+      try {
+        sortKey = canonicalJson({ item, provenance });
+      } catch {
+        throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
+      }
+      pending.push({
+        item,
+        provenance,
+        sortKey
+      });
+    }
+  }
+  pending.sort((left, right) => left.sortKey.localeCompare(right.sortKey));
+  const normalized = [];
+  let priorKey = null;
+  let occurrenceOrdinal = -1;
+  for (const entry of pending) {
+    occurrenceOrdinal = entry.sortKey === priorKey ? occurrenceOrdinal + 1 : 0;
+    priorKey = entry.sortKey;
+    normalized.push(normalizeItem(entry.item, entry.provenance, occurrenceOrdinal));
+  }
+  normalized.sort((left, right) => left.recordId.localeCompare(right.recordId));
+  return deepFreeze9(normalized);
+}
+var init_normalize = __esm({
+  "lib/normalize.mjs"() {
+    init_canonical();
+  }
+});
+
+// lib/measurement.mjs
+function codedError12(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function byteOrder(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function isPlainObject12(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function sealedProfileId(frozenInputs) {
+  const declared = frozenInputs?.target?.operatingProfile;
+  if (typeof declared !== "string" || declared.length === 0) {
+    throw codedError12("MEASUREMENT_PROFILE_UNDECLARED");
+  }
+  return declared;
+}
+function sealedTimezone(frozenInputs) {
+  const declared = frozenInputs?.timezone;
+  if (typeof declared !== "string" || declared.length === 0) {
+    throw codedError12("MEASUREMENT_TIMEZONE_UNDECLARED");
+  }
+  return declared;
+}
+function collectionsFromScopes(publicEvidence) {
+  if (!isPlainObject12(publicEvidence) || !Array.isArray(publicEvidence.scopes)) {
+    throw codedError12("MEASUREMENT_PUBLIC_EVIDENCE_SHAPE_UNEXPECTED", TypeError);
+  }
+  return publicEvidence.scopes.map((scope) => {
+    if (!isPlainObject12(scope) || !isPlainObject12(scope.page)) {
+      throw codedError12("MEASUREMENT_PUBLIC_EVIDENCE_SHAPE_UNEXPECTED", TypeError);
+    }
+    const collection = {
+      source: publicEvidence.source,
+      operationId: scope.operationId,
+      boundLocationId: publicEvidence.boundLocationId,
+      requestedWindow: { ...scope.requestedWindow },
+      appliedWindow: { ...scope.appliedWindow },
+      capturedAt: scope.capturedAt,
+      items: scope.items,
+      page: { ...scope.page }
+    };
+    if (collection.page.complete !== true) {
+      collection.incompleteReason = typeof scope.incompleteReason === "string" && scope.incompleteReason.length > 0 ? scope.incompleteReason : "PUBLIC_SCOPE_INCOMPLETE";
+    }
+    return collection;
+  });
+}
+function capturedThroughOf(publicEvidence) {
+  const stamps = publicEvidence.scopes.map((scope) => scope.capturedAt).filter((value) => typeof value === "string" && value.length > 0).sort();
+  return stamps.at(-1);
+}
+function collectionSummary(publicEvidence) {
+  return publicEvidence.scopes.map((scope) => ({
+    operationId: scope.operationId,
+    actionId: scope.actionId ?? null,
+    status: scope.status ?? null,
+    incompleteReason: scope.incompleteReason ?? null,
+    collectedCount: Array.isArray(scope.items) ? scope.items.length : 0,
+    reportedCount: scope.page?.reportedCount ?? null,
+    appliedWindow: { ...scope.appliedWindow }
+  })).sort((left, right) => byteOrder(canonicalJson(left), canonicalJson(right)));
+}
+function projectionSummary(projected) {
+  return projected.map((envelope) => ({
+    operationId: envelope.operationId,
+    kind: envelope.projection.kind,
+    inputItemCount: envelope.projection.inputItemCount,
+    recordsWithEmissions: envelope.projection.recordsWithEmissions,
+    emittedCount: envelope.projection.emittedCount,
+    // Rule 7: a projector that quietly drops 80% of an account looks identical to a healthy one
+    // from downstream, so every suppression travels with the numbers it removed itself from.
+    suppressed: envelope.projection.suppressed.map((entry) => ({ ...entry })),
+    annotations: envelope.projection.annotations.map((entry) => ({ ...entry }))
+  }));
+}
+function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
+  const profileId = sealedProfileId(frozenInputs);
+  const timezone = sealedTimezone(frozenInputs);
+  const profile = loadProfile(profileId);
+  const projection = loadProjection(profileId);
+  const metricContracts = loadMetricContracts(profileId);
+  validateProjectionForProfile(profile, projection, metricContracts);
+  const locationId = publicEvidence?.boundLocationId;
+  if (typeof locationId !== "string" || locationId.length === 0) {
+    throw codedError12("MEASUREMENT_LOCATION_UNBOUND");
+  }
+  if (typeof frozenInputs.locationId === "string" && frozenInputs.locationId !== locationId) throw codedError12("MEASUREMENT_LOCATION_MISMATCH");
+  const cutoffSource = publicEvidence?.collectionWindow?.to;
+  if (typeof cutoffSource !== "string" || cutoffSource.length === 0) {
+    throw codedError12("MEASUREMENT_CUTOFF_UNDECLARED");
+  }
+  const context = { locationId };
+  const collections = collectionsFromScopes(publicEvidence);
+  const projected = projectJourneyEvents({
+    collections,
+    context,
+    profile,
+    projection
+  });
+  const records = normalizeEvidence(projected, context);
+  const graph = buildEvidenceGraph({ records, context, profile });
+  const windows = buildWindows({
+    cutoff: new Date(cutoffSource).toISOString(),
+    timezone,
+    maturityDays: GLOBAL_MATURITY_GRACE_DAYS,
+    capturedThrough: capturedThroughOf(publicEvidence)
+  });
+  const metrics = computeJourneyMetrics({ graph, metricContracts, windows });
+  return {
+    schemaVersion: MEASUREMENT_SCHEMA,
+    profileId,
+    locationId,
+    collectionWindow: { ...publicEvidence.collectionWindow },
+    collectionMode: publicEvidence.collectionMode ?? null,
+    // The collection rail's own account of what it could not finish. Carried onto the measurement
+    // so a later stage cannot read the numbers without also seeing what was missing from them.
+    collectionLimitations: (publicEvidence.limitations ?? []).map((entry) => ({ ...entry })),
+    collection: collectionSummary(publicEvidence),
+    projection: projectionSummary(projected),
+    // The unmeasurable edges are stated on the measurement rather than left implicit in a metric
+    // cell reading UNKNOWN. "We cannot see this from public data" and "we looked and found
+    // nothing" are different sentences and a client is owed the difference.
+    unmeasurableEdges: [...projection.unmeasurableEdges ?? []].sort(),
+    // The reads this account exposes that the projection deliberately does not turn into journey
+    // evidence. Same reasoning as above: a stage with no signal is a KNOWN blind spot, not a zero.
+    unprojectedActions: [...projection.unprojectedActions ?? []].map(({ actionId, reason }) => ({ actionId, reason })).sort((left, right) => left.actionId < right.actionId ? -1 : left.actionId > right.actionId ? 1 : 0),
+    graph,
+    windows,
+    metrics
+  };
+}
+var MEASUREMENT_SCHEMA, GLOBAL_MATURITY_GRACE_DAYS;
+var init_measurement = __esm({
+  "lib/measurement.mjs"() {
+    init_canonical();
+    init_evidence_graph();
+    init_journey_projection();
+    init_metrics();
+    init_normalize();
+    init_v1();
+    MEASUREMENT_SCHEMA = "1.0.0";
+    GLOBAL_MATURITY_GRACE_DAYS = 0;
+  }
+});
+
+// lib/private-source-authority.mjs
+function codedError13(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function collectStrings(value, kind, stack = /* @__PURE__ */ new WeakSet(), output = []) {
@@ -43161,10 +45495,10 @@ function collectStrings(value, kind, stack = /* @__PURE__ */ new WeakSet(), outp
     return output;
   }
   if (typeof value === "number" || typeof value === "bigint") {
-    throw codedError8("PRIVATE_SOURCE_NON_STRING_VALUE", TypeError);
+    throw codedError13("PRIVATE_SOURCE_NON_STRING_VALUE", TypeError);
   }
   if (value === null || typeof value === "boolean") return output;
-  if (!value || typeof value !== "object" || stack.has(value) || !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) throw codedError8("PRIVATE_SOURCE_BUNDLE_INVALID", TypeError);
+  if (!value || typeof value !== "object" || stack.has(value) || !Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) throw codedError13("PRIVATE_SOURCE_BUNDLE_INVALID", TypeError);
   stack.add(value);
   try {
     for (const entry of Array.isArray(value) ? value : Object.values(value)) {
@@ -43176,15 +45510,15 @@ function collectStrings(value, kind, stack = /* @__PURE__ */ new WeakSet(), outp
   }
 }
 function derivePrivateSourceEntries(sources) {
-  if (!Array.isArray(sources)) throw codedError8("PRIVATE_SOURCE_BUNDLE_INVALID", TypeError);
+  if (!Array.isArray(sources)) throw codedError13("PRIVATE_SOURCE_BUNDLE_INVALID", TypeError);
   const sourceIds = /* @__PURE__ */ new Set();
   const entries = [];
   for (const source of sources) {
-    if (!source || typeof source !== "object" || Array.isArray(source) || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).length !== 3 || Object.keys(source).some((key) => !["kind", "payload", "sourceId"].includes(key)) || typeof source.sourceId !== "string" || !/^[a-z0-9][a-z0-9_.:-]{0,127}$/u.test(source.sourceId) || sourceIds.has(source.sourceId) || !PRIVATE_KINDS.has(source.kind)) throw codedError8("PRIVATE_SOURCE_BUNDLE_INVALID", TypeError);
+    if (!source || typeof source !== "object" || Array.isArray(source) || Object.getPrototypeOf(source) !== Object.prototype || Object.keys(source).length !== 3 || Object.keys(source).some((key) => !["kind", "payload", "sourceId"].includes(key)) || typeof source.sourceId !== "string" || !/^[a-z0-9][a-z0-9_.:-]{0,127}$/u.test(source.sourceId) || sourceIds.has(source.sourceId) || !PRIVATE_KINDS.has(source.kind)) throw codedError13("PRIVATE_SOURCE_BUNDLE_INVALID", TypeError);
     sourceIds.add(source.sourceId);
     const before = entries.length;
     collectStrings(source.payload, source.kind, /* @__PURE__ */ new WeakSet(), entries);
-    if (entries.length === before) throw codedError8("PRIVATE_SOURCE_BUNDLE_INCOMPLETE", TypeError);
+    if (entries.length === before) throw codedError13("PRIVATE_SOURCE_BUNDLE_INCOMPLETE", TypeError);
   }
   return Object.freeze(entries);
 }
@@ -43219,7 +45553,7 @@ import {
   randomBytes as randomBytes4
 } from "node:crypto";
 import { isAbsolute as isAbsolute2, join as join3 } from "node:path";
-function codedError9(code, ErrorType = Error) {
+function codedError14(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function issueAuthoritativePrivateSourceBundle(metadata) {
@@ -43232,21 +45566,21 @@ function issueAuthoritativePrivateSourceBundle(metadata) {
 }
 function copyKey(value) {
   if (!Buffer.isBuffer(value) && !(value instanceof Uint8Array)) {
-    throw codedError9("VAULT_KEY_MATERIAL_INVALID", TypeError);
+    throw codedError14("VAULT_KEY_MATERIAL_INVALID", TypeError);
   }
   const copied = Buffer.from(value);
   if (copied.length !== KEY_BYTES) {
     copied.fill(0);
-    throw codedError9("VAULT_KEY_MATERIAL_INVALID", TypeError);
+    throw codedError14("VAULT_KEY_MATERIAL_INVALID", TypeError);
   }
   return copied;
 }
 function splitMutableKeyMaterial(material) {
   if (!Buffer.isBuffer(material) && !(material instanceof Uint8Array)) {
-    throw codedError9("VAULT_KEY_MATERIAL_INVALID", TypeError);
+    throw codedError14("VAULT_KEY_MATERIAL_INVALID", TypeError);
   }
   if (material.byteLength !== KEY_FILE_BYTES) {
-    throw codedError9("VAULT_KEY_MATERIAL_INVALID", TypeError);
+    throw codedError14("VAULT_KEY_MATERIAL_INVALID", TypeError);
   }
   return {
     encryptionKey: Buffer.from(material.subarray(0, KEY_BYTES)),
@@ -43266,58 +45600,58 @@ function clearProviderMaterial(material) {
 }
 function normalizeReference(keyReference) {
   if (!keyReference || typeof keyReference !== "object" || Array.isArray(keyReference) || Object.getPrototypeOf(keyReference) !== Object.prototype) {
-    throw codedError9("VAULT_KEY_REFERENCE_INVALID", TypeError);
+    throw codedError14("VAULT_KEY_REFERENCE_INVALID", TypeError);
   }
   const type = keyReference.type ?? keyReference.provider;
   if (Object.hasOwn(keyReference, "type") === Object.hasOwn(keyReference, "provider")) {
-    throw codedError9("VAULT_KEY_REFERENCE_INVALID", TypeError);
+    throw codedError14("VAULT_KEY_REFERENCE_INVALID", TypeError);
   }
   if (type === "protected-file" || type === "file") {
     const path = keyReference.path;
     if (typeof path !== "string" || !isAbsolute2(path) || Object.keys(keyReference).some((key) => !["type", "provider", "path"].includes(key))) {
-      throw codedError9("VAULT_KEY_REFERENCE_INVALID", TypeError);
+      throw codedError14("VAULT_KEY_REFERENCE_INVALID", TypeError);
     }
     return { type: "protected-file", path };
   }
   if (type === "os-keychain" || type === "keychain") {
     const name = keyReference.name ?? keyReference.reference;
-    if (typeof name !== "string" || name.trim().length === 0 || name.includes("\0") || name.includes("\n") || Object.hasOwn(keyReference, "name") === Object.hasOwn(keyReference, "reference") || Object.keys(keyReference).some((key) => !["type", "provider", "name", "reference"].includes(key))) throw codedError9("VAULT_KEY_REFERENCE_INVALID", TypeError);
+    if (typeof name !== "string" || name.trim().length === 0 || name.includes("\0") || name.includes("\n") || Object.hasOwn(keyReference, "name") === Object.hasOwn(keyReference, "reference") || Object.keys(keyReference).some((key) => !["type", "provider", "name", "reference"].includes(key))) throw codedError14("VAULT_KEY_REFERENCE_INVALID", TypeError);
     return { type: "os-keychain", name };
   }
-  throw codedError9("VAULT_KEY_REFERENCE_INVALID", TypeError);
+  throw codedError14("VAULT_KEY_REFERENCE_INVALID", TypeError);
 }
 function protectedFileMaterial(path) {
   let descriptor;
   let contents;
   try {
-    if (lstatSync5(path).isSymbolicLink()) throw codedError9("VAULT_KEY_FILE_INVALID");
+    if (lstatSync5(path).isSymbolicLink()) throw codedError14("VAULT_KEY_FILE_INVALID");
     descriptor = openSync2(path, constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0));
     const metadata = fstatSync2(descriptor);
-    if (!metadata.isFile()) throw codedError9("VAULT_KEY_FILE_INVALID");
+    if (!metadata.isFile()) throw codedError14("VAULT_KEY_FILE_INVALID");
     if (typeof process.getuid === "function" && metadata.uid !== process.getuid()) {
-      throw codedError9("VAULT_KEY_FILE_OWNERSHIP");
+      throw codedError14("VAULT_KEY_FILE_OWNERSHIP");
     }
-    if ((metadata.mode & 4095) !== 384) throw codedError9("VAULT_KEY_FILE_PERMISSIONS");
+    if ((metadata.mode & 4095) !== 384) throw codedError14("VAULT_KEY_FILE_PERMISSIONS");
     contents = readFileSync4(descriptor);
     return Buffer.from(contents);
   } catch (error51) {
     if (error51?.code === "VAULT_KEY_FILE_INVALID" || error51?.code === "VAULT_KEY_FILE_OWNERSHIP" || error51?.code === "VAULT_KEY_FILE_PERMISSIONS") throw error51;
-    throw codedError9("VAULT_KEYS_UNAVAILABLE");
+    throw codedError14("VAULT_KEYS_UNAVAILABLE");
   } finally {
     contents?.fill(0);
     if (descriptor !== void 0) closeSync2(descriptor);
   }
 }
 function keychainMaterial(name, keyProvider) {
-  if (!keyProvider) throw codedError9("VAULT_KEYS_UNAVAILABLE");
+  if (!keyProvider) throw codedError14("VAULT_KEYS_UNAVAILABLE");
   try {
     if (typeof keyProvider === "function") return keyProvider({ type: "os-keychain", name });
     if (typeof keyProvider.readKeychain === "function") return keyProvider.readKeychain(name);
     if (typeof keyProvider.resolve === "function") return keyProvider.resolve({ type: "os-keychain", name });
     if (typeof keyProvider.get === "function") return keyProvider.get({ type: "os-keychain", name });
-    throw codedError9("VAULT_KEYS_UNAVAILABLE");
+    throw codedError14("VAULT_KEYS_UNAVAILABLE");
   } catch {
-    throw codedError9("VAULT_KEYS_UNAVAILABLE");
+    throw codedError14("VAULT_KEYS_UNAVAILABLE");
   }
 }
 function resolveVaultKeys({ keyReference, keyProvider } = {}) {
@@ -43333,13 +45667,13 @@ function resolveVaultKeys({ keyReference, keyProvider } = {}) {
     keys?.pseudonymKey.fill(0);
     if (error51?.code?.startsWith("VAULT_KEY_FILE_")) throw error51;
     if (error51?.code === "VAULT_KEY_REFERENCE_INVALID") throw error51;
-    throw codedError9(error51?.code === "VAULT_KEY_MATERIAL_INVALID" ? "VAULT_KEY_MATERIAL_INVALID" : "VAULT_KEYS_UNAVAILABLE");
+    throw codedError14(error51?.code === "VAULT_KEY_MATERIAL_INVALID" ? "VAULT_KEY_MATERIAL_INVALID" : "VAULT_KEYS_UNAVAILABLE");
   } finally {
     clearProviderMaterial(material);
   }
 }
 function validateExpiry(expiresAt) {
-  if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt)) || new Date(expiresAt).toISOString() !== expiresAt) throw codedError9("RAW_EVIDENCE_EXPIRY_INVALID", TypeError);
+  if (typeof expiresAt !== "string" || !Number.isFinite(Date.parse(expiresAt)) || new Date(expiresAt).toISOString() !== expiresAt) throw codedError14("RAW_EVIDENCE_EXPIRY_INVALID", TypeError);
 }
 function rawHeader({ opaqueRef, rawHash, source, expiresAt }) {
   return {
@@ -43356,11 +45690,11 @@ function aadBytes(header) {
   return Buffer.from(canonicalJson(header), "utf8");
 }
 function decodeBase64(value, expectedLength) {
-  if (typeof value !== "string") throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+  if (typeof value !== "string") throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
   const decoded = Buffer.from(value, "base64");
   if (decoded.length !== expectedLength || decoded.toString("base64") !== value) {
     decoded.fill(0);
-    throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+    throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
   }
   return decoded;
 }
@@ -43370,25 +45704,25 @@ function verifyRecord(record2, expectedOpaqueRef, cipherKey) {
   let ciphertext;
   let plaintext;
   try {
-    if (!record2 || typeof record2 !== "object" || Array.isArray(record2) || record2.schemaVersion !== RAW_SCHEMA_VERSION || record2.format !== RAW_FORMAT || record2.algorithm !== RAW_ALGORITHM || record2.opaqueRef !== expectedOpaqueRef || !/^raw_[a-f0-9]{32}$/u.test(record2.opaqueRef) || !/^[a-f0-9]{64}$/u.test(record2.rawHash) || !SAFE_SOURCE.test(record2.source) || record2.deletionState !== "active" || record2.purgeResult !== null) throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+    if (!record2 || typeof record2 !== "object" || Array.isArray(record2) || record2.schemaVersion !== RAW_SCHEMA_VERSION || record2.format !== RAW_FORMAT || record2.algorithm !== RAW_ALGORITHM || record2.opaqueRef !== expectedOpaqueRef || !/^raw_[a-f0-9]{32}$/u.test(record2.opaqueRef) || !/^[a-f0-9]{64}$/u.test(record2.rawHash) || !SAFE_SOURCE.test(record2.source) || record2.deletionState !== "active" || record2.purgeResult !== null) throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
     const header = rawHeader(record2);
     nonce = decodeBase64(record2.nonce, 12);
     authTag = decodeBase64(record2.authTag, 16);
-    if (typeof record2.ciphertext !== "string") throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+    if (typeof record2.ciphertext !== "string") throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
     ciphertext = Buffer.from(record2.ciphertext, "base64");
     if (ciphertext.toString("base64") !== record2.ciphertext) {
-      throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+      throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
     }
     const decipher = createDecipheriv2(RAW_ALGORITHM, cipherKey, nonce);
     decipher.setAAD(aadBytes(header));
     decipher.setAuthTag(authTag);
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     const computedHash = createHash3("sha256").update(plaintext).digest("hex");
-    if (computedHash !== record2.rawHash) throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+    if (computedHash !== record2.rawHash) throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
     validateExpiry(record2.expiresAt);
     return header;
   } catch {
-    throw codedError9("RAW_EVIDENCE_AUTHENTICATION_FAILED");
+    throw codedError14("RAW_EVIDENCE_AUTHENTICATION_FAILED");
   } finally {
     nonce?.fill(0);
     authTag?.fill(0);
@@ -43396,9 +45730,9 @@ function verifyRecord(record2, expectedOpaqueRef, cipherKey) {
     plaintext?.fill(0);
   }
 }
-function eventIds(header, subjectKey, expiredAt) {
-  const operationId = `purge_${createHmac3("sha256", subjectKey).update(canonicalJson(header)).digest("hex").slice(0, 32)}`;
-  const eventId = (phase) => `evt_${createHmac3("sha256", subjectKey).update(operationId).update("\0").update(phase).update("\0").update(expiredAt).digest("hex").slice(0, 32)}`;
+function eventIds(header, subjectKey2, expiredAt) {
+  const operationId = `purge_${createHmac3("sha256", subjectKey2).update(canonicalJson(header)).digest("hex").slice(0, 32)}`;
+  const eventId = (phase) => `evt_${createHmac3("sha256", subjectKey2).update(operationId).update("\0").update(phase).update("\0").update(expiredAt).digest("hex").slice(0, 32)}`;
   return {
     operationId,
     pendingEventId: eventId("pending"),
@@ -43412,7 +45746,7 @@ function readJson(path, failureCode) {
   try {
     return JSON.parse(readFileSync4(path, "utf8"));
   } catch {
-    throw codedError9(failureCode);
+    throw codedError14(failureCode);
   }
 }
 function syncImmutableEvent(path, directory) {
@@ -43428,7 +45762,7 @@ function syncImmutableEvent(path, directory) {
     directoryDescriptor = openSync2(directory, constants2.O_RDONLY);
     fsyncSync2(directoryDescriptor);
   } catch {
-    throw codedError9("RAW_EXPIRY_EVENT_INVALID");
+    throw codedError14("RAW_EXPIRY_EVENT_INVALID");
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
     if (directoryDescriptor !== void 0) closeSync2(directoryDescriptor);
@@ -43439,7 +45773,7 @@ function writeImmutableEvent(paths, event) {
   if (existsSync3(path)) {
     const existing = readJson(path, "RAW_EXPIRY_EVENT_INVALID");
     if (canonicalJson(existing) !== canonicalJson(event)) {
-      throw codedError9("RAW_EXPIRY_EVENT_CONFLICT");
+      throw codedError14("RAW_EXPIRY_EVENT_CONFLICT");
     }
     syncImmutableEvent(path, paths.memoryEvents);
     return false;
@@ -43467,7 +45801,7 @@ function writeImmutableEvent(paths, event) {
       } catch {
       }
     }
-    throw codedError9("RAW_EXPIRY_EVENT_WRITE_FAILED");
+    throw codedError14("RAW_EXPIRY_EVENT_WRITE_FAILED");
   } finally {
     if (descriptor !== void 0) closeSync2(descriptor);
     if (directoryDescriptor !== void 0) closeSync2(directoryDescriptor);
@@ -43480,11 +45814,11 @@ function readRawRecord(path) {
     return readJson(path, "RAW_EVIDENCE_RECORD_INVALID");
   } catch (error51) {
     if (error51?.code === "RAW_EVIDENCE_RECORD_INVALID") throw error51;
-    throw codedError9("RAW_EVIDENCE_RECORD_INVALID");
+    throw codedError14("RAW_EVIDENCE_RECORD_INVALID");
   }
 }
-function expiryEvent(header, now, subjectKey, phase) {
-  const ids = eventIds(header, subjectKey, now);
+function expiryEvent(header, now, subjectKey2, phase) {
+  const ids = eventIds(header, subjectKey2, now);
   return {
     schemaVersion: RAW_SCHEMA_VERSION,
     format: RAW_FORMAT,
@@ -43503,16 +45837,16 @@ function expiryEvent(header, now, subjectKey, phase) {
     purgeResult: phase === "pending" ? "pending" : "deleted"
   };
 }
-function validatePendingEvent(event, subjectKey) {
+function validatePendingEvent(event, subjectKey2) {
   try {
     const header = rawHeader(event);
-    const ids = eventIds(header, subjectKey, event.expiredAt);
+    const ids = eventIds(header, subjectKey2, event.expiredAt);
     if (event.schemaVersion !== RAW_SCHEMA_VERSION || event.format !== RAW_FORMAT || event.algorithm !== RAW_ALGORITHM || event.type !== "raw_evidence_expired" || event.phase !== "pending" || event.operationId !== ids.operationId || event.eventId !== ids.pendingEventId || event.pendingEventId !== ids.pendingEventId || event.deletionState !== "pending" || event.purgeResult !== "pending") throw new Error();
     validateExpiry(event.expiresAt);
     validateExpiry(event.expiredAt);
     return header;
   } catch {
-    throw codedError9("RAW_EXPIRY_EVENT_INVALID");
+    throw codedError14("RAW_EXPIRY_EVENT_INVALID");
   }
 }
 function invokeVaultTestSeam(name) {
@@ -43522,25 +45856,25 @@ function invokeVaultTestSeam(name) {
   try {
     seam(name);
   } catch {
-    throw codedError9("PURGE_INTERRUPTED");
+    throw codedError14("PURGE_INTERRUPTED");
   }
 }
 function unlinkCiphertext(path) {
   try {
     unlinkSync(path);
   } catch {
-    throw codedError9("RAW_EVIDENCE_DELETE_FAILED");
+    throw codedError14("RAW_EVIDENCE_DELETE_FAILED");
   }
 }
 function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
   let cipherKey;
-  let subjectKey;
+  let subjectKey2;
   try {
     cipherKey = copyKey(encryptionKey);
-    subjectKey = copyKey(pseudonymKey);
+    subjectKey2 = copyKey(pseudonymKey);
   } catch (error51) {
     cipherKey?.fill(0);
-    subjectKey?.fill(0);
+    subjectKey2?.fill(0);
     throw error51;
   } finally {
     if (Buffer.isBuffer(encryptionKey) || encryptionKey instanceof Uint8Array) encryptionKey.fill(0);
@@ -43559,35 +45893,35 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
     ]) chmodSync2(directory, 448);
   } catch (error51) {
     cipherKey.fill(0);
-    subjectKey.fill(0);
+    subjectKey2.fill(0);
     throw error51;
   }
   let closed = false;
   const assertOpen = () => {
-    if (closed) throw codedError9("VAULT_CLOSED");
+    if (closed) throw codedError14("VAULT_CLOSED");
   };
   function completePending(event, now) {
-    const header = validatePendingEvent(event, subjectKey);
+    const header = validatePendingEvent(event, subjectKey2);
     const recordPath = join3(canonicalPaths.privateRaw, `${header.opaqueRef}.json`);
     let removed = false;
     if (existsSync3(recordPath)) {
       const record2 = readRawRecord(recordPath);
       const verified = verifyRecord(record2, header.opaqueRef, cipherKey);
       if (canonicalJson(verified) !== canonicalJson(header)) {
-        throw codedError9("RAW_EXPIRY_EVENT_CONFLICT");
+        throw codedError14("RAW_EXPIRY_EVENT_CONFLICT");
       }
       unlinkCiphertext(recordPath);
       removed = true;
       invokeVaultTestSeam("afterUnlink");
     }
-    const completed = expiryEvent(header, event.expiredAt ?? now, subjectKey, "completed");
+    const completed = expiryEvent(header, event.expiredAt ?? now, subjectKey2, "completed");
     writeImmutableEvent(canonicalPaths, completed);
     return { removed, eventId: completed.eventId };
   }
   return Object.freeze({
     beginPrivateSourceCollection({ state, runManifest } = {}) {
       assertOpen();
-      if (!(state instanceof AuditState) || !runManifest || typeof runManifest !== "object" || Array.isArray(runManifest) || Object.getPrototypeOf(runManifest) !== Object.prototype || typeof runManifest.runId !== "string" || runManifest.runId.length === 0 || state.paths.stateDb !== canonicalPaths.stateDb) throw codedError9("PRIVATE_SOURCE_AUTHORITY_INVALID", TypeError);
+      if (!(state instanceof AuditState) || !runManifest || typeof runManifest !== "object" || Array.isArray(runManifest) || Object.getPrototypeOf(runManifest) !== Object.prototype || typeof runManifest.runId !== "string" || runManifest.runId.length === 0 || state.paths.stateDb !== canonicalPaths.stateDb) throw codedError14("PRIVATE_SOURCE_AUTHORITY_INVALID", TypeError);
       const manifestHash = sha256(runManifest);
       const authority = state.getAuthorizedPrivateSourceInventory(runManifest.runId);
       const expectedById = new Map(
@@ -43598,16 +45932,16 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
       return Object.freeze({
         add(source) {
           assertOpen();
-          if (finalized) throw codedError9("PRIVATE_SOURCE_COLLECTION_FINALIZED");
+          if (finalized) throw codedError14("PRIVATE_SOURCE_COLLECTION_FINALIZED");
           const entries = derivePrivateSourceEntries([source]);
           const snapshot = JSON.parse(canonicalJson(source));
           const expected = expectedById.get(source.sourceId);
           const sourceHash = sha256({ schemaVersion: "1.0.0", source: snapshot });
           if (!expected || expected.kind !== source.kind || expected.sourceHash !== sourceHash) {
-            throw codedError9("PRIVATE_SOURCE_INVENTORY_UNEXPECTED", TypeError);
+            throw codedError14("PRIVATE_SOURCE_INVENTORY_UNEXPECTED", TypeError);
           }
           if (collected.has(source.sourceId)) {
-            throw codedError9("PRIVATE_SOURCE_INVENTORY_INVALID", TypeError);
+            throw codedError14("PRIVATE_SOURCE_INVENTORY_INVALID", TypeError);
           }
           collected.set(source.sourceId, Object.freeze({
             source: Object.freeze(snapshot),
@@ -43618,12 +45952,12 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
         },
         finalize(options) {
           assertOpen();
-          if (finalized) throw codedError9("PRIVATE_SOURCE_COLLECTION_FINALIZED");
+          if (finalized) throw codedError14("PRIVATE_SOURCE_COLLECTION_FINALIZED");
           if (options !== void 0) {
-            throw codedError9("PRIVATE_SOURCE_AUTHORITY_INVALID", TypeError);
+            throw codedError14("PRIVATE_SOURCE_AUTHORITY_INVALID", TypeError);
           }
           if (collected.size === 0) {
-            throw codedError9("PRIVATE_SOURCE_INVENTORY_REQUIRED", TypeError);
+            throw codedError14("PRIVATE_SOURCE_INVENTORY_REQUIRED", TypeError);
           }
           const collectedRecords = [...collected.values()].sort((left, right) => left.source.sourceId < right.source.sourceId ? -1 : left.source.sourceId > right.source.sourceId ? 1 : 0);
           const sources = collectedRecords.map(({ source }) => source);
@@ -43633,12 +45967,12 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
             sourceHash
           }));
           if (canonicalJson(inventory) !== canonicalJson(authority.sourceInventory)) {
-            throw codedError9("PRIVATE_SOURCE_INVENTORY_INCOMPLETE");
+            throw codedError14("PRIVATE_SOURCE_INVENTORY_INCOMPLETE");
           }
           const entries = Object.freeze(collectedRecords.flatMap((record2) => record2.entries));
           const sourceInventoryHash = sha256(inventory);
           if (sourceInventoryHash !== authority.sourceInventoryHash) {
-            throw codedError9("PRIVATE_SOURCE_INVENTORY_INCOMPLETE");
+            throw codedError14("PRIVATE_SOURCE_INVENTORY_INCOMPLETE");
           }
           const sourceBundleHash = sha256({ schemaVersion: "1.0.0", sources });
           const inventoryMetadata = {
@@ -43651,7 +45985,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
             sourceIds: inventory.map(({ sourceId }) => sourceId),
             frozenInputsHash: authority.frozenInputsHash
           };
-          const inventorySignature = createHmac3("sha256", subjectKey).update(canonicalJson(inventoryMetadata)).digest("hex");
+          const inventorySignature = createHmac3("sha256", subjectKey2).update(canonicalJson(inventoryMetadata)).digest("hex");
           const checkpointPayload = {
             ...inventoryMetadata,
             inventorySignature
@@ -43667,7 +46001,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
             runId: runManifest.runId,
             phase: "private-source-inventory"
           });
-          if (!durable || durable.outputHash !== sourceBundleHash || canonicalJson(durable.payload) !== canonicalJson(checkpointPayload)) throw codedError9("PRIVATE_SOURCE_INVENTORY_NOT_DURABLE");
+          if (!durable || durable.outputHash !== sourceBundleHash || canonicalJson(durable.payload) !== canonicalJson(checkpointPayload)) throw codedError14("PRIVATE_SOURCE_INVENTORY_NOT_DURABLE");
           const authoritativeBundle = issueAuthoritativePrivateSourceBundle({
             ...inventoryMetadata,
             inventorySignature,
@@ -43681,16 +46015,16 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
     sealRaw({ source, bytes, expiresAt } = {}) {
       assertOpen();
       if (typeof source !== "string" || !SAFE_SOURCE.test(source)) {
-        throw codedError9("RAW_EVIDENCE_SOURCE_INVALID", TypeError);
+        throw codedError14("RAW_EVIDENCE_SOURCE_INVALID", TypeError);
       }
       if (!Buffer.isBuffer(bytes) && !(bytes instanceof Uint8Array)) {
-        throw codedError9("RAW_EVIDENCE_BYTES_INVALID", TypeError);
+        throw codedError14("RAW_EVIDENCE_BYTES_INVALID", TypeError);
       }
       validateExpiry(expiresAt);
       const plaintext = Buffer.from(bytes);
       const nonce = randomBytes4(12);
       const rawHash = createHash3("sha256").update(plaintext).digest("hex");
-      const opaqueRef = `raw_${createHmac3("sha256", subjectKey).update(source).update("\0").update(rawHash).update(nonce).digest("hex").slice(0, 32)}`;
+      const opaqueRef = `raw_${createHmac3("sha256", subjectKey2).update(source).update("\0").update(rawHash).update(nonce).digest("hex").slice(0, 32)}`;
       const header = rawHeader({ opaqueRef, rawHash, source, expiresAt });
       const cipher = createCipheriv2(RAW_ALGORITHM, cipherKey, nonce);
       cipher.setAAD(aadBytes(header));
@@ -43713,7 +46047,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
           { encoding: "utf8", flag: "wx", mode: 384 }
         );
       } catch {
-        throw codedError9("RAW_EVIDENCE_WRITE_FAILED");
+        throw codedError14("RAW_EVIDENCE_WRITE_FAILED");
       }
       return Object.freeze({ rawHash, opaqueRef });
     },
@@ -43726,13 +46060,13 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
         if (!EVENT_FILE.test(name)) continue;
         const event = readJson(join3(canonicalPaths.memoryEvents, name), "RAW_EXPIRY_EVENT_INVALID");
         if (event.phase !== "pending") continue;
-        const header = validatePendingEvent(event, subjectKey);
-        const completedId = eventIds(header, subjectKey, event.expiredAt).completedEventId;
+        const header = validatePendingEvent(event, subjectKey2);
+        const completedId = eventIds(header, subjectKey2, event.expiredAt).completedEventId;
         if (existsSync3(eventPath(canonicalPaths, completedId))) {
           const completed = readJson(eventPath(canonicalPaths, completedId), "RAW_EXPIRY_EVENT_INVALID");
-          const expected = expiryEvent(header, event.expiredAt, subjectKey, "completed");
+          const expected = expiryEvent(header, event.expiredAt, subjectKey2, "completed");
           if (canonicalJson(completed) !== canonicalJson(expected)) {
-            throw codedError9("RAW_EXPIRY_EVENT_INVALID");
+            throw codedError14("RAW_EXPIRY_EVENT_INVALID");
           }
           continue;
         }
@@ -43747,12 +46081,12 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
         const expectedOpaqueRef = name.slice(0, -".json".length);
         const header = verifyRecord(record2, expectedOpaqueRef, cipherKey);
         if (Date.parse(header.expiresAt) > Date.parse(now)) continue;
-        const pending = expiryEvent(header, now, subjectKey, "pending");
+        const pending = expiryEvent(header, now, subjectKey2, "pending");
         writeImmutableEvent(canonicalPaths, pending);
         invokeVaultTestSeam("afterPending");
         unlinkCiphertext(recordPath);
         invokeVaultTestSeam("afterUnlink");
-        const completed = expiryEvent(header, now, subjectKey, "completed");
+        const completed = expiryEvent(header, now, subjectKey2, "completed");
         writeImmutableEvent(canonicalPaths, completed);
         purged += 1;
         events.push(completed.eventId);
@@ -43762,7 +46096,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
     close() {
       if (!closed) {
         cipherKey.fill(0);
-        subjectKey.fill(0);
+        subjectKey2.fill(0);
         closed = true;
       }
     }
@@ -43821,10 +46155,10 @@ import {
   resolve as resolve4,
   sep as sep4
 } from "node:path";
-function codedError10(code, ErrorType = Error) {
+function codedError15(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject10(value) {
+function isPlainObject13(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -43840,9 +46174,9 @@ function realWithin(parent, candidate, code) {
     realParent = realpathSync5(parent);
     realCandidate = realpathSync5(candidate);
   } catch {
-    throw codedError10(code);
+    throw codedError15(code);
   }
-  if (!isWithin2(realParent, realCandidate)) throw codedError10(code);
+  if (!isWithin2(realParent, realCandidate)) throw codedError15(code);
   return realCandidate;
 }
 function readRegularJson(pathname, code) {
@@ -43852,16 +46186,16 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync5(descriptor, "utf8"));
-    if (!isPlainObject10(parsed)) throw new Error();
+    if (!isPlainObject13(parsed)) throw new Error();
     return parsed;
   } catch {
-    throw codedError10(code);
+    throw codedError15(code);
   } finally {
     if (descriptor !== void 0) closeSync3(descriptor);
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject10(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject10(config2.frozenInputs) || !isPlainObject10(config2.context) || !isPlainObject10(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject13(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject13(config2.frozenInputs) || !isPlainObject13(config2.context) || !isPlainObject13(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -43869,10 +46203,10 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject10(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject10(rail.capabilityProofIndex) || !isPlainObject10(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject10(transport.responses) || !isPlainObject10(transport.toolsList))) throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject13(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject13(rail.capabilityProofIndex) || !isPlainObject13(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject13(transport.responses) || !isPlainObject13(transport.toolsList))) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
-      throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+      throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
     }
   }
   return rail;
@@ -43897,9 +46231,9 @@ function sealedDigestSet(frozenInputs, sealedList) {
 }
 function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject10(frozenInputs)) fail2();
+  if (!isPlainObject13(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -43924,7 +46258,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
 }
 function localKeyMaterial(keyReference) {
   if (keyReference !== LOCAL_KEY_REFERENCE) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
   }
   const material = Buffer.concat([
     Buffer.alloc(LOCAL_KEY_BYTES, 49),
@@ -43967,9 +46301,9 @@ function mintFrozenInputSeal({
 }
 function assertSealDocumentShape(document) {
   const fail2 = () => {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject10(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject10(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject13(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject13(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -44011,11 +46345,11 @@ function macMatches(expected, actual) {
 }
 function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, providerDescriptor }) {
   const fail2 = () => {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject10(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  if (!isPlainObject13(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, declaration.relativePath);
   if (!isWithin2(project, pathname)) fail2();
@@ -44057,7 +46391,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   assertSealedRailIdentities(rail, seal === null ? frozenInputs : { ...frozenInputs, ...seal.anchors });
   const client = rail.transport.kind === "host_injected" ? internalClient : inlineResponseClient(rail.transport);
   if (!client || typeof client.callTool !== "function") {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const options = {
     client,
@@ -44073,11 +46407,11 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject10(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject13(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const config2 = validateLocalConfig(readRegularJson(
@@ -44095,10 +46429,10 @@ function writeImmutable(pathname, value) {
   if (existsSync4(pathname)) {
     const metadata = lstatSync6(pathname);
     if (metadata.isSymbolicLink() || !metadata.isFile()) {
-      throw codedError10("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+      throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
     if (!readFileSync5(pathname).equals(bytes)) {
-      throw codedError10("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+      throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
     }
     return;
   }
@@ -44109,7 +46443,7 @@ function writeImmutable(pathname, value) {
   } catch (error51) {
     if (error51?.code !== "EEXIST") throw error51;
     const metadata = existsSync4(temporary) ? lstatSync6(temporary) : void 0;
-    if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync5(temporary).equals(bytes)) throw codedError10("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+    if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync5(temporary).equals(bytes)) throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
   }
   renameSync2(temporary, pathname);
   chmodSync3(pathname, 256);
@@ -44127,7 +46461,7 @@ function publicationPublisher(scopeStatement) {
     if (existsSync4(publicationRoot)) {
       const metadata = lstatSync6(publicationRoot);
       if (metadata.isSymbolicLink() || !metadata.isDirectory()) {
-        throw codedError10("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
+        throw codedError15("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
       }
     } else {
       mkdirSync4(publicationRoot, { mode: 448 });
@@ -44169,7 +46503,7 @@ function localProviderDescriptor({ projectRoot, providerConfigPath, config: conf
   const project = resolve4(projectRoot);
   const pathname = resolve4(providerConfigPath);
   if (!isWithin2(project, pathname)) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   validateLocalConfig(config2);
@@ -44271,10 +46605,10 @@ function createLocalAuditKernel({ initialRunId, internalClient = null } = {}) {
   });
 }
 function publicConfigError() {
-  throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject10(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject13(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -44294,16 +46628,16 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject10(config2)) publicConfigError();
+  if (!isPlainObject13(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject10(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject10(config2.frozenInputs) || !isPlainObject10(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject13(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject13(config2.frozenInputs) || !isPlainObject13(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
   if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
     publicConfigError();
   }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject10(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject13(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -44331,11 +46665,11 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject10(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject13(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const realPathname = realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   return validatePublicConfig(readRegularJson(
@@ -44347,7 +46681,7 @@ function publicProviderDescriptor({ projectRoot, providerConfigPath, config: con
   const project = resolve4(projectRoot);
   const pathname = resolve4(providerConfigPath);
   if (!isWithin2(project, pathname)) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   realWithin(project, pathname, "AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   validatePublicConfig(config2);
@@ -44360,7 +46694,7 @@ function publicProviderDescriptor({ projectRoot, providerConfigPath, config: con
 function publicKeyMaterial(reference, { keyProvider = null } = {}) {
   if (reference === LOCAL_KEY_REFERENCE) return localKeyMaterial(reference);
   const match = typeof reference === "string" ? PUBLIC_KEY_REFERENCE.exec(reference) : null;
-  if (!match) throw codedError10("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
+  if (!match) throw codedError15("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
   const [, kind, value] = match;
   try {
     return resolveVaultKeys({
@@ -44368,7 +46702,7 @@ function publicKeyMaterial(reference, { keyProvider = null } = {}) {
       keyProvider
     });
   } catch {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
   }
 }
 function vaultRawPageSink(vault, expiresAt) {
@@ -44381,7 +46715,7 @@ function vaultRawPageSink(vault, expiresAt) {
       } finally {
         bytes.fill(0);
       }
-      if (sealed.rawHash !== payloadHash) throw codedError10("RAW_PAGE_SEAL_FAILED");
+      if (sealed.rawHash !== payloadHash) throw codedError15("RAW_PAGE_SEAL_FAILED");
       return { opaqueRef: sealed.opaqueRef, payloadHash: sealed.rawHash };
     }
     // NO `restorePage`. `lib/vault.mjs` seals and purges; it exposes no read-back, so this
@@ -44432,12 +46766,12 @@ function publicCollectionPlan(config2) {
 }
 function approvedPublicCapabilities(config2) {
   const policy = loadTrustedPublicReadPolicy();
-  if (config2.publicCatalogSnapshotHash !== policy.snapshotHash || config2.publicReadAllowlistHash !== policy.allowlistHash) throw codedError10("AUDIT_PREFLIGHT_FAILED_PUBLIC_POLICY");
+  if (config2.publicCatalogSnapshotHash !== policy.snapshotHash || config2.publicReadAllowlistHash !== policy.allowlistHash) throw codedError15("AUDIT_PREFLIGHT_FAILED_PUBLIC_POLICY");
   const listed = new Map(policy.allowlist.actions.map((action) => [action.actionId, action]));
   return Object.freeze(config2.capabilities.map(({ operationId, actionId }) => {
     const action = listed.get(actionId);
     if (!action || action.risk !== "read") {
-      throw codedError10("AUDIT_PREFLIGHT_FAILED_PUBLIC_CAPABILITY");
+      throw codedError15("AUDIT_PREFLIGHT_FAILED_PUBLIC_CAPABILITY");
     }
     return Object.freeze({
       operationId,
@@ -44460,11 +46794,11 @@ function sortedPrivateSourceInventory(entries) {
   });
   for (let index = 1; index < sorted.length; index += 1) {
     if (sorted[index].sourceId === sorted[index - 1].sourceId) {
-      throw codedError10("AUDIT_PREFLIGHT_FAILED_PRIVATE_SOURCE_INVENTORY");
+      throw codedError15("AUDIT_PREFLIGHT_FAILED_PRIVATE_SOURCE_INVENTORY");
     }
   }
   if (sorted.length === 0) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PRIVATE_SOURCE_INVENTORY");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PRIVATE_SOURCE_INVENTORY");
   }
   return sorted;
 }
@@ -44482,11 +46816,11 @@ async function collectPublicEvidence({
   validatePublicConfig(config2);
   const locationId = config2.expectedLocationId;
   if (transportConnect !== null && ghlNativeConnect !== null) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const nativeTransport = config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND ? validateGhlNativeTransport(config2.transport) : null;
   if (nativeTransport !== null && transportConnect !== null) {
-    throw codedError10("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+    throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   }
   const nativeConnect = ghlNativeConnect ?? (nativeTransport === null ? null : createGhlNativeConnect({
     url: nativeTransport.url,
@@ -44518,7 +46852,7 @@ async function collectPublicEvidence({
   const allowlist = loadPublicReadAllowlist();
   let client;
   try {
-    if (signal?.aborted) throw codedError10("COLLECTION_ABORTED");
+    if (signal?.aborted) throw codedError15("COLLECTION_ABORTED");
     const wireTransport = nativeTransport === null ? structuredClone(config2.transport) : { kind: "streamable-http", url: nativeTransport.url };
     client = await connectMcp({
       transport: effectiveConnect === null ? wireTransport : { ...wireTransport, connect: effectiveConnect },
@@ -44540,7 +46874,7 @@ async function collectPublicEvidence({
     const inventory = [];
     const limitations = [];
     for (const capability of capabilities) {
-      if (signal?.aborted) throw codedError10("COLLECTION_ABORTED");
+      if (signal?.aborted) throw codedError15("COLLECTION_ABORTED");
       const adapter = createPublicGhlAdapter({
         client,
         allowlist,
@@ -44622,7 +46956,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject10(sealed)) return null;
+    if (!isPlainObject13(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -44694,7 +47028,7 @@ function createPublicAuditKernel({
     adapters: {
       collectContext: async ({ providerConfig }) => structuredClone(validatePublicConfig(providerConfig).context),
       collectPublic: async (args) => {
-        if (adopted !== null) throw codedError10("AUDIT_PREFLIGHT_FAILED_PUBLIC_EVIDENCE_UNAVAILABLE");
+        if (adopted !== null) throw codedError15("AUDIT_PREFLIGHT_FAILED_PUBLIC_EVIDENCE_UNAVAILABLE");
         return (await collectionFor(args)).publicEvidence;
       }
     },
@@ -44718,9 +47052,22 @@ function createPublicAuditKernel({
           privateSourceInventoryHash: collection.privateSourceInventoryHash
         };
       },
-      normalize: async ({ context, publicEvidence }) => ({
+      /**
+       * A3 — the measurement chain, in-process at last.
+       *
+       * This used to return two hashes, which is why a live run could collect 588 real records and
+       * publish an empty report: `projectJourneyEvents -> normalizeEvidence -> buildEvidenceGraph
+       * -> buildWindows -> computeJourneyMetrics` was exported, tested, and reachable only from a
+       * script outside the repo.
+       *
+       * The two hashes are KEPT. They are what the offline rail returns, what the Task 10 shape
+       * declares, and what a resume compares, so they stay first and stay byte-identical; the
+       * measurement is added beside them.
+       */
+      normalize: async ({ context, publicEvidence, frozenInputs }) => ({
         contextHash: sha256(context),
-        publicEvidenceHash: sha256(publicEvidence)
+        publicEvidenceHash: sha256(publicEvidence),
+        measurement: measurePublicEvidence({ publicEvidence, frozenInputs })
       }),
       discover: async () => ({ findings: [] }),
       falsify: async () => ({ packets: [] }),
@@ -44764,6 +47111,7 @@ var init_local_runtime = __esm({
     init_public_ghl();
     init_trusted_public_policy();
     init_kernel();
+    init_measurement();
     init_paths();
     init_state();
     init_vault();
@@ -44871,37 +47219,37 @@ var REQUIRED_FLAGS = Object.freeze({
   resume: ["project", "location", "run-id"]
 });
 var LOCATION = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
-function codedError11(code, ErrorType = Error) {
+function codedError16(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function parseAuditCliArgs(argv) {
   if (!Array.isArray(argv) || argv.length < 1) {
-    throw codedError11("AUDIT_COMMAND_INVALID_MISSING");
+    throw codedError16("AUDIT_COMMAND_INVALID_MISSING");
   }
   const [command, ...tokens] = argv;
   const allowed = COMMAND_FLAGS[command];
-  if (!allowed) throw codedError11("AUDIT_COMMAND_INVALID_UNKNOWN");
-  if (tokens.length % 2 !== 0) throw codedError11("AUDIT_COMMAND_INVALID_VALUE");
+  if (!allowed) throw codedError16("AUDIT_COMMAND_INVALID_UNKNOWN");
+  if (tokens.length % 2 !== 0) throw codedError16("AUDIT_COMMAND_INVALID_VALUE");
   const flags = {};
   for (let index = 0; index < tokens.length; index += 2) {
     const token = tokens[index];
     const value = tokens[index + 1];
-    if (typeof token !== "string" || !token.startsWith("--") || token.length < 3 || !allowed.has(token.slice(2)) || typeof value !== "string" || value.length === 0 || value.startsWith("--")) throw codedError11("AUDIT_COMMAND_INVALID_FLAG");
+    if (typeof token !== "string" || !token.startsWith("--") || token.length < 3 || !allowed.has(token.slice(2)) || typeof value !== "string" || value.length === 0 || value.startsWith("--")) throw codedError16("AUDIT_COMMAND_INVALID_FLAG");
     const name = token.slice(2);
-    if (Object.hasOwn(flags, name)) throw codedError11("AUDIT_COMMAND_INVALID_DUPLICATE");
+    if (Object.hasOwn(flags, name)) throw codedError16("AUDIT_COMMAND_INVALID_DUPLICATE");
     flags[name] = value;
   }
   for (const required2 of REQUIRED_FLAGS[command]) {
-    if (!Object.hasOwn(flags, required2)) throw codedError11("AUDIT_COMMAND_INVALID_MISSING");
+    if (!Object.hasOwn(flags, required2)) throw codedError16("AUDIT_COMMAND_INVALID_MISSING");
   }
   if (flags.location !== void 0 && !LOCATION.test(flags.location)) {
-    throw codedError11("AUDIT_COMMAND_INVALID_LOCATION");
+    throw codedError16("AUDIT_COMMAND_INVALID_LOCATION");
   }
   if (flags["run-id"] !== void 0 && !LOCATION.test(flags["run-id"])) {
-    throw codedError11("AUDIT_COMMAND_INVALID_RUN");
+    throw codedError16("AUDIT_COMMAND_INVALID_RUN");
   }
   if (command === "run" && flags.mode !== "weekly") {
-    throw codedError11("AUDIT_MODE_UNSUPPORTED");
+    throw codedError16("AUDIT_MODE_UNSUPPORTED");
   }
   return Object.freeze({ command, flags: Object.freeze(flags) });
 }
@@ -44915,7 +47263,7 @@ function readRegularJson2(pathname, code) {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
     return value;
   } catch {
-    throw codedError11(code);
+    throw codedError16(code);
   } finally {
     if (descriptor !== void 0) closeSync4(descriptor);
   }
@@ -45009,7 +47357,7 @@ async function runAuditCli({
       const pending = state.listReviewRequests(flags["run-id"]).filter(({ status: status2 }) => status2 === "pending");
       const requestId = response.requestId;
       const request = pending.find((candidate) => candidate.requestId === requestId);
-      if (!request) throw codedError11("REVIEW_RESPONSE_MISMATCH_REQUEST");
+      if (!request) throw codedError16("REVIEW_RESPONSE_MISMATCH_REQUEST");
       const validate = request.kind === "conversation" ? validateConversationReview2 : validateMechanismReview2;
       state.validateAndConsumeReviewRequest({
         requestId,
@@ -45061,7 +47409,7 @@ async function runAuditCli({
           config: providerConfig
         });
       }
-      if (!runtimeKernel) throw codedError11("AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS");
+      if (!runtimeKernel) throw codedError16("AUDIT_PREFLIGHT_FAILED_HOST_BINDINGS");
       result = await runtimeKernel.start({
         mode: flags.mode,
         target: {
@@ -45084,7 +47432,7 @@ async function runAuditCli({
         runId: flags["run-id"]
       });
       if (typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) {
-        throw codedError11("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
+        throw codedError16("AUDIT_PREFLIGHT_FAILED_VAULT_REFERENCE");
       }
       if (!runtimeKernel) {
         const local = await Promise.resolve().then(() => (init_local_runtime(), local_runtime_exports));

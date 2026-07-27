@@ -36,6 +36,7 @@ import { connectMcp } from './adapters/mcp-transport.mjs';
 import { createPublicGhlAdapter } from './adapters/public-ghl.mjs';
 import { loadTrustedPublicReadPolicy } from './adapters/trusted-public-policy.mjs';
 import { createAuditKernel, planWeeklyCollection, sealFrozenInputs } from './kernel.mjs';
+import { measurePublicEvidence } from './measurement.mjs';
 import { auditPaths } from './paths.mjs';
 import { openState } from './state.mjs';
 import { openVault, resolveVaultKeys } from './vault.mjs';
@@ -1579,9 +1580,22 @@ export function createPublicAuditKernel({
           privateSourceInventoryHash: collection.privateSourceInventoryHash,
         };
       },
-      normalize: async ({ context, publicEvidence }) => ({
+      /**
+       * A3 — the measurement chain, in-process at last.
+       *
+       * This used to return two hashes, which is why a live run could collect 588 real records and
+       * publish an empty report: `projectJourneyEvents -> normalizeEvidence -> buildEvidenceGraph
+       * -> buildWindows -> computeJourneyMetrics` was exported, tested, and reachable only from a
+       * script outside the repo.
+       *
+       * The two hashes are KEPT. They are what the offline rail returns, what the Task 10 shape
+       * declares, and what a resume compares, so they stay first and stay byte-identical; the
+       * measurement is added beside them.
+       */
+      normalize: async ({ context, publicEvidence, frozenInputs }) => ({
         contextHash: sha256(context),
         publicEvidenceHash: sha256(publicEvidence),
+        measurement: measurePublicEvidence({ publicEvidence, frozenInputs }),
       }),
       discover: async () => ({ findings: [] }),
       falsify: async () => ({ packets: [] }),
