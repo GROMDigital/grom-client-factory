@@ -236,6 +236,84 @@ test('lane 3 carries the copy in send order with its cadence, and says what it c
   assert.ok(lanes.conversationCopyAi.limits.some((limit) => /CEILINGS/u.test(limit)));
 });
 
+test('a library template body is resolved into the sequence, so lane 3 judges the real copy', () => {
+  /*
+   * The gap this closes: 63 of 126 message steps on the UK account are library templates, and lane 3
+   * was judging them on their subject line without the body. `lib/adapters/email-copy.mjs` collects
+   * the copy; this asserts it arrives IN the sequence rather than as a second list to join by hand.
+   */
+  const withCopy = {
+    ...internal,
+    workflows: internal.workflows.map((wf) => (
+      wf.definition.data.workflow.name !== '08 Long Term Nurture' ? wf : {
+        ...wf,
+        definition: {
+          ...wf.definition,
+          data: {
+            ...wf.definition.data,
+            workflow: {
+              ...wf.definition.data.workflow,
+              workflowData: {
+                templates: wf.definition.data.workflow.workflowData.templates.map((step) => (
+                  step.type !== 'email' ? step : {
+                    ...step,
+                    attributes: { ...step.attributes, template_id: '6a2c675152ce94e124f9f0f1', templatesource: 'email-builder' },
+                  }
+                )),
+              },
+            },
+          },
+        },
+      }
+    )),
+    emailCopy: {
+      complete: true,
+      limitations: [],
+      requestedCount: 1,
+      libraryTotal: 59,
+      templates: [{
+        templateId: '6a2c675152ce94e124f9f0f1',
+        name: 'Lead Seq B T2 - What Made You Reach Out',
+        body: '<p>Hi {{contact.first_name}},</p><p>You saw something, clicked through, and filled in the form.</p>',
+        bodyUnavailable: null,
+      }],
+    },
+  };
+  const { lanes } = buildAnalysisBriefs({ measurement, internal: withCopy, profile });
+  const nurture = lanes.conversationCopyAi.sequences.find((s) => s.workflow === '08 Long Term Nurture');
+  const email = nurture.messages.find((m) => m.channel === 'email');
+
+  assert.equal(email.bodySource, 'library_template');
+  assert.match(email.body, /You saw something, clicked through/u);
+  assert.equal(email.templateName, 'Lead Seq B T2 - What Made You Reach Out');
+  assert.equal(email.bodyUnavailable, null);
+  // Not inline, and yet fully readable. Collapsing those two facts would hide the entire gain.
+  assert.equal(email.bodyIsInline, false);
+  assert.equal(nurture.messagesWithNoInlineBody, 1);
+  assert.equal(nurture.messagesWithUnreadableBody, 0);
+
+  const { copyCoverage } = lanes.conversationCopyAi;
+  assert.equal(copyCoverage.emailsFromLibrary, 1);
+  assert.equal(copyCoverage.emailsUnreadable, 0);
+  assert.equal(copyCoverage.libraryCollection.ran, true);
+  assert.equal(copyCoverage.libraryCollection.libraryTotal, 59);
+});
+
+test('without the copy collection lane 3 is told how much it cannot read, and why', () => {
+  const { lanes } = buildAnalysisBriefs({ measurement, internal, profile });
+  const { copyCoverage } = lanes.conversationCopyAi;
+
+  // The fixture's nurture email points at no template at all, so it is honestly unreadable.
+  assert.equal(copyCoverage.emailsUnreadable, 1);
+  assert.equal(copyCoverage.libraryCollection.ran, false);
+  assert.match(copyCoverage.libraryCollection.reason, /not read for this run/u);
+  const nurture = lanes.conversationCopyAi.sequences.find((s) => s.workflow === '08 Long Term Nurture');
+  const email = nurture.messages.find((m) => m.channel === 'email');
+  assert.equal(email.bodySource, 'unavailable');
+  // A REASON, never a bare absence: an unreadable email must not read as an empty one.
+  assert.equal(email.bodyUnavailable, 'NO_TEMPLATE_REFERENCE');
+});
+
 test('lane 3 hands over the AI prompts as copy, and the channel behaviour to judge them against', () => {
   const { lanes } = buildAnalysisBriefs({ measurement, internal, profile });
   const { aiAgents, engagement } = lanes.conversationCopyAi;

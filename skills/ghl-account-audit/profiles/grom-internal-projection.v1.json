@@ -41,6 +41,10 @@
       "reason": "message bodies; engagement is taken from the conversation index, not from message content"
     },
     {
+      "actionId": "emails__fetch-template",
+      "reason": "email library template metadata; the copy is collected as internal COPY evidence for the conversation lane and is never journey evidence, and the body is not in this response at all"
+    },
+    {
       "actionId": "opportunities-v3__get-pipelines",
       "reason": "pipeline definitions, not opportunities; reading these as journey evidence is exactly the misroute this list exists to prevent"
     },

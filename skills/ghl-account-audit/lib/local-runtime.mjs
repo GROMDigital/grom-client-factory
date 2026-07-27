@@ -39,6 +39,10 @@ import {
 } from './adapters/internal-audit-collector.mjs';
 import { createInternalAuditAdapter } from './adapters/internal-audit.mjs';
 import {
+  EMAIL_TEMPLATE_ACTION,
+  createEmailCopyCollector,
+} from './adapters/email-copy.mjs';
+import {
   createInternalAuditConnect,
   validateInternalAuditTransport,
 } from './adapters/internal-audit-session.mjs';
@@ -861,6 +865,10 @@ const PUBLIC_OPTIONAL_KEYS = Object.freeze([
 const PUBLIC_INTERNAL_AUDIT_KEYS = Object.freeze([
   'budgets',
   'companyId',
+  // Opt-in, so every configuration that exists today collects exactly what it collected before.
+  // See `buildEmailCopyRail`: it is a SECOND live connection and a fetch to a storage host, and
+  // neither should start happening to a run because a dependency changed underneath it.
+  'emailCopy',
   'runtimeWorkflowIds',
   'transport',
 ]);
@@ -966,6 +974,11 @@ function validatePublicInternalAudit(value) {
       if (!Object.hasOwn(DEFAULT_INTERNAL_BUDGETS, key)) publicConfigError();
       if (!Number.isSafeInteger(limit) || limit < 1) publicConfigError();
     }
+  }
+  // A boolean and nothing else. The budgets that bound it are the module's own, not a config's, for
+  // the same reason the public per-category budgets are not configurable.
+  if (Object.hasOwn(value, 'emailCopy') && value.emailCopy !== true && value.emailCopy !== false) {
+    publicConfigError();
   }
 }
 
@@ -1561,7 +1574,106 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
  * process behind. A kernel-level open would have to be torn down by the kernel, and the kernel
  * neither knows about transports nor should.
  */
-function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectOverride, runtime }) {
+/**
+ * THE EMAIL-COPY RAIL. A second, short-lived public MCP session, opened only to read the email
+ * library and only when the configuration asks for it.
+ *
+ * It cannot ride along with the journey collection, because which templates to fetch is derived from
+ * the WORKFLOWS, and those are read on the internal rail, which runs after the public one. So it
+ * connects here, during internal collection, with the workflows already in hand.
+ *
+ * It is deliberately NOT declared as a journey capability. `assertTranslatableCapabilities` would
+ * refuse it, and rightly: the journey collector's request is fixed at
+ * `{locationId, fromDate, toDate, cursor}`, and this endpoint is neither windowed nor cursor-paged.
+ * The approval that matters is shared, because the action comes out of the same checked-in
+ * allowlist through `approvedPublicCapabilities`.
+ */
+function buildEmailCopyRail({
+  config,
+  credentialResolver,
+  transportConnect,
+  ghlNativeConnect,
+  emailCopyConnect,
+  runtime,
+}) {
+  const policy = loadTrustedPublicReadPolicy();
+  const listed = policy.allowlist.actions.find(
+    ({ actionId }) => actionId === EMAIL_TEMPLATE_ACTION,
+  );
+  // The allowlist is the authority. If the checked-in catalog does not approve this read, the rail
+  // does not exist, rather than the read happening under some other name.
+  if (listed === undefined) return null;
+  const capability = Object.freeze({
+    ...listed,
+    sourceSnapshotHash: policy.snapshotHash,
+    allowlistHash: policy.allowlistHash,
+    providerId: config.providerId,
+    capabilityManifestHash: config.capabilityManifestHash,
+  });
+
+  const nativeTransport = config.transport.kind === GHL_NATIVE_TRANSPORT_KIND
+    ? validateGhlNativeTransport(config.transport)
+    : null;
+  const nativeConnect = ghlNativeConnect ?? (nativeTransport === null ? null : createGhlNativeConnect({
+    url: nativeTransport.url,
+    credentialHeaderName: nativeTransport.credentialHeaderName,
+    fetch: typeof runtime?.ghlNativeFetch === 'function' ? runtime.ghlNativeFetch : undefined,
+  }));
+  const effectiveConnect = nativeConnect === null
+    ? transportConnect
+    : createGhlTranslatingConnect({ connect: nativeConnect, runtime });
+  const wireTransport = nativeTransport === null
+    ? structuredClone(config.transport)
+    : { kind: 'streamable-http', url: nativeTransport.url };
+
+  return {
+    async collectEmailCopy({ workflows, signal }) {
+      const client = emailCopyConnect === null || emailCopyConnect === undefined
+        ? await connectMcp({
+            transport: effectiveConnect === null
+              ? wireTransport
+              : { ...wireTransport, connect: effectiveConnect },
+            providerConfig: {
+              providerId: config.providerId,
+              expectedLocationId: config.expectedLocationId,
+              capabilityManifestHash: config.capabilityManifestHash,
+              publicCatalogSnapshotHash: config.publicCatalogSnapshotHash,
+              publicReadAllowlistHash: config.publicReadAllowlistHash,
+              credentialRef: config.credentialRef === null
+                ? null
+                : structuredClone(config.credentialRef),
+            },
+            ...(credentialResolver === null ? {} : { credentialResolver }),
+          })
+        : await emailCopyConnect();
+      try {
+        return await createEmailCopyCollector({
+          client,
+          capability,
+          boundLocationId: config.expectedLocationId,
+          ...(typeof runtime?.emailTemplateBodyFetch === 'function'
+            ? { fetchBody: runtime.emailTemplateBodyFetch }
+            : {}),
+        }).collectEmailCopy({ workflows, signal });
+      } finally {
+        try {
+          await client.close?.();
+        } catch {
+          // Same reasoning as the internal session below: a transport that will not close cleanly
+          // must not mask the collection's own outcome.
+        }
+      }
+    },
+  };
+}
+
+function buildInternalAuditAdapter({
+  internalAudit,
+  expectedLocationId,
+  connectOverride,
+  emailCopyRail = null,
+  runtime,
+}) {
   if (!isPlainObject(internalAudit)) return null;
   const connect = connectOverride ?? createInternalAuditConnect({
     serverPath: internalAudit.transport.serverPath,
@@ -1570,6 +1682,7 @@ function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectO
   return {
     async collectAuditEvidence(request) {
       const client = await connect();
+      let evidence;
       try {
         const collector = createInternalAuditCollector({
           rail: createInternalAuditAdapter({ client, expectedLocationId }),
@@ -1585,7 +1698,7 @@ function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectO
         // log; against a real transport every read after the credential check happens on a closed
         // child process. A test asserting the call ORDER caught it, which an outcome-only test
         // could not have.
-        return await collector.collectAuditEvidence(request);
+        evidence = await collector.collectAuditEvidence(request);
       } finally {
         try {
           await client.close?.();
@@ -1593,6 +1706,47 @@ function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectO
           // A transport that will not close cleanly must not mask the collection's own outcome.
         }
       }
+      /*
+       * The library copy, attached to the internal evidence because it IS internal evidence: the
+       * words a lead receives, in the same bundle as the workflow that sends them.
+       *
+       * Deliberately outside the internal session's `try`, and deliberately after it: the internal
+       * child process is closed before a second connection is opened, and the workflows this needs
+       * are already collected. A failure here is SWALLOWED into a limitation rather than thrown,
+       * because losing the copy must never cost a run its 27 workflows and 369 steps.
+       */
+      if (emailCopyRail === null || !Array.isArray(evidence?.workflows)) return evidence;
+      let emailCopy;
+      try {
+        emailCopy = await emailCopyRail.collectEmailCopy({
+          workflows: evidence.workflows,
+          signal: request?.signal,
+        });
+      } catch (error) {
+        emailCopy = {
+          schemaVersion: '1.0.0',
+          boundLocationId: expectedLocationId,
+          complete: false,
+          // An UPPER_SNAKE machine code or nothing. A raw message here could carry the signed
+          // storage URL, and this value reaches the analysis briefs.
+          limitations: [typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{2,63}$/u.test(error.code)
+            ? error.code
+            : 'EMAIL_COPY_COLLECTION_FAILED'],
+          requestedCount: null,
+          templates: [],
+        };
+      }
+      return {
+        ...evidence,
+        emailCopy,
+        // The bundle's own completeness must account for the copy, or a partial copy collection
+        // would be published inside a run calling itself complete.
+        complete: evidence.complete === true && emailCopy.complete === true,
+        limitations: [
+          ...(evidence.limitations ?? []),
+          ...(emailCopy.complete === true ? [] : ['EMAIL_COPY_INCOMPLETE']),
+        ],
+      };
     },
   };
 }
@@ -1610,6 +1764,9 @@ export function createPublicAuditKernel({
   // configuration declares, exactly as `ghlNativeConnect` does, so a hermetic test never launches
   // a child process and never needs the plugin installed.
   internalAuditConnect = null,
+  // A host-owned connect for the EMAIL-COPY session, same seam and same reason as the two above: a
+  // hermetic test must be able to exercise the library read without opening a socket.
+  emailCopyConnect = null,
   credentialResolver = null,
   keyProvider = null,
   signal = null,
@@ -1690,6 +1847,18 @@ export function createPublicAuditKernel({
           internalAudit: config.internalAudit,
           expectedLocationId: config.expectedLocationId,
           connectOverride: internalAuditConnect,
+          // Opt-in. Without `internalAudit.emailCopy: true` no second session is opened and the
+          // evidence is byte-identical to what every existing configuration already produces.
+          emailCopyRail: config.internalAudit.emailCopy === true
+            ? buildEmailCopyRail({
+                config,
+                credentialResolver,
+                transportConnect,
+                ghlNativeConnect,
+                emailCopyConnect,
+                runtime,
+              })
+            : null,
           runtime,
         });
       },

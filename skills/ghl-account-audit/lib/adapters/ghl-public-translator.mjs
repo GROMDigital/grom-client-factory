@@ -751,6 +751,15 @@ export const NOT_COLLECTABLE_IN_THIS_SHAPE = Object.freeze({
     'requires a contactId; use calendars-v3__get-calendar-events, which is location-scoped',
   'calendars-v3__get-appointment':
     'requires an eventId; use calendars-v3__get-calendar-events, which is location-scoped',
+  /*
+   * Approved, and deliberately NOT a journey capability. The email library is configuration and
+   * copy, not a time series: it takes `limit`/`offset` and has no date parameter and no cursor, so
+   * the journey request shape `{locationId, fromDate, toDate, cursor}` does not describe it.
+   * `lib/adapters/email-copy.mjs` reads it on its own terms, against this same allowlist entry, as
+   * part of the INTERNAL copy evidence the conversation lane is built from.
+   */
+  'emails__fetch-template':
+    'the email library is configuration and copy, not a windowed time series; lib/adapters/email-copy.mjs reads it as internal copy evidence',
 });
 
 /**

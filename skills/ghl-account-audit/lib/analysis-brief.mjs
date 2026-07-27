@@ -207,6 +207,37 @@ function collisionMap(workflows) {
 }
 
 /**
+ * WHAT SHARE OF THE CUSTOMER-FACING COPY THIS LANE CAN READ.
+ *
+ * The single most useful number about a copy analysis, and the one whose absence let the copywriter
+ * lane judge 63 of 126 messages on their subject line alone without ever saying so.
+ */
+function copyCoverageOf(sequences, internal) {
+  const messages = sequences.flatMap((sequence) => sequence.messages);
+  const emails = messages.filter((message) => message.channel === 'email');
+  const bySource = (source) => emails.filter((message) => message.bodySource === source).length;
+  const collection = internal?.emailCopy ?? null;
+  return {
+    messagesTotal: messages.length,
+    smsReadable: messages.filter((message) => message.channel === 'sms' && message.body.length > 0).length,
+    emailsTotal: emails.length,
+    emailsInline: bySource('inline'),
+    emailsFromLibrary: bySource('library_template'),
+    emailsUnreadable: bySource('unavailable'),
+    // Why any are unreadable, taken from the collection rather than inferred from the absence.
+    libraryCollection: collection === null
+      ? { ran: false, reason: 'The email library was not read for this run, so no library template body is available.' }
+      : {
+          ran: true,
+          complete: collection.complete === true,
+          requestedCount: collection.requestedCount ?? null,
+          libraryTotal: collection.libraryTotal ?? null,
+          limitations: [...(collection.limitations ?? [])],
+        },
+  };
+}
+
+/**
  * Every message a lead can receive, in send order, with the accumulated wait in front of it.
  *
  * BRANCH LEGS ARE FLATTENED, and that limitation is stated on the brief rather than hidden: a
@@ -214,7 +245,7 @@ function collisionMap(workflows) {
  * this wrong in the other direction would be worse, because a lane that under-counted would clear a
  * sequence that is in fact double-messaging.
  */
-function messagesOf(workflow) {
+function messagesOf(workflow, emailCopy = null) {
   const messages = [];
   let waiting = [];
   for (const step of stepsOf(workflow)) {
@@ -227,6 +258,23 @@ function messagesOf(workflow) {
       continue;
     }
     if (step.type === 'email') {
+      const inline = plainText(attributes.html);
+      /*
+       * A send step with no inline HTML points at a LIBRARY TEMPLATE, and the template's copy is
+       * collected separately (`lib/adapters/email-copy.mjs`). Resolved here so the analyst reads one
+       * sequence with the bodies in it rather than being handed a second list to join by hand.
+       *
+       * `bodySource` is the honest part. `inline`, `library` and `unavailable` are three different
+       * facts, and an analyst that cannot tell them apart will read an unreadable email as an empty
+       * one and call the sequence thin when it is not.
+       */
+      const templateId = typeof attributes.template_id === 'string' && attributes.template_id.length > 0
+        ? attributes.template_id
+        : null;
+      const fromLibrary = inline.length === 0 && templateId !== null
+        ? emailCopy?.get(templateId) ?? null
+        : null;
+      const libraryBody = typeof fromLibrary?.body === 'string' ? plainText(fromLibrary.body) : '';
       messages.push({
         order: step.order ?? null,
         channel: 'email',
@@ -234,10 +282,18 @@ function messagesOf(workflow) {
         from: `${attributes.from_name ?? ''} <${attributes.from_email ?? ''}>`.trim(),
         subject: attributes.subject ?? null,
         preHeader: attributes.preHeader ?? null,
-        // An empty body means the send step points at a LIBRARY TEMPLATE whose HTML lives outside
-        // the workflow. Said out loud, because an analyst must not judge copy it cannot see.
-        body: plainText(attributes.html),
-        bodyIsInline: plainText(attributes.html).length > 0,
+        body: inline.length > 0 ? inline : libraryBody,
+        bodyIsInline: inline.length > 0,
+        bodySource: inline.length > 0
+          ? 'inline'
+          : libraryBody.length > 0 ? 'library_template' : 'unavailable',
+        ...(inline.length > 0 ? {} : {
+          templateName: fromLibrary?.name ?? null,
+          // Why it cannot be read, when it cannot. Never a bare absence.
+          bodyUnavailable: libraryBody.length > 0
+            ? null
+            : fromLibrary?.bodyUnavailable ?? (templateId === null ? 'NO_TEMPLATE_REFERENCE' : 'TEMPLATE_NOT_COLLECTED'),
+        }),
       });
       waiting = [];
     } else if (step.type === 'sms') {
@@ -388,6 +444,44 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
     }).sort((left, right) => byteOrder(left.name, right.name)),
   };
 
+  /*
+   * The library copy, indexed by template id, so `messagesOf` can resolve a send step's
+   * `template_id` into the words the lead actually receives. Empty when the collection did not run,
+   * in which case every library email degrades to `bodySource: 'unavailable'` with a reason.
+   */
+  const emailCopyIndex = new Map(
+    (Array.isArray(internal?.emailCopy?.templates) ? internal.emailCopy.templates : [])
+      .filter((entry) => isPlainObject(entry) && typeof entry.templateId === 'string')
+      .map((entry) => [entry.templateId, entry]),
+  );
+
+  const sequences = workflows
+    .map((workflow) => {
+      const definition = definitionOf(workflow);
+      const messages = messagesOf(workflow, emailCopyIndex);
+      if (messages.length === 0) return null;
+      return {
+        workflow: definition?.name ?? workflow.workflowId,
+        triggers: (workflow?.definition?.data?.triggers ?? []).map((trigger) => trigger.type),
+        stopOnResponse: definition?.stopOnResponse ?? null,
+        timezone: definition?.timezone ?? null,
+        messageCount: messages.length,
+        emails: messages.filter((message) => message.channel === 'email').length,
+        smss: messages.filter((message) => message.channel === 'sms').length,
+        /*
+         * TWO different counts, and keeping both is the point. Before the library copy was
+         * collected these were the same number, so "not inline" was a synonym for "cannot be read".
+         * It is not any more: a library template we successfully fetched is not inline AND is fully
+         * readable, and collapsing the two would hide the entire gain.
+         */
+        messagesWithNoInlineBody: messages.filter((message) => message.bodyIsInline === false).length,
+        messagesWithUnreadableBody: messages.filter((message) => message.bodySource === 'unavailable').length,
+        messages,
+      };
+    })
+    .filter((sequence) => sequence !== null)
+    .sort((left, right) => right.messageCount - left.messageCount || byteOrder(left.workflow, right.workflow));
+
   const conversationCopyAi = {
     lane: 'conversation_copy_ai',
     ...header,
@@ -401,30 +495,15 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
       conversationsWithAnyManualMessage: observation(surfaces, 'conversations', 'has_manual_message'),
       appointmentsBookedVia: observation(surfaces, 'appointments', 'booked_via')?.values ?? null,
     },
-    sequences: workflows
-      .map((workflow) => {
-        const definition = definitionOf(workflow);
-        const messages = messagesOf(workflow);
-        if (messages.length === 0) return null;
-        return {
-          workflow: definition?.name ?? workflow.workflowId,
-          triggers: (workflow?.definition?.data?.triggers ?? []).map((trigger) => trigger.type),
-          stopOnResponse: definition?.stopOnResponse ?? null,
-          timezone: definition?.timezone ?? null,
-          messageCount: messages.length,
-          emails: messages.filter((message) => message.channel === 'email').length,
-          smss: messages.filter((message) => message.channel === 'sms').length,
-          // Emails whose body is a library template, so the analyst knows what it cannot see.
-          messagesWithNoInlineBody: messages.filter((message) => !message.bodyIsInline).length,
-          messages,
-        };
-      })
-      .filter((sequence) => sequence !== null)
-      .sort((left, right) => right.messageCount - left.messageCount || byteOrder(left.workflow, right.workflow)),
+    // How much of the copy this lane can actually read. Stated as a number at the TOP of the brief
+    // because a copywriter that does not know its own coverage will call a sequence thin when what
+    // happened is that we could not fetch half of it.
+    copyCoverage: copyCoverageOf(sequences, internal),
+    sequences,
     aiAgents: aiAgentsOf(internal),
     limits: [
       'MESSAGE COUNTS PER SEQUENCE ARE CEILINGS. Branch legs are flattened, so a sequence listing 16 messages may send 8 down either leg. `waitBefore` entries in square brackets mark a branch point, not a delay.',
-      'An email with an empty body is a send step pointing at a library template whose HTML is not in this evidence. Judge those on subject, preheader, sender and placement only, and say so.',
+      'Read `bodySource` on every email. `inline` means the copy is written into the workflow. `library_template` means the step points at a library template and its copy WAS fetched, so it is complete and you judge it exactly as you would an inline one. `unavailable` means the body could not be read at all and `bodyUnavailable` says why: judge those on subject, preheader, sender and placement only, and say so explicitly.',
       'No open, click, reply, bounce or complaint statistics exist in this evidence.',
     ],
   };

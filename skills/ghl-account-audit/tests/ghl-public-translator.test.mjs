@@ -98,7 +98,7 @@ async function translateRejects(actionId, handlers, code, extra = {}) {
 // The catalog surface
 // ---------------------------------------------------------------------------
 
-test('exactly the seven location-drivable reads are translated, and the other five are named', () => {
+test('exactly the seven location-drivable reads are translated, and the other six are named', () => {
   assert.deepEqual(translatedActionIds(), [
     'calendars-v3__get-calendar-events',
     'calendars-v3__get-calendars',
@@ -116,6 +116,10 @@ test('exactly the seven location-drivable reads are translated, and the other fi
     'calendars-v3__get-appointment',
     'contacts-v3__get-appointments-for-contact',
     'conversations-v3__get-messages',
+    // Approved, and read by `lib/adapters/email-copy.mjs` rather than by the journey collector: the
+    // email library takes limit/offset and has no date parameter, so the journey request shape
+    // does not describe it. Listing it here is what keeps it OUT of the journey capabilities.
+    'emails__fetch-template',
   ]);
   // Together they account for every approved read in the catalog, so nothing is silently missing.
   assert.deepEqual(

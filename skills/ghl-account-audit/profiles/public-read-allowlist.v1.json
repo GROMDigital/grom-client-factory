@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
-  "sourceCatalogRevision": "2026-07-27-public-read-review-2",
-  "sourceSnapshotHash": "eed2dbc4c229c4dc8f8c15305a2cb1de17c5082e7adbc0d4017f20d4fb6ba6f6",
+  "sourceCatalogRevision": "2026-07-28-public-read-review-3",
+  "sourceSnapshotHash": "db58d1a1d286cfcae0f4f6aabd2c9aa10431177578e135f9585c7a0fff1fb2ca",
   "sourceServerIdentity": "reviewed-public-catalog",
   "actions": [
     {
@@ -58,6 +58,13 @@
       "method": "GET",
       "normalizedPath": "/conversations/search",
       "category": "conversations",
+      "risk": "read"
+    },
+    {
+      "actionId": "emails__fetch-template",
+      "method": "GET",
+      "normalizedPath": "/emails/builder",
+      "category": "emails",
       "risk": "read"
     },
     {

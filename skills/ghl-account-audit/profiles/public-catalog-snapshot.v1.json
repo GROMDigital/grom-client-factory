@@ -1,6 +1,6 @@
 {
   "schemaVersion": "1.0.0",
-  "catalogRevision": "2026-07-27-public-read-review-2",
+  "catalogRevision": "2026-07-28-public-read-review-3",
   "capturedAt": "2026-07-27T00:00:00.000Z",
   "sourceServer": {
     "name": "ghl-public-mcp",
@@ -9,92 +9,14 @@
   },
   "candidates": [
     {
-      "actionId": "contacts.search",
-      "method": "POST",
-      "normalizedPath": "/contacts/search",
-      "category": "contacts",
-      "risk": "read",
-      "approvedSemanticRead": true,
-      "approval": {
-        "provenance": "reviewed search_actions catalog entry",
-        "reviewedAt": "2026-07-24T00:00:00.000Z",
-        "reviewedBy": "grom-audit-contract"
-      }
-    },
-    {
-      "actionId": "opportunities.list",
+      "actionId": "calendars-v3__get-appointment",
       "method": "GET",
-      "normalizedPath": "/opportunities/search",
-      "category": "opportunities",
-      "risk": "read",
-      "approvedSemanticRead": true,
-      "approval": {
-        "provenance": "reviewed search_actions catalog entry",
-        "reviewedAt": "2026-07-24T00:00:00.000Z",
-        "reviewedBy": "grom-audit-contract"
-      }
-    },
-    {
-      "actionId": "contacts-v3__get-appointments-for-contact",
-      "method": "GET",
-      "normalizedPath": "/contacts/{contactId}/appointments",
+      "normalizedPath": "/calendars/events/appointments/{eventId}",
       "category": "appointments",
       "risk": "read",
       "approvedSemanticRead": true,
       "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=contacts-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[contacts.readonly]",
-        "reviewedAt": "2026-07-27T00:00:00.000Z",
-        "reviewedBy": "grom-audit-contract"
-      }
-    },
-    {
-      "actionId": "conversations-v3__search-conversation",
-      "method": "GET",
-      "normalizedPath": "/conversations/search",
-      "category": "conversations",
-      "risk": "read",
-      "approvedSemanticRead": true,
-      "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=conversations-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[conversations.readonly]",
-        "reviewedAt": "2026-07-27T00:00:00.000Z",
-        "reviewedBy": "grom-audit-contract"
-      }
-    },
-    {
-      "actionId": "conversations-v3__get-messages",
-      "method": "GET",
-      "normalizedPath": "/conversations/{conversationId}/messages",
-      "category": "conversations",
-      "risk": "read",
-      "approvedSemanticRead": true,
-      "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=conversations-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[conversations/message.readonly]",
-        "reviewedAt": "2026-07-27T00:00:00.000Z",
-        "reviewedBy": "grom-audit-contract"
-      }
-    },
-    {
-      "actionId": "conversations-v3__export-messages-by-location",
-      "method": "GET",
-      "normalizedPath": "/conversations/messages/export",
-      "category": "conversations",
-      "risk": "read",
-      "approvedSemanticRead": true,
-      "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=conversations-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[conversations/message.readonly]; native cursor/nextCursor pagination",
-        "reviewedAt": "2026-07-27T00:00:00.000Z",
-        "reviewedBy": "grom-audit-contract"
-      }
-    },
-    {
-      "actionId": "calendars-v3__get-calendars",
-      "method": "GET",
-      "normalizedPath": "/calendars/",
-      "category": "appointments",
-      "risk": "read",
-      "approvedSemanticRead": true,
-      "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=calendars-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false",
+        "provenance": "uxie-ghl-mcp search_actions category=calendars-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[calendars/events.readonly]",
         "reviewedAt": "2026-07-27T00:00:00.000Z",
         "reviewedBy": "grom-audit-contract"
       }
@@ -113,15 +35,101 @@
       }
     },
     {
-      "actionId": "calendars-v3__get-appointment",
+      "actionId": "calendars-v3__get-calendars",
       "method": "GET",
-      "normalizedPath": "/calendars/events/appointments/{eventId}",
+      "normalizedPath": "/calendars/",
       "category": "appointments",
       "risk": "read",
       "approvedSemanticRead": true,
       "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=calendars-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[calendars/events.readonly]",
+        "provenance": "uxie-ghl-mcp search_actions category=calendars-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false",
         "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "contacts-v3__get-appointments-for-contact",
+      "method": "GET",
+      "normalizedPath": "/contacts/{contactId}/appointments",
+      "category": "appointments",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "uxie-ghl-mcp search_actions category=contacts-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[contacts.readonly]",
+        "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "contacts.create",
+      "method": "POST",
+      "normalizedPath": "/contacts/",
+      "category": "contacts",
+      "risk": "write",
+      "approvedSemanticRead": false
+    },
+    {
+      "actionId": "contacts.search",
+      "method": "POST",
+      "normalizedPath": "/contacts/search",
+      "category": "contacts",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "reviewed search_actions catalog entry",
+        "reviewedAt": "2026-07-24T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "conversations-v3__export-messages-by-location",
+      "method": "GET",
+      "normalizedPath": "/conversations/messages/export",
+      "category": "conversations",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "uxie-ghl-mcp search_actions category=conversations-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[conversations/message.readonly]; native cursor/nextCursor pagination",
+        "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "conversations-v3__get-messages",
+      "method": "GET",
+      "normalizedPath": "/conversations/{conversationId}/messages",
+      "category": "conversations",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "uxie-ghl-mcp search_actions category=conversations-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[conversations/message.readonly]",
+        "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "conversations-v3__search-conversation",
+      "method": "GET",
+      "normalizedPath": "/conversations/search",
+      "category": "conversations",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "uxie-ghl-mcp search_actions category=conversations-v3: risk.level=low, risk.kinds=[read], requiresConfirmation=false, scopes=[conversations.readonly]",
+        "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
+    },
+    {
+      "actionId": "emails__fetch-template",
+      "method": "GET",
+      "normalizedPath": "/emails/builder",
+      "category": "emails",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "verified live against the UK sub-account 2026-07-28: 200, {builders:[{name,isPlainText,lastUpdated,dateAdded,previewUrl,id,version,templateType}], total:[{total:59}]}. Metadata only; no message body and no contact data in the response.",
+        "reviewedAt": "2026-07-28T00:00:00.000Z",
         "reviewedBy": "grom-audit-contract"
       }
     },
@@ -139,15 +147,15 @@
       }
     },
     {
-      "actionId": "payments-v3__list-transactions",
+      "actionId": "opportunities.list",
       "method": "GET",
-      "normalizedPath": "/payments/transactions",
-      "category": "payments",
+      "normalizedPath": "/opportunities/search",
+      "category": "opportunities",
       "risk": "read",
       "approvedSemanticRead": true,
       "approval": {
-        "provenance": "uxie-ghl-mcp search_actions category=payments-v3: risk.level=low, risk.kinds=[read,billing], requiresConfirmation=false, scopes=[payments/transactions.readonly]; billing kind is a data-domain tag on a GET, no mutating kind present",
-        "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "provenance": "reviewed search_actions catalog entry",
+        "reviewedAt": "2026-07-24T00:00:00.000Z",
         "reviewedBy": "grom-audit-contract"
       }
     },
@@ -165,13 +173,18 @@
       }
     },
     {
-      "actionId": "contacts.create",
-      "method": "POST",
-      "normalizedPath": "/contacts/",
-      "category": "contacts",
-      "risk": "write",
-      "approvedSemanticRead": false
+      "actionId": "payments-v3__list-transactions",
+      "method": "GET",
+      "normalizedPath": "/payments/transactions",
+      "category": "payments",
+      "risk": "read",
+      "approvedSemanticRead": true,
+      "approval": {
+        "provenance": "uxie-ghl-mcp search_actions category=payments-v3: risk.level=low, risk.kinds=[read,billing], requiresConfirmation=false, scopes=[payments/transactions.readonly]; billing kind is a data-domain tag on a GET, no mutating kind present",
+        "reviewedAt": "2026-07-27T00:00:00.000Z",
+        "reviewedBy": "grom-audit-contract"
+      }
     }
   ],
-  "canonicalSha256": "eed2dbc4c229c4dc8f8c15305a2cb1de17c5082e7adbc0d4017f20d4fb6ba6f6"
+  "canonicalSha256": "db58d1a1d286cfcae0f4f6aabd2c9aa10431177578e135f9585c7a0fff1fb2ca"
 }

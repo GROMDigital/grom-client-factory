@@ -121,6 +121,10 @@ cannot make it itself).
 1. **`audit run --mode weekly ...`** collects, measures, and writes the three
    briefs and the three analyst prompts under
    `audits/ghl/<location>/private/briefs/<runId>/`.
+   Set `internalAudit.emailCopy: true` in the provider config to also read the
+   email library, so the copywriter lane judges the real body of a send step
+   that points at a library template instead of only its subject line. It is
+   opt-in because it opens a second session and fetches a storage host.
 2. **`audit briefs --project <p> --location <l> --run-id <r>`** prints the
    `briefsHash` and the three prompt files.
 3. **Dispatch three subagents, one per prompt file, in parallel**, exactly as
