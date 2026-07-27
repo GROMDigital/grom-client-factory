@@ -20,6 +20,11 @@ const COMMAND_FLAGS = Object.freeze({
   'review-request': new Set(['project', 'location', 'run-id']),
   'ingest-review': new Set(['project', 'location', 'run-id', 'response']),
   resume: new Set(['project', 'location', 'run-id', 'vault-key-ref']),
+  // The two halves of the analysis cycle. `briefs` reports what a completed run wrote for the three
+  // expert analysts; `investigate` takes their answers back. See `lib/cycle.mjs` for why the model
+  // call sits between two commands instead of inside the run.
+  briefs: new Set(['project', 'location', 'run-id']),
+  investigate: new Set(['project', 'location', 'run-id', 'findings']),
 });
 const REQUIRED_FLAGS = Object.freeze({
   replay: ['fixture', 'output'],
@@ -27,6 +32,8 @@ const REQUIRED_FLAGS = Object.freeze({
   'review-request': ['project', 'location', 'run-id'],
   'ingest-review': ['project', 'location', 'run-id', 'response'],
   resume: ['project', 'location', 'run-id'],
+  briefs: ['project', 'location', 'run-id'],
+  investigate: ['project', 'location', 'run-id', 'findings'],
 });
 const LOCATION = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
 
@@ -94,6 +101,10 @@ function safeStatus(value) {
   const safe = {};
   for (const key of [
     'status', 'runId', 'oldRunId', 'newRunId', 'publicationId', 'publicationPath',
+    // The analysis cycle's own status. Hashes, counts and a directory path only: everything a
+    // caller needs to dispatch the analysts and read the result, and nothing read off the account.
+    'briefsHash', 'analystSetHash', 'investigationHash', 'directory',
+    'causeCount', 'corroboratedCauseCount', 'rejectedCount', 'lanes',
   ]) {
     if (value?.[key] !== undefined) safe[key] = value[key];
   }
@@ -213,6 +224,41 @@ export async function runAuditCli({
     } finally {
       state.close();
     }
+  } else if (command === 'briefs') {
+    /*
+     * Report what the run already wrote for the three analysts. It computes nothing: the briefs are
+     * a product of the sealed evidence and were written during the run, so a command that could
+     * rebuild them here would be a second, unsealed source of the same question.
+     */
+    const [{ auditPaths }, { readAnalysisArtifacts }] = await Promise.all([
+      import('../lib/paths.mjs'),
+      import('../lib/cycle.mjs'),
+    ]);
+    const { directory, index } = readAnalysisArtifacts({
+      paths: auditPaths(resolve(flags.project), flags.location),
+      runId: flags['run-id'],
+    });
+    result = {
+      status: 'awaiting_lane_analysis',
+      runId: index.runId,
+      directory,
+      briefsHash: index.briefsHash,
+      analystSetHash: index.analystSetHash,
+      lanes: index.lanes.map(({ lane, discipline, promptFile, briefFile }) => ({
+        lane, discipline, promptFile, briefFile,
+      })),
+    };
+  } else if (command === 'investigate') {
+    const [{ auditPaths }, { readLaneAnswers, runInvestigation }] = await Promise.all([
+      import('../lib/paths.mjs'),
+      import('../lib/cycle.mjs'),
+    ]);
+    const summary = runInvestigation({
+      paths: auditPaths(resolve(flags.project), flags.location),
+      runId: flags['run-id'],
+      answers: readLaneAnswers(resolve(flags.findings)),
+    });
+    result = { status: 'investigated', runId: flags['run-id'], ...summary };
   } else {
     if (command === 'run') {
       const providerConfig = readRegularJson(

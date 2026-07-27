@@ -22,6 +22,7 @@ import {
   sep,
 } from 'node:path';
 import { canonicalJson, sha256 } from './canonical.mjs';
+import { prepareAnalysisArtifacts } from './cycle.mjs';
 import { createInternalGhlAdapter } from './adapters/internal-ghl.mjs';
 import {
   assertTranslatableCapabilities,
@@ -1617,6 +1618,13 @@ export function createPublicAuditKernel({
   let nextRunId = initialRunId;
   let memo = null;
   let adopted = null;
+  /*
+   * Where this run's analysis artefacts belong, captured at `freezeInputs` because the kernel does
+   * not pass `projectRoot` to `normalize` and the briefs have to land under the account's own audit
+   * root rather than wherever the process happens to be. Stays `null` until a run is sealed, so a
+   * kernel that never froze inputs writes nothing.
+   */
+  let analysisTarget = null;
   // Consumed on the FIRST `freezeInputs`, which is the resume's own. `kernel.resume` restarts a
   // mismatched run by calling `start` in the same kernel, and that new run must collect for
   // itself rather than adopting the authority of the run it is replacing.
@@ -1690,6 +1698,10 @@ export function createPublicAuditKernel({
       freezeInputs: async (args) => {
         const config = validatePublicConfig(args.providerConfig);
         const declared = structuredClone(config.frozenInputs);
+        analysisTarget = {
+          projectRoot: resolve(args.projectRoot),
+          locationId: config.expectedLocationId,
+        };
         const resumingRunId = pendingResumeRunId;
         pendingResumeRunId = null;
         adopted = resumingRunId === null
@@ -1720,11 +1732,41 @@ export function createPublicAuditKernel({
        * declares, and what a resume compares, so they stay first and stay byte-identical; the
        * measurement is added beside them.
        */
-      normalize: async ({ context, publicEvidence, frozenInputs }) => ({
-        contextHash: sha256(context),
-        publicEvidenceHash: sha256(publicEvidence),
-        measurement: measurePublicEvidence({ publicEvidence, frozenInputs }),
-      }),
+      normalize: async ({
+        context,
+        publicEvidence,
+        internalEvidence,
+        frozenInputs,
+        runId,
+      }) => {
+        const measurement = measurePublicEvidence({ publicEvidence, frozenInputs });
+        /*
+         * THE SEAM. The three briefs and the three analyst prompts are written to disk HERE, where
+         * the measurement and the internal evidence are both in hand, and they are deliberately NOT
+         * added to this function's return value.
+         *
+         * Two reasons, both load-bearing. The checkpoint bytes stay exactly what the approved shape
+         * declares, so a run sealed before this change still resumes. And `assertSafeCollected`
+         * scans whatever `normalize` returns; a brief carries quoted message copy on purpose, which
+         * is the one thing that scanner exists to keep out of a phase payload.
+         *
+         * Writing is byte-compared (`writeOnce`), so a restored `normalizing` checkpoint and a fresh
+         * one leave identical files, and a mismatch stops the run instead of overwriting quietly.
+         */
+        if (analysisTarget !== null) {
+          prepareAnalysisArtifacts({
+            paths: auditPaths(analysisTarget.projectRoot, analysisTarget.locationId),
+            runId,
+            measurement,
+            internal: internalEvidence ?? null,
+          });
+        }
+        return {
+          contextHash: sha256(context),
+          publicEvidenceHash: sha256(publicEvidence),
+          measurement,
+        };
+      },
       discover: async () => ({ findings: [] }),
       falsify: async () => ({ packets: [] }),
       loadMemory: async () => ({ events: [] }),

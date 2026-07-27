@@ -651,6 +651,24 @@ async function runPublicCli(rowsByAction, { configOverrides = {}, extraRuntime =
       internalAuth: read('14-awaiting_internal_auth.json'),
       internal: read('15-collecting_internal.json'),
       normalized: read('04-normalizing.json'),
+      /*
+       * The analysis artefacts the run writes for the three expert analysts. Read HERE rather than
+       * by the caller because this helper deletes the project root on the way out, and the whole
+       * point of the artefact is that it outlives the phase it was produced in.
+       */
+      briefsIndex: (() => {
+        try {
+          return JSON.parse(readFileSync(join(
+            auditPaths(projectRoot, LOCATION).root,
+            'private',
+            'briefs',
+            result.runId,
+            'briefs.json',
+          ), 'utf8'));
+        } catch {
+          return null;
+        }
+      })(),
     };
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
@@ -688,6 +706,31 @@ test('audit run measures in-process: the normalizing checkpoint carries real met
     ).inputItemCount,
     CONTACTS.length,
   );
+});
+
+test('audit run writes all three analyst briefs, so the analysis stage has something to dispatch', async () => {
+  const { result, briefsIndex } = await runPublicCli({
+    'contacts.search': CONTACTS,
+    'opportunities.list': OPPORTUNITIES,
+  });
+
+  /*
+   * The joining. Measuring in-process closed one gap; this closes the next one. Every box of the
+   * analysis chain was built and tested before anything called them in sequence, so a run measured
+   * 588 real records and then had nowhere to send them.
+   */
+  assert.ok(briefsIndex, 'the run must write the analyst briefs');
+  assert.equal(briefsIndex.runId, result.runId);
+  assert.equal(briefsIndex.profileId, 'client');
+  // All three lanes, every run. There is deliberately no way to write one.
+  assert.deepEqual(briefsIndex.lanes.map(({ lane }) => lane), [
+    'lead_journey_kpi',
+    'workflow_config_runtime',
+    'conversation_copy_ai',
+  ]);
+  assert.match(briefsIndex.briefsHash, /^[a-f0-9]{64}$/u);
+  // This run has no internal rail, and the index says so rather than leaving it to be assumed.
+  assert.equal(briefsIndex.internalRail.available, false);
 });
 
 test('fixture scope records carry exactly the keys the real collector emits', async () => {

@@ -106,6 +106,37 @@ path. A public-only or otherwise incomplete evidence run reports
 `complete_partial`. Proposed fixes remain local proposal artifacts for approval
 and are never executed by this skill.
 
+### The analysis cycle (three expert lanes, then one investigation)
+
+`PRODUCT-SPEC.md` is the authority for what this stage is for. Two rules it
+encodes are not negotiable: **the auditor decides what to analyse and is never
+told**, and **there are no hardcoded best-practice detectors**. All three lanes
+run every time. Never dispatch one lane, never tell an analyst which metric to
+look at, and never supply a benchmark: the analyst IS the benchmark authority.
+
+The model call is the only non-deterministic step in the product, so it sits
+between two deterministic commands (see `lib/cycle.mjs` for why the kernel
+cannot make it itself).
+
+1. **`audit run --mode weekly ...`** collects, measures, and writes the three
+   briefs and the three analyst prompts under
+   `audits/ghl/<location>/private/briefs/<runId>/`.
+2. **`audit briefs --project <p> --location <l> --run-id <r>`** prints the
+   `briefsHash` and the three prompt files.
+3. **Dispatch three subagents, one per prompt file, in parallel**, exactly as
+   `/uxie-ghl-factory:audit` dispatches its surface auditors. Each subagent's
+   whole instruction is the contents of its `prompt-<lane>.md`. Add nothing to
+   it. Write each answer's JSON array to `<answers>/<lane>.json`.
+4. **`audit investigate --project <p> --location <l> --run-id <r> --findings
+   <answers>`** validates every finding, refuses the malformed ones by name,
+   groups the rest into causes on their anchors, ranks them, and writes
+   `INVESTIGATION.md`, `BACKLOG.md`, `investigation.json` and one solution
+   package per cause under `audits/ghl/<location>/investigations/<runId>/`.
+
+The briefs live under `private/` and quote real message copy, so they are
+evidence and never publication material. Solution packages are for human
+implementation and approval; nothing in this cycle applies a change.
+
 ## Boundaries (inherited + plugin)
 
 - GET only, scoped iframe JWT, one location per session, throttle before every
