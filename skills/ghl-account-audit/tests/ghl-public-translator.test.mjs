@@ -61,13 +61,17 @@ async function translate(actionId, handlers, {
   const upstream = [];
   const connect = async () => ({
     async callTool(request, callOptions) {
+      // `action_id` is the key the REAL worker requires (see the translator's module header). This
+      // double stands in for a raw GHL MCP client, so it dispatches on the worker's key, not on
+      // the adapter-side `action` this repo used to send. `upstream[].action` below keeps its
+      // name: it records WHICH upstream action was called, which is what the assertions read.
       upstream.push({
-        action: request.arguments.action,
+        action: request.arguments.action_id,
         params: structuredClone(request.arguments.params),
         timeout: callOptions?.timeout ?? null,
       });
-      const handler = handlers[request.arguments.action];
-      if (!handler) throw new Error(`UNEXPECTED_UPSTREAM:${request.arguments.action}`);
+      const handler = handlers[request.arguments.action_id];
+      if (!handler) throw new Error(`UNEXPECTED_UPSTREAM:${request.arguments.action_id}`);
       return handler(request.arguments.params, upstream.length);
     },
     async close() {},
@@ -708,8 +712,8 @@ function ghlNativeDouble(handlers) {
       return {
         async callTool(request) {
           observed.requests.push(structuredClone(request.arguments));
-          const handler = handlers[request.arguments.action];
-          if (!handler) throw new Error(`UNEXPECTED_UPSTREAM:${request.arguments.action}`);
+          const handler = handlers[request.arguments.action_id];
+          if (!handler) throw new Error(`UNEXPECTED_UPSTREAM:${request.arguments.action_id}`);
           return { structuredContent: handler(request.arguments.params) };
         },
         async close() {
@@ -759,7 +763,9 @@ test('the public rail collects a RAW GHL MCP server end to end through the trans
   assert.equal(server.observed.closes, 1);
 
   // What actually went to the "GHL server" is GHL-native, not the adapter's generic shape.
-  assert.deepEqual(server.observed.requests.map(({ action }) => action).sort(), [
+  // The key is `action_id` because that is what the worker's own zod requires; naming it `action`
+  // is the defect this assertion could not see. See `tests/ghl-wire-contract.test.mjs`.
+  assert.deepEqual(server.observed.requests.map(({ action_id: actionId }) => actionId).sort(), [
     'contacts-v3__search-contacts-advanced',
     'opportunities-v3__search-opportunity',
   ]);

@@ -49,18 +49,54 @@ function windowOf(start, end) {
   };
 }
 
-export function buildWindows({ cutoff, timezone, maturityDays }) {
+/**
+ * THE TWO CLOCKS, WHICH ARE NOT THE SAME CLOCK.
+ *
+ * `cutoff` is an EVENT-TIME boundary: the instant the reported week closes. `planWeeklyCollection`
+ * seals it as the closed-week Monday and `kernel.mjs` uses it as the collection window's `to`, so
+ * it is ALWAYS IN THE PAST at the moment the run executes.
+ *
+ * `capturedThrough` is a COLLECTION-TIME boundary: the last instant at which any evidence in the
+ * graph was actually read from the provider. Every real run collects AFTER the week it reports on
+ * has closed, so `capturedThrough > cutoff` is not an edge case — it is the only thing that ever
+ * happens. On the first live run (Grom UK, `run_937bffa1`) the gap was 7h12m: cutoff
+ * 2026-07-26T23:00Z, capture 2026-07-27T06:12Z.
+ *
+ * The two were one value until 2026-07-27, and `computeEdge`, `cohortCounts` and `stockFor` all
+ * refuse a node whose `capturedAt` is past the analysis boundary — a genuine no-lookahead rule for
+ * a graph assembled from SEVERAL collections (the `priorWatermark` merge path), where `capturedAt`
+ * really does vary per node. Compared against the EVENT boundary instead, that rule discards one
+ * hundred per cent of every real run's evidence, silently, and reports the account as empty:
+ * 1,099 projected events and a 1,287-node graph produced `eligible: 0` in every cell of every
+ * window, `cohorts: {}` and `currentStock: {}`, with the entirely plausible-looking reason code
+ * `NO_ELIGIBLE_POPULATION`.
+ *
+ * Every fixture hid it by authoring `capturedAt` at or before the cutoff, which a collection
+ * cannot do. `capturedThrough` therefore DEFAULTS to `cutoff` — so a caller that says nothing
+ * keeps byte-identical behaviour — and `computeJourneyMetrics` refuses outright, rather than
+ * reporting zero, when the horizon it was given predates every piece of evidence it was handed.
+ */
+export function buildWindows({ cutoff, timezone, maturityDays, capturedThrough }) {
   if (
     typeof cutoff !== 'string'
     || typeof timezone !== 'string'
     || !Number.isInteger(maturityDays)
     || maturityDays < 0
+    || (capturedThrough !== undefined && typeof capturedThrough !== 'string')
   ) throw codedError('METRICS_WINDOW_INVALID', TypeError);
   let localCutoff;
   try {
     localCutoff = zoned(cutoff, timezone);
   } catch {
     throw codedError('METRICS_WINDOW_INVALID', TypeError);
+  }
+  let localCapturedThrough = localCutoff;
+  if (capturedThrough !== undefined) {
+    try {
+      localCapturedThrough = zoned(capturedThrough, timezone);
+    } catch {
+      throw codedError('METRICS_WINDOW_INVALID', TypeError);
+    }
   }
   const currentEnd = localCutoff
     .subtract({ days: localCutoff.dayOfWeek - 1 })
@@ -110,6 +146,11 @@ export function buildWindows({ cutoff, timezone, maturityDays }) {
     trailing180Days: windowOf(settledTrailingStart, currentEnd),
     matureAsOf: matureAsOf.toString(),
     maturityDays,
+    // The COLLECTION boundary, kept beside the EVENT boundary rather than folded into it. It plays
+    // no part in placing any window — every window above is anchored to the closed-week Monday and
+    // is byte-identical whether this is declared or not — and exists only so the no-lookahead rule
+    // can be applied to the clock it is actually about.
+    capturedThrough: localCapturedThrough.toString(),
   });
 }
 
@@ -677,6 +718,7 @@ function computeEdge(
   analysisCutoff,
   matureAsOf,
   profileFloor,
+  captureHorizon,
 ) {
   const rule = contract.eligibilityRule;
   const configuredThreshold = rule?.minimumSample;
@@ -697,9 +739,12 @@ function computeEdge(
     node.journeyInstanceId === contract.journeyInstanceId
       && node.journeyId === contract.journeyId
   ));
+  // NO LOOKAHEAD, ON THE COLLECTION CLOCK. `capturedAt` says when a row was READ, never when the
+  // thing it describes happened, so it is compared against the run's capture horizon and NOT
+  // against the week boundary the metric reports on. See `buildWindows`.
   const visible = (node) => {
     const captured = placeable(node.capturedAt ?? node.eventTime);
-    return !captured || Temporal.Instant.compare(captured, instant(analysisCutoff)) <= 0;
+    return !captured || Temporal.Instant.compare(captured, instant(captureHorizon)) <= 0;
   };
   // Conversions are drawn from the countable population, the same set the entrants come from.
   // Nothing changes for a measurable key — an untrustworthy conversion already excluded its own
@@ -709,7 +754,7 @@ function computeEdge(
       population.isCountable(node)
         && Temporal.Instant.compare(
           instant(node.capturedAt ?? node.eventTime),
-          instant(analysisCutoff),
+          instant(captureHorizon),
         ) <= 0
     ))
     .sort(sortEvents);
@@ -861,9 +906,14 @@ function computeEdge(
         && stageOf(candidate) === contract.toStage
         && Temporal.Instant.compare(instant(candidate.eventTime), fromTime) >= 0
         && Temporal.Instant.compare(instant(candidate.eventTime), deadline) <= 0
+        // The COLLECTION clock again — `events` is already filtered on it, and the redundancy is
+        // kept so a future caller of `events.find` cannot reintroduce the lookahead by accident.
+        // The EVENT clock is enforced above by `deadline`, which for a measurable entrant can
+        // never exceed `analysisCutoff`: `matureKeys` admits a key only when its whole allowed lag
+        // has elapsed by the cutoff, and `deadline` IS the entrant plus that same lag.
         && Temporal.Instant.compare(
           instant(candidate.capturedAt ?? candidate.eventTime),
-          instant(analysisCutoff),
+          instant(captureHorizon),
         ) <= 0
     ));
     if (to) {
@@ -976,13 +1026,15 @@ function computeEdge(
  * The omission is not silent: the same rows are counted, per reason, in `exclusions` on every
  * metric that consumed them, which is the channel the report and `mechanisms.mjs` already read.
  */
-function stockFor(population, end, analysisCutoff) {
+function stockFor(population, end, captureHorizon) {
   const latest = new Map();
   for (const node of [...population.countable].sort(sortEvents)) {
+    // The EVENT clock: nothing dated at or after the week's close belongs to this week's stock.
     if (Temporal.Instant.compare(instant(node.eventTime), instant(end)) >= 0) continue;
+    // The COLLECTION clock, separately. See `buildWindows`.
     if (Temporal.Instant.compare(
       instant(node.capturedAt ?? node.eventTime),
-      instant(analysisCutoff),
+      instant(captureHorizon),
     ) > 0) continue;
     latest.set(subjectKey(node), node);
   }
@@ -1010,7 +1062,7 @@ function stockFor(population, end, analysisCutoff) {
  * sealed as `cohortHash`). What was dropped is not lost — it is carried, per reason, on each
  * metric's `eligible`/`excluded`/`exclusions`, which the same report renders in the same breath.
  */
-function cohortCounts(population, contracts, window, analysisCutoff) {
+function cohortCounts(population, contracts, window, captureHorizon) {
   const stagesByJourney = new Map();
   for (const contract of contracts) {
     const current = stagesByJourney.get(contract.journeyInstanceId) ?? {
@@ -1027,10 +1079,12 @@ function cohortCounts(population, contracts, window, analysisCutoff) {
   }));
   const byJourney = new Map();
   for (const node of population.countable.filter(({ eventTime, capturedAt }) => (
+    // The EVENT clock places the entrant in the window; the COLLECTION clock decides whether this
+    // run had read it yet. See `buildWindows`.
     inside(eventTime, window)
       && Temporal.Instant.compare(
         instant(capturedAt ?? eventTime),
-        instant(analysisCutoff),
+        instant(captureHorizon),
       ) <= 0
   ))) {
     const key = node.journeyInstanceId;
@@ -1088,6 +1142,34 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
   // Decided ONCE, here, and handed to every surface below. Nothing downstream sees the raw node
   // list, so no surface can answer "may I count this row?" differently from any other.
   const population = metricPopulation(graph);
+  /*
+   * THE CAPTURE HORIZON, and the refusal that stops it lying.
+   *
+   * Defaulting to `windows.cutoff` keeps a caller that declares nothing byte-identical to what it
+   * got before `capturedThrough` existed. That default is also exactly the mistake that produced
+   * an all-zero first live run, so it may not be allowed to fail QUIETLY a second time.
+   *
+   * THE REFUSAL: if this graph carries metric-bearing evidence at all, and EVERY piece of it was
+   * captured after the horizon, then no cell, no cohort and no stock count can be anything but
+   * zero — and a zero produced this way is indistinguishable, in the published report, from an
+   * account that genuinely did nothing. That is a configuration error about the two clocks, so it
+   * throws in the same voice as a broken contract rather than returning a number.
+   *
+   * It cannot fire on a genuinely quiet account: an account with no metric-bearing evidence has
+   * nothing to drop, and a single row inside the horizon is enough to make the run answerable.
+   */
+  const captureHorizon = windows.capturedThrough ?? windows.cutoff;
+  const horizon = instant(captureHorizon);
+  // `population.all`, not the raw node list: "which rows does a metric even SEE" is decided in
+  // exactly one place, and this refusal is no more entitled to re-answer it than any other surface.
+  const candidates = population.all.filter(isMetricCandidate);
+  if (
+    candidates.length > 0
+    && candidates.every((node) => {
+      const captured = placeable(node.capturedAt ?? node.eventTime);
+      return captured !== null && Temporal.Instant.compare(captured, horizon) > 0;
+    })
+  ) throw codedError('METRICS_CAPTURE_HORIZON_PRECEDES_EVIDENCE', TypeError);
   const metrics = {};
   const cohorts = {};
   for (const [name, window, edges] of namedWindows) {
@@ -1100,6 +1182,7 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
         windows.cutoff,
         windows.matureAsOf,
         metricContracts.coverageFloor,
+        captureHorizon,
       );
     }
     // The entry cohort printed beside a window's rates must describe THAT window's rates, so it is
@@ -1110,7 +1193,7 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
       population,
       edges,
       window,
-      windows.cutoff,
+      captureHorizon,
     );
   }
   return deepFreeze({
@@ -1119,7 +1202,7 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
     currentStock: stockFor(
       population,
       windows.currentClosedWeek.end,
-      windows.cutoff,
+      captureHorizon,
     ),
   });
 }

@@ -6,6 +6,7 @@ import {
 } from '../../schemas/v1.mjs';
 import { canonicalJson, sha256 } from '../canonical.mjs';
 import {
+  boundedUpstreamCode,
   capturedAt,
   cloneJson,
   codedError,
@@ -636,7 +637,25 @@ export function createPublicGhlAdapter({
           if (error?.code === 429 || error?.code === '429' || error?.code === 'RATE_LIMITED') {
             return finishIncomplete('RATE_LIMITED');
           }
-          if (!RETRYABLE.has(error?.code)) throw codedError('PUBLIC_COLLECTION_FAILED');
+          if (!RETRYABLE.has(error?.code)) {
+            // The originating code is carried as `upstreamCode` so an operator can tell an
+            // upstream refusal from a shape surprise from a transport fault. Without it this
+            // throw is a diagnostic black hole: a live run reported only `PUBLIC_COLLECTION_FAILED`
+            // and naming the cause took a capture session and several probes.
+            // ONLY the code travels. Never a message, payload, param or status body, because this
+            // value reaches `assertSafeCollected` and the publication boundary, and the worker
+            // echoes request parameters into its error channel.
+            //
+            // `error.upstreamCode` is preferred over `error.code`, and that preference is the
+            // whole point. `lib/adapters/mcp-transport.mjs` sits between this adapter and the
+            // wire, so by the time a GHL refusal arrives here its own `code` is already the
+            // TRANSPORT's `MCP_TOOL_CALL_FAILED` — naming the layer it crossed, not the cause.
+            // The transport carries the originating code forward in `upstreamCode`; taking
+            // `error.code` here would throw that away and report the black hole all over again.
+            const failure = codedError('PUBLIC_COLLECTION_FAILED');
+            const upstreamCode = boundedUpstreamCode(error?.upstreamCode ?? error?.code);
+            throw Object.assign(failure, { upstreamCode });
+          }
           if (retryCount >= budget.retryCount) return finishIncomplete('BUDGET_RETRY_COUNT');
           const delay = Number.isInteger(error.retryAfterMs) && error.retryAfterMs >= 0
             ? error.retryAfterMs

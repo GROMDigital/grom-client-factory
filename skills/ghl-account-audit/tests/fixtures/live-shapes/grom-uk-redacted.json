@@ -1,0 +1,1119 @@
+{
+  "$meta": {
+    "source": "Five REAL MCP tool results captured read-only from Grom's UK GoHighLevel sub-account on 2026-07-27, then redacted.",
+    "redaction": [
+      "Every id, email, phone, name, title, note, address, message body, URL and campaign name is SYNTHETIC.",
+      "STRUCTURE is byte-faithful: same keys, same key order, same nesting, same JS types, same array lengths, same string forms (ISO-with-millis-Z vs ISO-with-offset vs epoch-millisecond NUMBER).",
+      "Instants are mapped one-to-one, so every cross-field invariant the real capture had survives: meta.startAfter === last.sort[0], meta.startAfterId === last.sort[1], conversation sort[0] === lastMessageDate, contact searchAfter[0] === Date.parse(dateAdded), contact searchAfter[1] === its own id.",
+      "monetaryValue is synthetic but is still a NUMBER on every row, which is what the live capture showed."
+    ],
+    "whyItMatters": [
+      "structuredContent is the WORKER ENVELOPE {action,status,ok,data,note,filter,pagination,error}; the GHL body is at .data.",
+      "action.method is 'POST' for contacts-v3__search-contacts-advanced, which is the exact value that trips kernel.mjs assertSafeCollected. The envelope is kept here ON PURPOSE so the tripwire can be tested."
+    ]
+  },
+  "contacts": {
+    "actionId": "contacts-v3__search-contacts-advanced",
+    "params": {
+      "locationId": "LOC_TEST_00000000001",
+      "pageLimit": 3
+    },
+    "response": {
+      "structuredContent": {
+        "action": {
+          "id": "redacted",
+          "method": "POST",
+          "path": "/contacts/search",
+          "summary": "redacted-summary",
+          "category": "contacts-v3",
+          "risk": {
+            "level": "medium",
+            "kinds": [
+              "write"
+            ],
+            "notes": [
+              "redacted-notes"
+            ],
+            "requiresConfirmation": false
+          }
+        },
+        "status": 200,
+        "ok": true,
+        "data": {
+          "contacts": [
+            {
+              "id": "id00000000000000001",
+              "phoneLabel": null,
+              "country": "GB",
+              "address": null,
+              "source": "Facebook",
+              "type": "lead",
+              "locationId": "LOC_TEST_00000000001",
+              "website": null,
+              "dnd": false,
+              "state": null,
+              "businessName": null,
+              "customFields": [
+                {
+                  "id": "id00000000000000002",
+                  "value": "redacted-value"
+                },
+                {
+                  "id": "id00000000000000003",
+                  "value": "redacted-value"
+                }
+              ],
+              "tags": [],
+              "dateAdded": "2026-04-01T00:00:00.000Z",
+              "additionalEmails": [],
+              "phone": "+10000000000",
+              "companyName": null,
+              "additionalPhones": [],
+              "dateUpdated": "2026-04-01T01:00:00.000Z",
+              "city": null,
+              "dateOfBirth": null,
+              "firstNameLowerCase": "redacted-firstNameLowerCase",
+              "lastNameLowerCase": null,
+              "firstName": "redacted-firstName",
+              "lastName": null,
+              "contactName": "redacted-contactName",
+              "email": "person0000@example.test",
+              "assignedTo": null,
+              "followers": [],
+              "validEmail": true,
+              "dndSettings": {},
+              "opportunities": [
+                {
+                  "pipelineId": "id00000000000000005",
+                  "id": "id00000000000000006",
+                  "monetaryValue": 1200,
+                  "pipelineStageId": "00000000-0000-4000-8000-000000000000",
+                  "status": "open"
+                }
+              ],
+              "postalCode": null,
+              "businessId": null,
+              "searchAfter": [
+                1775001600000,
+                "id00000000000000001"
+              ],
+              "timezone": null,
+              "inboundDndSettings": {},
+              "attributionSource": {
+                "utmSource": "facebook",
+                "sessionSource": "Paid Social",
+                "medium": "facebook",
+                "mediumId": "+10000000000",
+                "campaign": "redacted-campaign",
+                "utmMedium": "redacted",
+                "utmContent": "redacted-utmContent",
+                "campaignId": "+10000000000",
+                "adId": "+10000000000",
+                "adSource": "facebook"
+              },
+              "lastAttributionSource": {
+                "utmSource": "facebook",
+                "sessionSource": "Paid Social",
+                "medium": "facebook",
+                "mediumId": "+10000000000",
+                "campaign": "redacted-campaign",
+                "utmMedium": "redacted",
+                "utmContent": "redacted-utmContent",
+                "campaignId": "+10000000000",
+                "adId": "+10000000000",
+                "adSource": "facebook"
+              }
+            },
+            {
+              "id": "id00000000000000007",
+              "phoneLabel": null,
+              "country": "GB",
+              "address": null,
+              "source": "Facebook",
+              "type": "lead",
+              "locationId": "LOC_TEST_00000000001",
+              "website": null,
+              "dnd": false,
+              "state": null,
+              "businessName": null,
+              "customFields": [
+                {
+                  "id": "id00000000000000002",
+                  "value": "redacted-value"
+                },
+                {
+                  "id": "id00000000000000003",
+                  "value": "redacted-value"
+                }
+              ],
+              "tags": [],
+              "dateAdded": "2026-04-01T02:00:00.000Z",
+              "additionalEmails": [],
+              "phone": "+10000000000",
+              "companyName": null,
+              "additionalPhones": [],
+              "dateUpdated": "2026-04-01T03:00:00.000Z",
+              "city": null,
+              "dateOfBirth": null,
+              "firstNameLowerCase": "redacted-firstNameLowerCase",
+              "lastNameLowerCase": "redacted-lastNameLowerCase",
+              "firstName": "redacted-firstName",
+              "lastName": "redacted-lastName",
+              "contactName": "redacted-contactName",
+              "email": "person0000@example.test",
+              "assignedTo": null,
+              "followers": [],
+              "validEmail": true,
+              "dndSettings": {},
+              "opportunities": [
+                {
+                  "pipelineId": "id00000000000000005",
+                  "id": "id00000000000000009",
+                  "monetaryValue": 4500,
+                  "pipelineStageId": "00000000-0000-4000-8000-000000000000",
+                  "status": "open"
+                }
+              ],
+              "postalCode": null,
+              "businessId": null,
+              "searchAfter": [
+                1775008800000,
+                "id00000000000000007"
+              ],
+              "timezone": null,
+              "inboundDndSettings": {},
+              "attributionSource": {
+                "utmSource": "facebook",
+                "sessionSource": "Paid Social",
+                "medium": "facebook",
+                "mediumId": "+10000000000",
+                "campaign": "redacted-campaign",
+                "utmMedium": "redacted",
+                "utmContent": "redacted-utmContent",
+                "campaignId": "+10000000000",
+                "adId": "+10000000000",
+                "adSource": "facebook"
+              },
+              "lastAttributionSource": {
+                "utmSource": "facebook",
+                "sessionSource": "Paid Social",
+                "medium": "facebook",
+                "mediumId": "+10000000000",
+                "campaign": "redacted-campaign",
+                "utmMedium": "redacted",
+                "utmContent": "redacted-utmContent",
+                "campaignId": "+10000000000",
+                "adId": "+10000000000",
+                "adSource": "facebook"
+              }
+            },
+            {
+              "id": "id00000000000000010",
+              "phoneLabel": null,
+              "country": "GB",
+              "address": null,
+              "source": "Facebook",
+              "type": "lead",
+              "locationId": "LOC_TEST_00000000001",
+              "website": null,
+              "dnd": false,
+              "state": null,
+              "businessName": null,
+              "customFields": [
+                {
+                  "id": "id00000000000000002",
+                  "value": "redacted-value"
+                },
+                {
+                  "id": "id00000000000000003",
+                  "value": "redacted-value"
+                }
+              ],
+              "tags": [],
+              "dateAdded": "2026-04-01T04:00:00.000Z",
+              "additionalEmails": [],
+              "phone": "+10000000000",
+              "companyName": null,
+              "additionalPhones": [],
+              "dateUpdated": "2026-04-01T05:00:00.000Z",
+              "city": null,
+              "dateOfBirth": null,
+              "firstNameLowerCase": "redacted-firstNameLowerCase",
+              "lastNameLowerCase": "redacted-lastNameLowerCase",
+              "firstName": "redacted-firstName",
+              "lastName": "redacted-lastName",
+              "contactName": "redacted-contactName",
+              "email": "person0000@example.test",
+              "assignedTo": null,
+              "followers": [],
+              "validEmail": true,
+              "dndSettings": {},
+              "opportunities": [
+                {
+                  "pipelineId": "id00000000000000005",
+                  "id": "id00000000000000012",
+                  "monetaryValue": 0,
+                  "pipelineStageId": "00000000-0000-4000-8000-000000000000",
+                  "status": "open"
+                }
+              ],
+              "postalCode": null,
+              "businessId": null,
+              "searchAfter": [
+                1775016000000,
+                "id00000000000000010"
+              ],
+              "timezone": null,
+              "inboundDndSettings": {},
+              "attributionSource": {
+                "utmSource": "facebook",
+                "sessionSource": "Paid Social",
+                "medium": "facebook",
+                "mediumId": "+10000000000",
+                "campaign": "redacted-campaign",
+                "utmMedium": "redacted",
+                "utmContent": "redacted-utmContent",
+                "campaignId": "+10000000000",
+                "adId": "+10000000000",
+                "adSource": "facebook"
+              },
+              "lastAttributionSource": {
+                "utmSource": "facebook",
+                "sessionSource": "Paid Social",
+                "medium": "facebook",
+                "mediumId": "+10000000000",
+                "campaign": "redacted-campaign",
+                "utmMedium": "redacted",
+                "utmContent": "redacted-utmContent",
+                "campaignId": "+10000000000",
+                "adId": "+10000000000",
+                "adSource": "facebook"
+              }
+            }
+          ],
+          "total": 187,
+          "traceId": "trace-00000000-0000-4000-8000-000000000000"
+        },
+        "note": null,
+        "filter": null,
+        "pagination": null,
+        "error": null
+      }
+    }
+  },
+  "opportunities": {
+    "actionId": "opportunities-v3__search-opportunity",
+    "params": {
+      "locationId": "LOC_TEST_00000000001",
+      "limit": 3,
+      "status": "all"
+    },
+    "response": {
+      "structuredContent": {
+        "action": {
+          "id": "redacted",
+          "method": "GET",
+          "path": "/opportunities/search",
+          "summary": "redacted-summary",
+          "category": "opportunities-v3",
+          "risk": {
+            "level": "low",
+            "kinds": [
+              "read"
+            ],
+            "notes": [],
+            "requiresConfirmation": false
+          }
+        },
+        "status": 200,
+        "ok": true,
+        "data": {
+          "opportunities": [
+            {
+              "id": "id00000000000000006",
+              "name": "redacted-name",
+              "monetaryValue": 1200,
+              "pipelineId": "id00000000000000005",
+              "pipelineStageId": "00000000-0000-4000-8000-000000000000",
+              "pipelineStageUId": "00000000-0000-4000-8000-000000000000",
+              "assignedTo": null,
+              "status": "open",
+              "source": "Facebook",
+              "lastStatusChangeAt": "2026-04-01T06:00:00.000Z",
+              "lastStageChangeAt": "2026-04-01T06:00:00.000Z",
+              "createdAt": "2026-04-01T06:00:00.000Z",
+              "updatedAt": "2026-04-01T06:00:00.000Z",
+              "forecastProbability": null,
+              "effectiveProbability": 11.11,
+              "contactId": "id00000000000000001",
+              "locationId": "LOC_TEST_00000000001",
+              "customFields": [],
+              "lostReasonId": null,
+              "followers": [],
+              "relations": [
+                {
+                  "associationId": "redacted",
+                  "relationId": "id00000000000000006",
+                  "primary": true,
+                  "objectKey": "contact",
+                  "recordId": "id00000000000000001",
+                  "fullName": "redacted-fullName",
+                  "contactName": "redacted-contactName",
+                  "companyName": null,
+                  "email": "person0000@example.test",
+                  "phone": "+10000000000",
+                  "tags": [],
+                  "attributed": true
+                }
+              ],
+              "contact": {
+                "id": "id00000000000000001",
+                "name": "redacted-name",
+                "companyName": null,
+                "email": "person0000@example.test",
+                "phone": "+10000000000",
+                "tags": [],
+                "score": []
+              },
+              "sort": [
+                1775023200000,
+                "id00000000000000001"
+              ],
+              "attributions": [
+                {
+                  "utmSource": "facebook",
+                  "utmSessionSource": "Paid Social",
+                  "medium": "facebook",
+                  "mediumId": "+10000000000",
+                  "utmCampaign": "redacted-utmCampaign",
+                  "utmMedium": "redacted",
+                  "utmContent": "redacted-utmContent",
+                  "utmCampaignId": "+10000000000",
+                  "utmAdId": "+10000000000",
+                  "adSource": "facebook",
+                  "isFirst": true
+                },
+                {
+                  "utmSource": "facebook",
+                  "utmSessionSource": "Paid Social",
+                  "medium": "facebook",
+                  "mediumId": "+10000000000",
+                  "utmCampaign": "redacted-utmCampaign",
+                  "utmMedium": "redacted",
+                  "utmContent": "redacted-utmContent",
+                  "utmCampaignId": "+10000000000",
+                  "utmAdId": "+10000000000",
+                  "adSource": "facebook",
+                  "isLast": true
+                }
+              ]
+            },
+            {
+              "id": "id00000000000000009",
+              "name": "redacted-name",
+              "monetaryValue": 4500,
+              "pipelineId": "id00000000000000005",
+              "pipelineStageId": "00000000-0000-4000-8000-000000000000",
+              "pipelineStageUId": "00000000-0000-4000-8000-000000000000",
+              "assignedTo": null,
+              "status": "open",
+              "source": "Facebook",
+              "lastStatusChangeAt": "2026-04-01T07:00:00.000Z",
+              "lastStageChangeAt": "2026-04-01T07:00:00.000Z",
+              "createdAt": "2026-04-01T07:00:00.000Z",
+              "updatedAt": "2026-04-01T07:00:00.000Z",
+              "forecastProbability": null,
+              "effectiveProbability": 11.11,
+              "contactId": "id00000000000000007",
+              "locationId": "LOC_TEST_00000000001",
+              "customFields": [],
+              "lostReasonId": null,
+              "followers": [],
+              "relations": [
+                {
+                  "associationId": "redacted",
+                  "relationId": "id00000000000000009",
+                  "primary": true,
+                  "objectKey": "contact",
+                  "recordId": "id00000000000000007",
+                  "fullName": "redacted-fullName",
+                  "contactName": "redacted-contactName",
+                  "companyName": null,
+                  "email": "person0000@example.test",
+                  "phone": "+10000000000",
+                  "tags": [],
+                  "attributed": true
+                }
+              ],
+              "contact": {
+                "id": "id00000000000000007",
+                "name": "redacted-name",
+                "companyName": null,
+                "email": "person0000@example.test",
+                "phone": "+10000000000",
+                "tags": [],
+                "score": []
+              },
+              "sort": [
+                1775026800000,
+                "id00000000000000007"
+              ],
+              "attributions": [
+                {
+                  "utmSource": "facebook",
+                  "utmSessionSource": "Paid Social",
+                  "medium": "facebook",
+                  "mediumId": "+10000000000",
+                  "utmCampaign": "redacted-utmCampaign",
+                  "utmMedium": "redacted",
+                  "utmContent": "redacted-utmContent",
+                  "utmCampaignId": "+10000000000",
+                  "utmAdId": "+10000000000",
+                  "adSource": "facebook",
+                  "isFirst": true
+                },
+                {
+                  "utmSource": "facebook",
+                  "utmSessionSource": "Paid Social",
+                  "medium": "facebook",
+                  "mediumId": "+10000000000",
+                  "utmCampaign": "redacted-utmCampaign",
+                  "utmMedium": "redacted",
+                  "utmContent": "redacted-utmContent",
+                  "utmCampaignId": "+10000000000",
+                  "utmAdId": "+10000000000",
+                  "adSource": "facebook",
+                  "isLast": true
+                }
+              ]
+            },
+            {
+              "id": "id00000000000000012",
+              "name": "redacted-name",
+              "monetaryValue": 0,
+              "pipelineId": "id00000000000000005",
+              "pipelineStageId": "00000000-0000-4000-8000-000000000000",
+              "pipelineStageUId": "00000000-0000-4000-8000-000000000000",
+              "assignedTo": null,
+              "status": "open",
+              "source": "Facebook",
+              "lastStatusChangeAt": "2026-04-01T08:00:00.000Z",
+              "lastStageChangeAt": "2026-04-01T08:00:00.000Z",
+              "createdAt": "2026-04-01T08:00:00.000Z",
+              "updatedAt": "2026-04-01T08:00:00.000Z",
+              "forecastProbability": null,
+              "effectiveProbability": 11.11,
+              "contactId": "id00000000000000010",
+              "locationId": "LOC_TEST_00000000001",
+              "customFields": [],
+              "lostReasonId": null,
+              "followers": [],
+              "relations": [
+                {
+                  "associationId": "redacted",
+                  "relationId": "id00000000000000012",
+                  "primary": true,
+                  "objectKey": "contact",
+                  "recordId": "id00000000000000010",
+                  "fullName": "redacted-fullName",
+                  "contactName": "redacted-contactName",
+                  "companyName": null,
+                  "email": "person0000@example.test",
+                  "phone": "+10000000000",
+                  "tags": [],
+                  "attributed": true
+                }
+              ],
+              "contact": {
+                "id": "id00000000000000010",
+                "name": "redacted-name",
+                "companyName": null,
+                "email": "person0000@example.test",
+                "phone": "+10000000000",
+                "tags": [],
+                "score": []
+              },
+              "sort": [
+                1775030400000,
+                "id00000000000000010"
+              ],
+              "attributions": [
+                {
+                  "utmSource": "facebook",
+                  "utmSessionSource": "Paid Social",
+                  "medium": "facebook",
+                  "mediumId": "+10000000000",
+                  "utmCampaign": "redacted-utmCampaign",
+                  "utmMedium": "redacted",
+                  "utmContent": "redacted-utmContent",
+                  "utmCampaignId": "+10000000000",
+                  "utmAdId": "+10000000000",
+                  "adSource": "facebook",
+                  "isFirst": true
+                },
+                {
+                  "utmSource": "facebook",
+                  "utmSessionSource": "Paid Social",
+                  "medium": "facebook",
+                  "mediumId": "+10000000000",
+                  "utmCampaign": "redacted-utmCampaign",
+                  "utmMedium": "redacted",
+                  "utmContent": "redacted-utmContent",
+                  "utmCampaignId": "+10000000000",
+                  "utmAdId": "+10000000000",
+                  "adSource": "facebook",
+                  "isLast": true
+                }
+              ]
+            }
+          ],
+          "meta": {
+            "total": 159,
+            "nextPageUrl": "https://services.example.test/redacted",
+            "startAfterId": "id00000000000000010",
+            "startAfter": 1775030400000,
+            "currentPage": 1,
+            "nextPage": 2,
+            "prevPage": null
+          },
+          "traceId": "trace-00000000-0000-4000-8000-000000000000"
+        },
+        "note": null,
+        "filter": null,
+        "pagination": null,
+        "error": null
+      }
+    }
+  },
+  "conversations": {
+    "actionId": "conversations-v3__search-conversation",
+    "params": {
+      "locationId": "LOC_TEST_00000000001",
+      "limit": 3
+    },
+    "response": {
+      "structuredContent": {
+        "action": {
+          "id": "redacted",
+          "method": "GET",
+          "path": "/conversations/search",
+          "summary": "redacted-summary",
+          "category": "conversations-v3",
+          "risk": {
+            "level": "low",
+            "kinds": [
+              "read"
+            ],
+            "notes": [],
+            "requiresConfirmation": false
+          }
+        },
+        "status": 200,
+        "ok": true,
+        "data": {
+          "conversations": [
+            {
+              "id": "id00000000000000013",
+              "locationId": "LOC_TEST_00000000001",
+              "dateAdded": 1775034000000,
+              "dateUpdated": 1775037600000,
+              "lastMessageDate": 1775041200000,
+              "lastMessageType": "TYPE_SMS",
+              "lastMessageBody": "redacted-lastMessageBody",
+              "lastOutboundMessageAction": "automated",
+              "lastMessageDirection": "outbound",
+              "inbox": true,
+              "unreadCount": 0,
+              "followers": [],
+              "mentions": [],
+              "isLastMessageInternalComment": false,
+              "contactId": "id00000000000000001",
+              "fullName": "redacted-fullName",
+              "contactName": "redacted-contactName",
+              "companyName": null,
+              "email": "person0000@example.test",
+              "phone": "+10000000000",
+              "tags": [],
+              "type": "TYPE_PHONE",
+              "scoring": [],
+              "messageTypes": [
+                100,
+                2,
+                3
+              ],
+              "attributed": true,
+              "sort": [
+                1775041200000
+              ]
+            },
+            {
+              "id": "id00000000000000014",
+              "locationId": "LOC_TEST_00000000001",
+              "dateAdded": 1775044800000,
+              "dateUpdated": 1775048400000,
+              "lastMessageDate": 1775052000000,
+              "lastMessageType": "TYPE_EMAIL",
+              "lastMessageBody": "redacted-lastMessageBody",
+              "lastOutboundMessageAction": "automated",
+              "lastMessageDirection": "outbound",
+              "inbox": true,
+              "unreadCount": 0,
+              "followers": [],
+              "mentions": [],
+              "isLastMessageInternalComment": false,
+              "contactId": "id00000000000000015",
+              "fullName": "redacted-fullName",
+              "contactName": "redacted-contactName",
+              "companyName": null,
+              "email": "person0000@example.test",
+              "tags": [],
+              "type": "TYPE_PHONE",
+              "scoring": [],
+              "messageTypes": [
+                3
+              ],
+              "attributed": null,
+              "sort": [
+                1775052000000
+              ]
+            },
+            {
+              "id": "id00000000000000017",
+              "locationId": "LOC_TEST_00000000001",
+              "dateAdded": 1775055600000,
+              "dateUpdated": 1775059200000,
+              "lastMessageDate": 1775062800000,
+              "lastMessageType": "TYPE_EMAIL",
+              "lastMessageBody": "redacted-lastMessageBody",
+              "lastOutboundMessageAction": "automated",
+              "lastMessageDirection": "outbound",
+              "inbox": true,
+              "unreadCount": 0,
+              "lastManualMessageDate": 1775066400000,
+              "followers": [],
+              "mentions": [],
+              "isLastMessageInternalComment": false,
+              "contactId": "id00000000000000018",
+              "fullName": "redacted-fullName",
+              "contactName": "redacted-contactName",
+              "companyName": null,
+              "email": "person0000@example.test",
+              "phone": "+10000000000",
+              "tags": [],
+              "type": "TYPE_PHONE",
+              "scoring": [],
+              "attributed": true,
+              "messageTypes": [
+                100,
+                2,
+                3
+              ],
+              "sort": [
+                1775062800000
+              ]
+            }
+          ],
+          "total": 176,
+          "traceId": "trace-00000000-0000-4000-8000-000000000000"
+        },
+        "note": null,
+        "filter": null,
+        "pagination": null,
+        "error": null
+      }
+    }
+  },
+  "calendars": {
+    "actionId": "calendars-v3__get-calendars",
+    "params": {
+      "locationId": "LOC_TEST_00000000001"
+    },
+    "response": {
+      "structuredContent": {
+        "action": {
+          "id": "redacted",
+          "method": "GET",
+          "path": "/calendars/",
+          "summary": "redacted-summary",
+          "category": "calendars-v3",
+          "risk": {
+            "level": "low",
+            "kinds": [
+              "read"
+            ],
+            "notes": [],
+            "requiresConfirmation": false
+          }
+        },
+        "status": 200,
+        "ok": true,
+        "data": {
+          "calendars": [
+            {
+              "id": "id00000000000000020",
+              "locationId": "LOC_TEST_00000000001",
+              "groupId": "",
+              "teamMembers": [
+                {
+                  "priority": 0.5,
+                  "selected": true,
+                  "meetingLocation": "",
+                  "zoomOauthId": "id00000000000000021",
+                  "isZoomAdded": "true",
+                  "isPrimary": true,
+                  "msTeamsOauthId": "",
+                  "userId": "id00000000000000022",
+                  "locationConfigurations": [
+                    {
+                      "location": "",
+                      "position": 0,
+                      "zoomOauthId": "id00000000000000021",
+                      "meetingId": "zoom_conference_0",
+                      "kind": "zoom_conference"
+                    }
+                  ]
+                }
+              ],
+              "eventType": "RoundRobin_OptimizeForAvailability",
+              "name": "redacted-name",
+              "description": "redacted-description",
+              "widgetSlug": "redacted-widgetSlug",
+              "calendarType": "personal",
+              "widgetType": "default",
+              "eventTitle": "redacted-eventTitle",
+              "eventColor": "redacted",
+              "slotDuration": 30,
+              "slotDurationUnit": "mins",
+              "slotInterval": 60,
+              "slotIntervalUnit": "mins",
+              "slotBuffer": 0,
+              "slotBufferUnit": "mins",
+              "appoinmentPerSlot": 1,
+              "appoinmentPerDay": "",
+              "appointmentPerSlot": 1,
+              "appointmentPerDay": "",
+              "openHours": {},
+              "enableRecurring": false,
+              "recurring": {
+                "count": 1,
+                "interval": null,
+                "monthDays": [],
+                "bookingOption": "skip",
+                "bookingOverlapDefaultStatus": "",
+                "freq": "DAILY",
+                "weekDays": []
+              },
+              "formId": "",
+              "stickyContact": true,
+              "isLivePaymentMode": false,
+              "autoConfirm": true,
+              "googleInvitationEmails": true,
+              "allowReschedule": true,
+              "allowCancellation": true,
+              "shouldAssignContactToTeamMember": false,
+              "shouldSkipAssigningContactForExisting": false,
+              "notes": "redacted-notes",
+              "pixelId": "",
+              "formSubmitType": "ThankYouMessage",
+              "formSubmitRedirectUrl": "https://services.example.test/redacted",
+              "formSubmitThanksMessage": "redacted-formSubmitThanksMessage",
+              "availabilities": [],
+              "guestType": "collect_detail",
+              "consentLabel": "redacted-consentLabel",
+              "calendarCoverImage": "",
+              "lookBusyConfig": {
+                "enabled": false,
+                "lookBusyPercentage": 0
+              },
+              "allowBookingAfterUnit": "hours",
+              "allowBookingAfter": 2,
+              "allowBookingFor": 1,
+              "allowBookingForUnit": "months",
+              "preBuffer": 0,
+              "preBufferUnit": "mins",
+              "isActive": true
+            },
+            {
+              "id": "id00000000000000023",
+              "notifications": [],
+              "locationId": "LOC_TEST_00000000001",
+              "teamMembers": [],
+              "eventType": "RoundRobin_OptimizeForAvailability",
+              "name": "redacted-name",
+              "description": "redacted-description",
+              "widgetSlug": "redacted-widgetSlug",
+              "calendarType": "personal",
+              "widgetType": "default",
+              "eventTitle": "redacted-eventTitle",
+              "eventColor": "redacted",
+              "slotDuration": 60,
+              "slotDurationUnit": "mins",
+              "slotInterval": 30,
+              "slotIntervalUnit": "mins",
+              "slotBuffer": 0,
+              "slotBufferUnit": "mins",
+              "appoinmentPerSlot": 1,
+              "appoinmentPerDay": "",
+              "appointmentPerSlot": 1,
+              "appointmentPerDay": "",
+              "openHours": {},
+              "enableRecurring": false,
+              "recurring": {
+                "weekDays": [],
+                "monthDays": [],
+                "freq": "DAILY",
+                "interval": null,
+                "bookingOption": "skip",
+                "bookingOverlapDefaultStatus": "",
+                "count": 1
+              },
+              "formId": "id00000000000000024",
+              "stickyContact": true,
+              "autoConfirm": true,
+              "googleInvitationEmails": true,
+              "allowReschedule": true,
+              "allowCancellation": true,
+              "shouldAssignContactToTeamMember": false,
+              "shouldSkipAssigningContactForExisting": false,
+              "notes": "redacted-notes",
+              "pixelId": "",
+              "formSubmitType": "RedirectURL",
+              "formSubmitRedirectUrl": "https://services.example.test/redacted",
+              "formSubmitThanksMessage": "redacted-formSubmitThanksMessage",
+              "availabilityType": 0,
+              "availabilities": [],
+              "guestType": "collect_detail",
+              "consentLabel": "redacted-consentLabel",
+              "allowBookingAfterUnit": "hours",
+              "allowBookingAfter": 2,
+              "allowBookingFor": 7,
+              "allowBookingForUnit": "days",
+              "preBuffer": 0,
+              "preBufferUnit": "mins",
+              "isActive": false
+            },
+            {
+              "id": "id00000000000000025",
+              "locationId": "LOC_TEST_00000000001",
+              "groupId": "",
+              "teamMembers": [
+                {
+                  "priority": 0.5,
+                  "selected": true,
+                  "userId": "id00000000000000022",
+                  "locationConfigurations": [
+                    {
+                      "location": "",
+                      "position": 0,
+                      "zoomOauthId": "id00000000000000021",
+                      "meetingId": "zoom_conference_0",
+                      "kind": "zoom_conference"
+                    }
+                  ],
+                  "zoomOauthId": "id00000000000000021",
+                  "msTeamsOauthId": "",
+                  "isZoomAdded": "true",
+                  "meetingLocation": "",
+                  "isPrimary": true
+                }
+              ],
+              "eventType": "RoundRobin_OptimizeForAvailability",
+              "name": "redacted-name",
+              "description": "redacted-description",
+              "widgetSlug": "redacted-widgetSlug",
+              "calendarType": "personal",
+              "widgetType": "default",
+              "eventTitle": "redacted-eventTitle",
+              "eventColor": "redacted",
+              "slotDuration": 30,
+              "slotDurationUnit": "mins",
+              "slotInterval": 60,
+              "slotIntervalUnit": "mins",
+              "slotBuffer": 0,
+              "slotBufferUnit": "mins",
+              "appoinmentPerSlot": 1,
+              "appoinmentPerDay": "",
+              "appointmentPerSlot": 1,
+              "appointmentPerDay": "",
+              "openHours": {},
+              "enableRecurring": false,
+              "recurring": {
+                "freq": "DAILY",
+                "monthDays": [],
+                "weekDays": [],
+                "interval": null,
+                "bookingOverlapDefaultStatus": "",
+                "count": 1,
+                "bookingOption": "skip"
+              },
+              "formId": "",
+              "stickyContact": true,
+              "isLivePaymentMode": false,
+              "autoConfirm": true,
+              "googleInvitationEmails": true,
+              "allowReschedule": true,
+              "allowCancellation": true,
+              "shouldAssignContactToTeamMember": false,
+              "shouldSkipAssigningContactForExisting": false,
+              "notes": "redacted-notes",
+              "pixelId": "",
+              "formSubmitType": "ThankYouMessage",
+              "formSubmitRedirectUrl": "https://services.example.test/redacted",
+              "formSubmitThanksMessage": "redacted-formSubmitThanksMessage",
+              "availabilities": [],
+              "guestType": "collect_detail",
+              "consentLabel": "redacted-consentLabel",
+              "calendarCoverImage": "",
+              "lookBusyConfig": {
+                "enabled": false,
+                "lookBusyPercentage": 0
+              },
+              "allowBookingAfterUnit": "hours",
+              "allowBookingAfter": 2,
+              "allowBookingFor": 7,
+              "allowBookingForUnit": "days",
+              "preBuffer": 0,
+              "preBufferUnit": "mins",
+              "isActive": true
+            }
+          ],
+          "traceId": "trace-00000000-0000-4000-8000-000000000000"
+        },
+        "note": null,
+        "filter": null,
+        "pagination": null,
+        "error": null
+      }
+    }
+  },
+  "calendarEvents": {
+    "actionId": "calendars-v3__get-calendar-events",
+    "calendarId": "id00000000000000020",
+    "response": {
+      "structuredContent": {
+        "action": {
+          "id": "redacted",
+          "method": "GET",
+          "path": "/calendars/events",
+          "summary": "redacted-summary",
+          "category": "calendars-v3",
+          "risk": {
+            "level": "low",
+            "kinds": [
+              "read"
+            ],
+            "notes": [],
+            "requiresConfirmation": false
+          }
+        },
+        "status": 200,
+        "ok": true,
+        "data": {
+          "events": [
+            {
+              "appointmentStatus": "showed",
+              "appoinmentStatus": "showed",
+              "assignedUserId": "id00000000000000022",
+              "address": "redacted-address",
+              "calendarId": "id00000000000000020",
+              "contactId": "id00000000000000026",
+              "dateAdded": "2026-04-01T19:00:00.000Z",
+              "dateUpdated": "2026-04-01T20:00:00.000Z",
+              "endTime": "2026-04-01T22:00:00+01:00",
+              "id": "id00000000000000027",
+              "locationId": "LOC_TEST_00000000001",
+              "notes": "redacted-notes",
+              "description": "redacted-description",
+              "startTime": "2026-04-01T23:00:00+01:00",
+              "title": "redacted-title",
+              "assignedResources": [],
+              "isRecurring": false,
+              "createdBy": {
+                "source": "third_party",
+                "userId": null
+              },
+              "deleted": false
+            },
+            {
+              "appointmentStatus": "showed",
+              "appoinmentStatus": "showed",
+              "assignedUserId": "id00000000000000022",
+              "address": "redacted-address",
+              "calendarId": "id00000000000000020",
+              "contactId": "id00000000000000028",
+              "dateAdded": "2026-04-01T23:00:00.000Z",
+              "dateUpdated": "2026-04-02T00:00:00.000Z",
+              "endTime": "2026-04-02T02:00:00+01:00",
+              "id": "id00000000000000029",
+              "locationId": "LOC_TEST_00000000001",
+              "notes": "redacted-notes",
+              "description": "redacted-description",
+              "startTime": "2026-04-02T03:00:00+01:00",
+              "title": "redacted-title",
+              "assignedResources": [],
+              "isRecurring": false,
+              "createdBy": {
+                "source": "third_party",
+                "userId": null
+              },
+              "deleted": false
+            },
+            {
+              "appointmentStatus": "noshow",
+              "appoinmentStatus": "noshow",
+              "assignedUserId": "id00000000000000022",
+              "address": "redacted-address",
+              "calendarId": "id00000000000000020",
+              "contactId": "id00000000000000030",
+              "dateAdded": "2026-04-02T03:00:00.000Z",
+              "dateUpdated": "2026-04-02T04:00:00.000Z",
+              "endTime": "2026-04-02T06:00:00+01:00",
+              "id": "id00000000000000031",
+              "locationId": "LOC_TEST_00000000001",
+              "notes": "redacted-notes",
+              "description": "redacted-description",
+              "startTime": "2026-04-02T07:00:00+01:00",
+              "title": "redacted-title",
+              "assignedResources": [],
+              "isRecurring": false,
+              "createdBy": {
+                "source": "third_party",
+                "userId": null
+              },
+              "deleted": false
+            },
+            {
+              "appointmentStatus": "showed",
+              "appoinmentStatus": "showed",
+              "assignedUserId": "id00000000000000022",
+              "address": "redacted-address",
+              "calendarId": "id00000000000000020",
+              "contactId": "id00000000000000032",
+              "dateAdded": "2026-04-02T07:00:00.000Z",
+              "dateUpdated": "2026-04-02T08:00:00.000Z",
+              "endTime": "2026-04-02T10:00:00+01:00",
+              "id": "id00000000000000033",
+              "locationId": "LOC_TEST_00000000001",
+              "notes": "redacted-notes",
+              "description": "redacted-description",
+              "startTime": "2026-04-02T11:00:00+01:00",
+              "title": "redacted-title",
+              "assignedResources": [],
+              "isRecurring": false,
+              "createdBy": {
+                "source": "conversations_ai",
+                "userId": null
+              },
+              "deleted": false
+            }
+          ],
+          "traceId": "trace-00000000-0000-4000-8000-000000000000"
+        },
+        "note": null,
+        "filter": null,
+        "pagination": null,
+        "error": null
+      }
+    }
+  }
+}

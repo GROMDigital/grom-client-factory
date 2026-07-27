@@ -4,6 +4,32 @@ export function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 
+/**
+ * ---------------------------------------------------------------------------------------------
+ * THE ONLY THING A FAILURE MAY CARRY ACROSS A LAYER.
+ *
+ * A live run failed with a bare `PUBLIC_COLLECTION_FAILED` and naming the cause took a capture
+ * session and six probe rounds, because three layers each discarded the error beneath them. The
+ * originating code now travels — and NOTHING else, ever.
+ *
+ * The bound is not decoration. The GHL MCP worker ECHOES REQUEST PARAMETERS into its error
+ * channel, and a value attached here reaches `lib/kernel.mjs` `assertSafeCollected` and the
+ * publication boundary. So a message, a payload, a parameter or a status body must not be able to
+ * ride out on an error property: anything that is not an UPPER_SNAKE machine code of bounded
+ * length is replaced with a constant that says exactly that.
+ * ---------------------------------------------------------------------------------------------
+ */
+export const UPSTREAM_CODE_UNRECOGNISED = 'UPSTREAM_CODE_UNRECOGNISED';
+const MACHINE_CODE = /^[A-Z][A-Z0-9_]{1,63}$/u;
+
+export function isMachineCode(value) {
+  return typeof value === 'string' && MACHINE_CODE.test(value);
+}
+
+export function boundedUpstreamCode(value) {
+  return isMachineCode(value) ? value : UPSTREAM_CODE_UNRECOGNISED;
+}
+
 export function cloneJson(value, code = 'COLLECTION_VALUE_INVALID') {
   try {
     return JSON.parse(canonicalJson(value));

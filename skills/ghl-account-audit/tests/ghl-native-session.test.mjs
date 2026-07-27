@@ -151,7 +151,10 @@ function fetchDouble(handlers, { failWith = null } = {}) {
       return new Response(null, { status: 202 });
     }
     if (message.method === 'tools/call') {
-      const { action, params } = message.params.arguments;
+      // `action_id`, because that is the argument the real worker's zod requires. This double is
+      // the WIRE, so it must enforce the wire's contract; dispatching on whatever key it was
+      // handed is what let a broken request name stay green all the way to a live run.
+      const { action_id: action, params } = message.params.arguments;
       const handler = handlers[action];
       if (!handler) throw new Error(`UNEXPECTED_UPSTREAM:${action}`);
       return json({
@@ -417,8 +420,10 @@ test('the delegate speaks this repo callTool(request, options) convention, not t
     const response = await delegate.callTool(
       {
         name: 'execute_action',
+        // The delegate is a RAW GHL MCP client, so its arguments are the worker's own:
+        // `action_id`, never `action`.
         arguments: {
-          action: 'contacts-v3__search-contacts-advanced',
+          action_id: 'contacts-v3__search-contacts-advanced',
           params: { locationId: 'L1' },
         },
       },
@@ -491,7 +496,8 @@ test('a configuration declaring the native transport collects end to end with no
   );
   const toolCalls = server.observed.requests.filter(({ method }) => method === 'tools/call');
   assert.deepEqual(
-    toolCalls.map(({ params }) => params.arguments.action).sort(),
+    // `action_id` is the worker's required argument name; see `tests/ghl-wire-contract.test.mjs`.
+    toolCalls.map(({ params }) => params.arguments.action_id).sort(),
     ['contacts-v3__search-contacts-advanced', 'opportunities-v3__search-opportunity'],
   );
   for (const call of toolCalls) {
@@ -569,11 +575,13 @@ test('an injected host session still wins over the configuration-built default',
         injected.connects += 1;
         return {
           async callTool(request) {
-            injected.requests.push(request.arguments.action);
+            // An injected `ghlNativeConnect` sits BELOW the translator, so it receives the
+            // worker's dialect (`action_id`), exactly as the configuration-built session does.
+            injected.requests.push(request.arguments.action_id);
             const handler = {
               'contacts-v3__search-contacts-advanced': contactsHandler,
               'opportunities-v3__search-opportunity': opportunitiesHandler,
-            }[request.arguments.action];
+            }[request.arguments.action_id];
             return { structuredContent: handler(request.arguments.params) };
           },
           async close() {

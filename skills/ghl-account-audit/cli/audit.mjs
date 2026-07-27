@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { boundedUpstreamCode, isMachineCode } from '../lib/adapters/collection.mjs';
 import { canonicalJson, sha256 } from '../lib/canonical.mjs';
 import { replayWeeklyFixture } from '../lib/modes/weekly.mjs';
 
@@ -296,6 +297,24 @@ export async function runAuditCli({
   return status;
 }
 
+/**
+ * The line a failed run prints, and the last of the three layers that used to swallow the cause.
+ *
+ * It printed `error?.code` alone, so a collection that died upstream said `PUBLIC_COLLECTION_FAILED`
+ * and stopped talking — which is what turned one broken argument name into a capture session and
+ * six probe rounds. When a failure carries an originating code, the line NAMES it.
+ *
+ * Both halves are re-validated here even though every producer already bounds them: this is the
+ * publication-adjacent surface an operator reads and pastes, and the worker echoes request
+ * parameters into its error channel, so nothing that is not an UPPER_SNAKE machine code is ever
+ * printed.
+ */
+export function describeFailure(error) {
+  const code = isMachineCode(error?.code) ? error.code : 'AUDIT_COMMAND_INVALID';
+  if (error?.upstreamCode === undefined || error?.upstreamCode === null) return code;
+  return `${code} upstream=${boundedUpstreamCode(error.upstreamCode)}`;
+}
+
 async function main() {
   const emitWarning = process.emitWarning;
   process.emitWarning = (warning, ...args) => {
@@ -305,7 +324,7 @@ async function main() {
   try {
     await runAuditCli();
   } catch (error) {
-    process.stderr.write(`${error?.code ?? 'AUDIT_COMMAND_INVALID'}\n`);
+    process.stderr.write(`${describeFailure(error)}\n`);
     process.exitCode = 1;
   }
 }

@@ -1,7 +1,8 @@
 /**
  * The GHL PUBLIC TRANSLATOR — the seam between the bounded adapter and a real GHL MCP server.
  *
- * `lib/adapters/public-ghl.mjs` sends ONE generic request shape for every approved read:
+ * `lib/adapters/public-ghl.mjs` sends ONE generic request shape for every approved read — this is
+ * OUR OWN internal dialect, and it stops here:
  *
  *     { name: 'execute_action', arguments: { action, params: { locationId, fromDate, toDate,
  *       cursor } } }
@@ -20,6 +21,36 @@
  * delegate translates in BOTH directions around the host's real GHL MCP client.
  *
  * Neither `public-ghl.mjs` nor `mcp-transport.mjs` is touched.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * THE WORKER'S TOOL CONTRACT — BOTH DIRECTIONS OF IT LIVE IN THIS MODULE.
+ *
+ * This module already owned the worker contract on the way IN: `parseUpstreamResult` knows that
+ * `structuredContent` is the worker's ENVELOPE (`{ ok, status, data, filter, pagination, error }`)
+ * and that `filter` / `pagination` are the worker's own response-SHAPING channels. It did not own
+ * it on the way OUT, and that split is exactly what broke a live run.
+ *
+ * The worker's `execute_action` tool takes:
+ *
+ *     { name: 'execute_action', arguments: { action_id: '<upstream action id>', params: { ... } } }
+ *
+ * `action_id`. NOT `action`. Every upstream call this repo has ever made named the key `action`,
+ * so the worker's own zod refused every one of them before it ran —
+ *
+ *     { "code": "invalid_type", "path": ["action_id"],
+ *       "message": "Invalid input: expected string, received undefined" }
+ *
+ * — and no hermetic double could see it, because every double in the suite dispatched on whatever
+ * key it was handed. The single place the outgoing envelope is built is `upstreamToolRequest`
+ * below; `tests/ghl-wire-contract.test.mjs` pins it against a reproduction of the worker's own
+ * argument validation rather than against a response double.
+ *
+ * The BOUNDARY is exact: everything ABOVE this module (the bounded adapter, `connectMcp`, and any
+ * host that injects a normalised `transportConnect`) speaks `{ action, params }`, which is why
+ * `tests/adapters.test.mjs` still asserts that shape on `connectMcp`'s forward. Everything BELOW
+ * — the delegate `createGhlTranslatingConnect` wraps, i.e. a raw GHL MCP client — speaks
+ * `{ action_id, params }`. The translation between the two happens here and nowhere else.
+ * ---------------------------------------------------------------------------------------------
  *
  * ---------------------------------------------------------------------------------------------
  * THE CANONICAL REVENUE BASIS FOR THIS AUDIT IS THE OPPORTUNITY `monetaryValue`.
@@ -130,9 +161,146 @@ function decodeCursor(actionId, cursor) {
 // Upstream response reading
 // ---------------------------------------------------------------------------
 
-/** Unwraps an MCP tool result into the JSON body the GHL server returned. */
+/**
+ * ---------------------------------------------------------------------------------------------
+ * THE WORKER ENVELOPE. Established from five real responses captured off Grom's UK sub-account
+ * (`contacts-v3__search-contacts-advanced`, `opportunities-v3__search-opportunity`,
+ * `conversations-v3__search-conversation`, `calendars-v3__get-calendars`,
+ * `calendars-v3__get-calendar-events`), NOT reasoned about.
+ *
+ * `structuredContent` is NOT the GHL body. It is the MCP worker's own envelope:
+ *
+ *     { action: { id, method, path, summary, category, risk }, status, ok, data, note, filter,
+ *       pagination, error }
+ *
+ * The GHL body is ONE LEVEL DOWN, at `structuredContent.data`.
+ *
+ * WHAT THIS ACTUALLY BROKE — stated precisely, because the obvious answer is WRONG and was checked
+ * by replaying the previous revision of this module against the captured responses.
+ *
+ * The previous `parseUpstreamResult` returned the ENVELOPE. That did NOT break the happy path:
+ * `pickRecords` also searched `body.data`, and `pickPath` / `pickServerTotal` also searched
+ * `body.data?.meta`, so on a SUCCESSFUL response the envelope was accidentally tolerated — a
+ * replay collected all 159 opportunities across two pages, cursor and all.
+ *
+ * What it broke is the FAILURE path, and that is not a small thing. On an `ok: false` / non-2xx
+ * envelope, `data` is not a GHL body, so `pickRecords` threw `GHL_RESPONSE_SHAPE_UNRECOGNISED` —
+ * a SHAPE error for what was really an upstream REFUSAL. That code is not retryable, so
+ * `lib/adapters/public-ghl.mjs:639` converted it into a bare `PUBLIC_COLLECTION_FAILED` carrying
+ * no status, no action and no reason. Every upstream rejection — a bad parameter, a 401, a 422 —
+ * arrived looking identical to "GHL returned something we have never seen". Verified by replay.
+ *
+ * So the envelope is now unwrapped, and — the part that actually matters — its failure channel is
+ * read FIRST and raised as `GHL_UPSTREAM_ACTION_FAILED` with the HTTP status attached.
+ *
+ * THE ENVELOPE IS STRIPPED, NOT FORWARDED, and that is deliberate:
+ *
+ *  - `action.method` is `"POST"` for `contacts-v3__search-contacts-advanced` (it is
+ *    `POST /contacts/search` — a read semantically, which the worker still labels
+ *    `risk.kinds: ["write"]`). `lib/kernel.mjs` `assertSafeCollected` throws
+ *    `AUDIT_INTEGRITY_FAILURE_WRITE_OR_RAW_TRACE` on any key normalising to `method` whose value
+ *    is a write verb, so an envelope that reached collected evidence would KILL the run. Verified
+ *    against the real capture: the `method` key exists ONLY in the envelope; nothing under `data`
+ *    normalises to `method`, `rawrequest`, `authorization`, `cookie` or `mutationtool`.
+ *  - `action.risk.kinds: ["write"]` would additionally misrepresent an approved read as a write
+ *    in any downstream risk accounting.
+ *  - Nothing else in the envelope describes the ACCOUNT. It describes OUR CALL, which is already
+ *    recorded as `dataQuality.upstreamAction`.
+ *
+ * `traceId` IS retained — but it comes from the GHL body (`data.traceId`), not the envelope, so
+ * retaining it costs nothing and gives a live run something to quote at GHL support. See
+ * `counters.upstreamTraceIds`.
+ * ---------------------------------------------------------------------------------------------
+ */
+
+/**
+ * Recognises the worker envelope WITHOUT depending on `action`, so a worker that trims its
+ * metadata still unwraps. `ok` + `data` together are the discriminator; no GHL list body carries
+ * an `ok` field.
+ */
+function isWorkerEnvelope(value) {
+  return isPlainObject(value)
+    && Object.hasOwn(value, 'ok')
+    && Object.hasOwn(value, 'data');
+}
+
+/**
+ * The envelope's failure channel. `ok: false`, a non-2xx `status` (it is an HTTP status, so a 404
+ * or a 422 can arrive with `ok` still set), or a populated `error` all mean the read did not
+ * happen — and must NOT be parsed as data, because `data` on a failure is not a GHL body.
+ *
+ * THE STATUS IS TRANSLATED INTO THE CODES THE ADAPTER ALREADY UNDERSTANDS, and that matters more
+ * than it looks. `lib/adapters/public-ghl.mjs:636-639` treats `RATE_LIMITED` as a clean stop with a
+ * resume cursor, `RETRYABLE` as worth another attempt inside the retry budget, and EVERYTHING ELSE
+ * as a fatal `PUBLIC_COLLECTION_FAILED`. The GHL MCP worker rate-limits at 60 execute calls per
+ * minute, while a single scope here can walk up to `budget.maximumPages` requests plus one per
+ * (calendar x week) chunk — so a 429 is not a remote possibility, it is the expected outcome of a
+ * busy account. Left untranslated it would abort the whole audit instead of parking it.
+ *
+ *   429            -> RATE_LIMITED  (stop this scope cleanly; never hammer a throttled account)
+ *   5xx            -> RETRYABLE     (the adapter's own retry budget governs)
+ *   anything else  -> GHL_UPSTREAM_ACTION_FAILED (a real refusal: bad parameter, auth, not found)
+ *
+ * Nothing from the failure body is interpolated into the error beyond the numeric status: the
+ * worker echoes request parameters into `error`, and a coded throw must never carry account data.
+ */
+function assertEnvelopeSucceeded(envelope) {
+  const status = typeof envelope.status === 'number' ? envelope.status : null;
+  const failed = envelope.ok !== true
+    || (status !== null && (status < 200 || status > 299))
+    || (envelope.error !== undefined && envelope.error !== null);
+  if (!failed) return;
+  let code = 'GHL_UPSTREAM_ACTION_FAILED';
+  if (status === 429) code = 'RATE_LIMITED';
+  else if (status !== null && status >= 500 && status <= 599) code = 'RETRYABLE';
+  const error = codedError(code);
+  error.upstreamStatus = status;
+  throw error;
+}
+
+/**
+ * The worker offers response SHAPING (`result_filter`, `result_fields`, `result_offset`,
+ * `result_limit`), echoed back as `filter` / `pagination`. We never send those parameters, so both
+ * are `null` on every captured response. If either is ever populated the array we were handed is a
+ * SUBSET the worker chose, our `reportedCount === items.length` claim becomes a lie, and the scope
+ * would silently under-report. Fail loudly instead.
+ */
+function assertEnvelopeUnshaped(envelope) {
+  if (
+    (envelope.filter !== undefined && envelope.filter !== null)
+    || (envelope.pagination !== undefined && envelope.pagination !== null)
+  ) throw fail('GHL_UPSTREAM_RESPONSE_SHAPED');
+}
+
+/**
+ * Unwraps an MCP tool result into the GHL body — through the worker envelope when one is present.
+ *
+ * A bare GHL body (no `ok`/`data` pair) is returned unchanged, so a differently-shaped MCP server,
+ * and every hermetic double in the test suite, still work.
+ */
 export function parseUpstreamResult(response) {
   let value = response;
+  /**
+   * THE TOOL-LEVEL REFUSAL, and it is a different animal from an envelope failure.
+   *
+   * When the worker rejects the CALL rather than the action — bad arguments, a missing
+   * `action_id`, an unrecognised key — MCP answers with a tool error, not a payload:
+   *
+   *     { content: [{ type: 'text', text: '<zod issues, or anything at all>' }], isError: true }
+   *
+   * There is NO `structuredContent`, so the text branch below used to try to parse it: sometimes
+   * it was not JSON (`GHL_UPSTREAM_RESPONSE_INVALID`), sometimes it parsed to an array
+   * (`GHL_UPSTREAM_RESPONSE_INVALID` again). Either way an explicit REFUSAL arrived looking
+   * exactly like "the server sent us something we have never seen", and downstream that became a
+   * bare `PUBLIC_COLLECTION_FAILED`. That is precisely the reply a live run received and could not
+   * name.
+   *
+   * Recognised FIRST and raised as a refusal. The text is never read, never parsed and never
+   * attached: it is where the worker echoes the request parameters back.
+   */
+  if (isPlainObject(response) && response.isError === true) {
+    throw fail('GHL_UPSTREAM_TOOL_REFUSED');
+  }
   if (isPlainObject(response) && isPlainObject(response.structuredContent)) {
     value = response.structuredContent;
   } else if (isPlainObject(response) && Array.isArray(response.content)) {
@@ -145,14 +313,37 @@ export function parseUpstreamResult(response) {
     }
   }
   if (!isPlainObject(value)) throw fail('GHL_UPSTREAM_RESPONSE_INVALID');
-  return value;
+  if (!isWorkerEnvelope(value)) return value;
+  assertEnvelopeSucceeded(value);
+  assertEnvelopeUnshaped(value);
+  const body = value.data;
+  if (typeof body === 'string') {
+    // OBSERVED on the real capture: for a large payload the worker's TEXT channel renders `data`
+    // as a pretty-printed, TRUNCATED string with a trailing "showing N of M items" note, while
+    // `structuredContent` stays complete. Parsing that string would silently drop records, so a
+    // string body is refused rather than salvaged. `structuredContent` is always preferred above.
+    throw fail('GHL_UPSTREAM_RESPONSE_TRUNCATED');
+  }
+  if (!isPlainObject(body)) throw fail('GHL_UPSTREAM_RESPONSE_INVALID');
+  return body;
 }
 
 /**
- * Finds the record array. The candidate KEYS are per-endpoint; the containers are the three
- * envelopes an MCP server plausibly wraps a GHL body in. An unrecognised shape THROWS: returning
- * `[]` here would be indistinguishable from a genuinely empty account, which is the one failure
- * this module exists to prevent.
+ * Finds the record array. The candidate KEYS are per-endpoint.
+ *
+ * REAL, from the captured responses — every container is at the ROOT of the GHL body, which is
+ * what `parseUpstreamResult` now returns:
+ *
+ *     contacts        -> body.contacts   (+ body.total, body.traceId)
+ *     opportunities   -> body.opportunities (+ body.meta, body.traceId)
+ *     conversations   -> body.conversations (+ body.total, body.traceId)
+ *     calendars       -> body.calendars  (+ body.traceId)
+ *     calendar events -> body.events     (+ body.traceId)
+ *
+ * The extra containers are kept as tolerance for a differently-wrapped MCP server, but the root is
+ * tried FIRST so the known shape always wins. An unrecognised shape THROWS: returning `[]` here
+ * would be indistinguishable from a genuinely empty account, which is the one failure this module
+ * exists to prevent.
  */
 function pickRecords(body, keys) {
   for (const container of [body, body.data, body.body, body.result, body.response]) {
@@ -164,9 +355,14 @@ function pickRecords(body, keys) {
   throw fail('GHL_RESPONSE_SHAPE_UNRECOGNISED');
 }
 
-/** A server-declared total, when one is offered. Recorded as a SIGNAL; never used as a count. */
+/**
+ * A server-declared total, when one is offered. Recorded as a SIGNAL; never used as a count.
+ *
+ * REAL: contacts and conversations put it at `body.total`; opportunities put it at
+ * `body.meta.total` (159 on the UK account). Calendars and calendar events declare none.
+ */
 function pickServerTotal(body) {
-  for (const container of [body, body.data, body.meta, body.data?.meta]) {
+  for (const container of [body, body.meta, body.data, body.data?.meta]) {
     if (!isPlainObject(container)) continue;
     for (const key of ['total', 'totalCount', 'count']) {
       const value = container[key];
@@ -176,13 +372,37 @@ function pickServerTotal(body) {
   return null;
 }
 
+/**
+ * A named field anywhere in the body's paging area.
+ *
+ * REAL: opportunity cursors are at `body.meta` — `{ total, nextPageUrl, startAfterId, startAfter,
+ * currentPage, nextPage, prevPage }` — and NOT at the body root, which is why `body.meta` is
+ * searched. Contacts and conversations declare NO body-level cursor at all; both are derived from
+ * the last record instead (see their plans).
+ */
 function pickPath(body, key) {
-  for (const container of [body, body.data, body.meta, body.data?.meta]) {
+  for (const container of [body, body.meta, body.data, body.data?.meta]) {
     if (isPlainObject(container) && container[key] !== undefined && container[key] !== null) {
       return container[key];
     }
   }
   return null;
+}
+
+/**
+ * REAL: every one of the five captured responses carries `traceId` at the root of the GHL body.
+ * It is the only upstream metadata worth keeping — it is what a support ticket quotes — and it is
+ * account-neutral, so it travels in `dataQuality` rather than being discarded with the envelope.
+ * Bounded so a long walk cannot grow an unbounded artifact.
+ */
+const MAXIMUM_TRACE_IDS = 32;
+
+function recordTraceId(body, counters) {
+  const traceId = body?.traceId;
+  if (typeof traceId !== 'string' || traceId.length === 0) return;
+  if (counters.upstreamTraceIds.length >= MAXIMUM_TRACE_IDS) return;
+  if (counters.upstreamTraceIds.includes(traceId)) return;
+  counters.upstreamTraceIds.push(traceId);
 }
 
 function recordId(record) {
@@ -279,6 +499,8 @@ function newCounters() {
     upstreamRequests: 0,
     parentCalendarsResolved: null,
     paginationCursorUnavailable: false,
+    // The ONLY upstream metadata kept. See `recordTraceId`; the worker envelope itself is stripped.
+    upstreamTraceIds: [],
   };
 }
 
@@ -309,6 +531,11 @@ const PLANS = Object.freeze({
       pageLimit: UPSTREAM_PAGE_LIMIT,
       ...(state.searchAfter === null ? {} : { searchAfter: state.searchAfter }),
     }),
+    // REAL, from the captured contacts response: the body root carries ONLY
+    // `{ contacts, total, traceId }` — there is NO body-level cursor. Every contact instead
+    // carries its own `searchAfter: [<number>, <its own id>]`, present on every row, so the
+    // last-record derivation below is the real mechanism and the body-level lookup is only a
+    // fallback for a differently-shaped server.
     advance: (state, body, records) => {
       if (records.length < UPSTREAM_PAGE_LIMIT) return null;
       const last = records.at(-1);
@@ -333,14 +560,41 @@ const PLANS = Object.freeze({
       // `status` is a VERIFIED enum on this endpoint and `all` is one of its values. Without it
       // the default is unstated, and a default of `open` would silently exclude every won and
       // lost opportunity — i.e. every opportunity that carries realised `monetaryValue`.
+      //
+      // CONFIRMED LIVE against the UK account, decisively: `status: 'bogus_value'` comes back
+      // `ok: false`, so the enum IS validated server-side and `all` is genuinely accepted rather
+      // than being ignored. `all` and omitting `status` both report total 159; `won` reports 0 and
+      // `lost` reports 56. Sending it is therefore safe AND load-bearing.
       status: 'all',
       ...(state.startAfter === null ? {} : { startAfter: state.startAfter }),
       ...(state.startAfterId === null ? {} : { startAfterId: state.startAfterId }),
     }),
+    /**
+     * REAL, from the captured opportunities response: the cursors are at `body.meta`, NOT at the
+     * body root —
+     *
+     *     meta: { total: 159, nextPageUrl, startAfterId: "<id>", startAfter: 1785099111627,
+     *             currentPage: 1, nextPage: 2, prevPage: null }
+     *
+     * `pickPath` searches `body.meta`, so this resolves. It is worth being exact about the
+     * history: this was NOT previously broken. The old `pickPath` also searched `body.data?.meta`,
+     * which reached the same field through the un-stripped envelope, and a replay of the previous
+     * revision paged correctly through all 159 of the UK account's opportunities. The change here
+     * is that the lookup now points at the shape that is actually documented above rather than
+     * finding it by accident two containers away.
+     *
+     * The last record's `sort` array is the same pair — VERIFIED on the capture,
+     * `meta.startAfter === last.sort[0]` and `meta.startAfterId === last.sort[1]` — and is used as
+     * a fallback so a body that ever drops `meta` still pages rather than truncating. Note
+     * `startAfterId` is NOT the last row's `id`; it is whatever the server's sort key resolves to,
+     * so it is only ever read, never reconstructed.
+     */
     advance: (state, body, records) => {
       if (records.length < UPSTREAM_PAGE_LIMIT) return null;
-      const startAfter = pickPath(body, 'startAfter');
-      const startAfterId = pickPath(body, 'startAfterId');
+      const last = records.at(-1);
+      const sort = Array.isArray(last?.sort) && last.sort.length === 2 ? last.sort : null;
+      const startAfter = pickPath(body, 'startAfter') ?? sort?.[0] ?? null;
+      const startAfterId = pickPath(body, 'startAfterId') ?? sort?.[1] ?? null;
       if (startAfter === null || startAfterId === null) return 'EXHAUSTED_WITHOUT_CURSOR';
       if (
         canonicalJson(startAfter) === canonicalJson(state.startAfter)
@@ -363,6 +617,8 @@ const PLANS = Object.freeze({
   'calendars-v3__get-calendars': {
     upstreamAction: 'calendars-v3__get-calendars',
     category: 'appointments',
+    // REAL: `body.calendars` (+ `body.traceId`). No total and no cursor — the account's calendars
+    // come back in one body, three of them on the UK account.
     recordKeys: ['calendars'],
     windowFilter: 'none',
     initialState: () => ({ single: true }),
@@ -385,12 +641,24 @@ const PLANS = Object.freeze({
       endDate: toMs,
       ...(state.startAfterDate === null ? {} : { startAfterDate: state.startAfterDate }),
     }),
+    /**
+     * REAL, from the captured conversations response: the body root carries only
+     * `{ conversations, total: 176, traceId }` — NO body-level cursor, and NO `sortValue` on any
+     * record. What each conversation DOES carry is `sort: [<number>]`, and on the capture
+     * `sort[0] === lastMessageDate` exactly (and equals neither `dateUpdated` nor `dateAdded`), so
+     * `sort[0]` is the server's own sort value and is read first. `lastMessageDate`, `dateUpdated`
+     * and `dateAdded` are all epoch-millisecond NUMBERS here, not ISO strings.
+     */
     advance: (state, body, records) => {
       if (records.length < UPSTREAM_PAGE_LIMIT) return null;
       const last = records.at(-1);
-      // "should contain the sort value of the last document" — with no `sortBy` set the sort value
-      // is the last-message date. `sortValue` is preferred when the server offers it explicitly.
-      const startAfterDate = [last?.sortValue, last?.lastMessageDate, last?.dateUpdated, last?.dateAdded]
+      const startAfterDate = [
+        Array.isArray(last?.sort) && last.sort.length > 0 ? last.sort[0] : undefined,
+        last?.sortValue,
+        last?.lastMessageDate,
+        last?.dateUpdated,
+        last?.dateAdded,
+      ]
         .map((value) => toEpochMs(value))
         .find((value) => value !== null) ?? null;
       if (startAfterDate === null) return 'EXHAUSTED_WITHOUT_CURSOR';
@@ -432,6 +700,18 @@ const PLANS = Object.freeze({
   'calendars-v3__get-calendar-events': {
     upstreamAction: 'calendars-v3__get-calendar-events',
     category: 'appointments',
+    /**
+     * REAL: `body.events` (+ `body.traceId`). No total and no cursor, which is exactly why the
+     * window has to be the pagination.
+     *
+     * Each event carries, verbatim: `appointmentStatus`, `appoinmentStatus` (GHL ships BOTH
+     * spellings and the second is their own long-standing typo; on the capture the two always
+     * agreed), `assignedUserId`, `address`, `calendarId`, `contactId`, `dateAdded`, `dateUpdated`,
+     * `endTime`, `id`, `locationId`, `notes`, `description`, `startTime`, `title`,
+     * `assignedResources`, `isRecurring`, `createdBy: { source, userId }`, `deleted`. Times are
+     * ISO strings WITH an offset (not `Z`, not epoch millis). Records pass through unchanged; any
+     * consumer that reads a status must tolerate both spellings.
+     */
     recordKeys: ['events'],
     windowFilter: 'chunked',
     // Resolved parent + chunk walk; see `calendarEventInitialState` / `calendarEventChunks`.
@@ -484,6 +764,24 @@ export const NOT_TRANSLATED = Object.freeze({
     'payments is never authoritative for revenue; the canonical basis is opportunity monetaryValue',
 });
 
+/**
+ * THE ONE PLACE THE WORKER'S REQUEST ENVELOPE IS BUILT. See the module header.
+ *
+ * `action_id` is the key the worker's zod requires; naming it `action` is what made every live
+ * upstream call fail before it ran. Exactly two arguments leave: no `policy` (the bounded
+ * adapter's authorization record, which `connectMcp` already strips and the worker never
+ * declared), no shaping channel (`result_filter` / `result_fields` / `result_offset` /
+ * `result_limit` — see `assertEnvelopeUnshaped` for why we must never send one), and no `confirm`
+ * or `dry_run`.
+ */
+export function upstreamToolRequest(actionId, params) {
+  if (typeof actionId !== 'string' || actionId.length === 0) {
+    throw fail('GHL_TRANSLATION_REQUEST_INVALID');
+  }
+  if (!isPlainObject(params)) throw fail('GHL_TRANSLATION_REQUEST_INVALID');
+  return { name: 'execute_action', arguments: { action_id: actionId, params } };
+}
+
 export function translatedActionIds() {
   return Object.freeze(Object.keys(PLANS).sort());
 }
@@ -528,9 +826,10 @@ export function assertTranslatableCapabilities(capabilities) {
  */
 async function calendarEventInitialState(context) {
   const body = parseUpstreamResult(await context.call({
-    action: PLANS['calendars-v3__get-calendars'].upstreamAction,
+    actionId: PLANS['calendars-v3__get-calendars'].upstreamAction,
     params: { locationId: context.locationId },
   }));
+  recordTraceId(body, context.counters);
   const calendars = pickRecords(body, PLANS['calendars-v3__get-calendars'].recordKeys);
   const calendarIds = [...new Set(
     calendars.map((calendar) => recordId(calendar)).filter((id) => id !== null),
@@ -648,10 +947,11 @@ async function translateScope({ actionId, params, call, options, now }) {
     }
 
     const body = parseUpstreamResult(await call({
-      action: plan.upstreamAction,
+      actionId: plan.upstreamAction,
       params: plan.request(state, context),
     }));
     counters.upstreamRequests += 1;
+    recordTraceId(body, counters);
     const records = pickRecords(body, plan.recordKeys);
     bytes += byteLength(records);
     const serverTotal = pickServerTotal(body);
@@ -784,12 +1084,15 @@ export function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
           || !isPlainObject(request.arguments.params)
         ) throw fail('GHL_TRANSLATION_REQUEST_INVALID');
         const structured = await translateScope({
+          // INBOUND: our own dialect, `arguments.action`. See the module header for why the two
+          // names are different and where the boundary between them is.
           actionId: request.arguments.action,
           params: request.arguments.params,
-          // Every upstream call carries the caller's own signal and timeout, so the adapter's
-          // budget still governs the wire even though one adapter request is now N of them.
+          // OUTBOUND: the worker's tool contract, `arguments.action_id`, built in exactly one
+          // place. Every upstream call carries the caller's own signal and timeout, so the
+          // adapter's budget still governs the wire even though one adapter request is now N.
           call: (upstream) => delegate.callTool(
-            { name: 'execute_action', arguments: upstream },
+            upstreamToolRequest(upstream.actionId, upstream.params),
             options,
           ),
           options,

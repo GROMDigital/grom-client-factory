@@ -115,6 +115,164 @@ var init_canonical = __esm({
   }
 });
 
+// lib/adapters/collection.mjs
+function codedError(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+function isMachineCode(value) {
+  return typeof value === "string" && MACHINE_CODE.test(value);
+}
+function boundedUpstreamCode(value) {
+  return isMachineCode(value) ? value : UPSTREAM_CODE_UNRECOGNISED;
+}
+function cloneJson(value, code = "COLLECTION_VALUE_INVALID") {
+  try {
+    return JSON.parse(canonicalJson(value));
+  } catch {
+    throw codedError(code, TypeError);
+  }
+}
+function deepFreezeJson(value) {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const nested of Object.values(value)) deepFreezeJson(nested);
+    Object.freeze(value);
+  }
+  return value;
+}
+function isIsoTimestamp(value) {
+  if (typeof value !== "string") return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+}
+function validateCollectionWindow(value, code = "COLLECTION_WINDOW_INVALID") {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(",") !== "from,to" || !isIsoTimestamp(value.from) || !isIsoTimestamp(value.to) || Date.parse(value.from) >= Date.parse(value.to)) throw codedError(code, TypeError);
+  return deepFreezeJson(cloneJson(value, code));
+}
+function assertWindowWithin(applied, requested, code = "WINDOW_SCOPE_MISMATCH") {
+  if (Date.parse(applied.from) < Date.parse(requested.from) || Date.parse(applied.to) > Date.parse(requested.to)) throw codedError(code);
+  return true;
+}
+function capturedAt(runtime = {}) {
+  const value = typeof runtime.now === "function" ? runtime.now() : Date.now();
+  const date5 = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date5.getTime())) throw codedError("COLLECTION_CLOCK_INVALID", TypeError);
+  return date5.toISOString();
+}
+function inventorySourceId(source, operationId) {
+  return `${source}.${sha256({ operationId, source }).slice(0, 32)}`;
+}
+function privatePayload(value, root = false) {
+  if (typeof value === "number") return { $number: JSON.stringify(value) };
+  if (Array.isArray(value)) return { $array: value.map((entry) => privatePayload(entry)) };
+  if (value && typeof value === "object") {
+    const encoded = Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+      key,
+      privatePayload(nested)
+    ]));
+    return root ? encoded : { $object: encoded };
+  }
+  return value;
+}
+function assertTerminalCollection(collection) {
+  if (!collection || typeof collection !== "object" || !collection.page || collection.page.complete !== true || collection.page.truncated !== false || collection.page.nextCursor !== null || !Array.isArray(collection.items) || collection.page.collectedCount !== collection.items.length || collection.page.reportedCount !== collection.page.collectedCount || Object.hasOwn(collection, "incompleteReason")) throw codedError("PRIVATE_SOURCE_INVENTORY_NOT_TERMINAL");
+}
+function buildPrivateSourceEnvelope(collection) {
+  assertTerminalCollection(collection);
+  const source = cloneJson(collection, "PRIVATE_SOURCE_COLLECTION_INVALID");
+  const envelope = {
+    sourceId: inventorySourceId(source.source, source.operationId),
+    kind: "private-content",
+    payload: privatePayload(source, true)
+  };
+  return deepFreezeJson(envelope);
+}
+function authorizeTerminalCollection(collection) {
+  assertTerminalCollection(collection);
+  const source = deepFreezeJson(cloneJson(collection));
+  const privateSourceEnvelope = buildPrivateSourceEnvelope(source);
+  const privateSourceInventory = [{
+    sourceId: privateSourceEnvelope.sourceId,
+    kind: privateSourceEnvelope.kind,
+    sourceHash: sha256({ schemaVersion: "1.0.0", source: privateSourceEnvelope })
+  }].sort((left, right) => left.sourceId.localeCompare(right.sourceId));
+  return deepFreezeJson({
+    ...collection,
+    privateSourceEnvelope,
+    privateSourceInventory
+  });
+}
+function completeCollection({
+  source,
+  operationId,
+  boundLocationId,
+  requestedWindow,
+  appliedWindow,
+  capturedAt: captured,
+  items,
+  cursor = null,
+  reportedCount
+}) {
+  const collection = {
+    source,
+    operationId,
+    boundLocationId,
+    requestedWindow: cloneJson(requestedWindow),
+    appliedWindow: cloneJson(appliedWindow),
+    capturedAt: captured,
+    items: cloneJson(items),
+    page: {
+      cursor,
+      nextCursor: null,
+      reportedCount,
+      collectedCount: items.length,
+      complete: true,
+      truncated: false
+    }
+  };
+  return authorizeTerminalCollection(collection);
+}
+function incompleteCollection({
+  source,
+  operationId,
+  boundLocationId,
+  requestedWindow,
+  appliedWindow,
+  capturedAt: captured,
+  items,
+  cursor = null,
+  nextCursor = null,
+  reportedCount,
+  reason,
+  truncated = false
+}) {
+  return deepFreezeJson({
+    source,
+    operationId,
+    boundLocationId,
+    requestedWindow: cloneJson(requestedWindow),
+    appliedWindow: cloneJson(appliedWindow),
+    capturedAt: captured,
+    items: cloneJson(items),
+    page: {
+      cursor,
+      nextCursor,
+      reportedCount,
+      collectedCount: items.length,
+      complete: false,
+      truncated
+    },
+    incompleteReason: reason
+  });
+}
+var UPSTREAM_CODE_UNRECOGNISED, MACHINE_CODE;
+var init_collection = __esm({
+  "lib/adapters/collection.mjs"() {
+    init_canonical();
+    UPSTREAM_CODE_UNRECOGNISED = "UPSTREAM_CODE_UNRECOGNISED";
+    MACHINE_CODE = /^[A-Z][A-Z0-9_]{1,63}$/u;
+  }
+});
+
 // node_modules/jsbi/dist/jsbi-cjs.js
 var require_jsbi_cjs = __commonJS({
   "node_modules/jsbi/dist/jsbi-cjs.js"(exports, module) {
@@ -5278,7 +5436,7 @@ function inspectSelfDescription(record2, servedRows, spec) {
   }
   return state;
 }
-function codedError(code, ErrorType = Error) {
+function codedError2(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function deepFreeze(value, seen = /* @__PURE__ */ new WeakSet()) {
@@ -5291,7 +5449,7 @@ function iso(value, code = "AUDIT_COMMAND_INVALID_TIME") {
   try {
     return qi.Instant.from(value).toString({ smallestUnit: "millisecond" });
   } catch {
-    throw codedError(code, TypeError);
+    throw codedError2(code, TypeError);
   }
 }
 function daysBetween(from, to2) {
@@ -5315,7 +5473,7 @@ function planWeeklyCollection({
   try {
     qi.Now.zonedDateTimeISO(timezone);
   } catch {
-    throw codedError("AUDIT_COMMAND_INVALID_TIMEZONE", TypeError);
+    throw codedError2("AUDIT_COMMAND_INVALID_TIMEZONE", TypeError);
   }
   if (priorWatermark !== void 0) {
     const overlapHours = Math.max(72, Number.isFinite(lateArrivalHours) ? lateArrivalHours : 72);
@@ -5371,7 +5529,7 @@ function isUnmeasuredValue(value) {
 }
 function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ new WeakSet(), inheritedScope) {
   if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+  if (seen.has(value)) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
   seen.add(value);
   if (Array.isArray(value)) {
     value.forEach((child, index) => assertNoPublicOnlyOverclaim(
@@ -5385,10 +5543,10 @@ function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ ne
     const subsetScoped = localScope === "public_comparable_subset";
     for (const [key, child] of Object.entries(value)) {
       const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
-      if (["scope", "coveragescope"].includes(normalized) && typeof child === "string" && /account.?wide|whole.?account|complete.?full/iu.test(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-      if ((normalized === "verdict" || path.includes("verdicts")) && child === "PASS" && !subsetScoped) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-      if (/(?:total.*impact|account.*impact|revenuepromise|totalrevenue)/u.test(normalized) && !isUnmeasuredValue(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
-      if (/(?:impact|commercialvalue)/u.test(normalized) && !subsetScoped && !(child && typeof child === "object" && (child.scope === "public_comparable_subset" || child.coverageScope === "public_comparable_subset")) && !isUnmeasuredValue(child)) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if (["scope", "coveragescope"].includes(normalized) && typeof child === "string" && /account.?wide|whole.?account|complete.?full/iu.test(child)) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if ((normalized === "verdict" || path.includes("verdicts")) && child === "PASS" && !subsetScoped) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if (/(?:total.*impact|account.*impact|revenuepromise|totalrevenue)/u.test(normalized) && !isUnmeasuredValue(child)) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+      if (/(?:impact|commercialvalue)/u.test(normalized) && !subsetScoped && !(child && typeof child === "object" && (child.scope === "public_comparable_subset" || child.coverageScope === "public_comparable_subset")) && !isUnmeasuredValue(child)) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
       assertNoPublicOnlyOverclaim(child, [...path, key], seen, localScope);
     }
   }
@@ -5397,12 +5555,12 @@ function assertNoPublicOnlyOverclaim(value, path = [], seen = /* @__PURE__ */ ne
 function assertNoPrivateContent(value, seen = /* @__PURE__ */ new WeakSet()) {
   if (typeof value === "string") {
     for (const pattern of PRIVATE_VALUE_PATTERNS) {
-      if (pattern.test(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
+      if (pattern.test(value)) throw codedError2("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
     }
     return;
   }
   if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
+  if (seen.has(value)) throw codedError2("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
   seen.add(value);
   if (Array.isArray(value)) {
     for (const child of value) assertNoPrivateContent(child, seen);
@@ -5410,7 +5568,7 @@ function assertNoPrivateContent(value, seen = /* @__PURE__ */ new WeakSet()) {
     for (const [key, child] of Object.entries(value)) {
       const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
       if (PRIVATE_KEY_DENY.has(normalized)) {
-        throw codedError("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
+        throw codedError2("AUDIT_INTEGRITY_FAILURE_PRIVATE_CONTENT");
       }
       assertNoPrivateContent(child, seen);
     }
@@ -5419,14 +5577,14 @@ function assertNoPrivateContent(value, seen = /* @__PURE__ */ new WeakSet()) {
 }
 function assertFullScopeClaimsSupported(value, seen = /* @__PURE__ */ new WeakSet()) {
   if (value === null || typeof value !== "object") return;
-  if (seen.has(value)) throw codedError("AUDIT_INTEGRITY_FAILURE_FULL_SCOPE");
+  if (seen.has(value)) throw codedError2("AUDIT_INTEGRITY_FAILURE_FULL_SCOPE");
   seen.add(value);
   if (Array.isArray(value)) {
     for (const child of value) assertFullScopeClaimsSupported(child, seen);
   } else {
     for (const [key, child] of Object.entries(value)) {
       const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
-      if (["support", "claimsupport", "evidencesupport"].includes(normalized) && typeof child === "string" && INELIGIBLE_SUPPORT.has(child.toLowerCase())) throw codedError("AUDIT_INTEGRITY_FAILURE_FULL_SCOPE");
+      if (["support", "claimsupport", "evidencesupport"].includes(normalized) && typeof child === "string" && INELIGIBLE_SUPPORT.has(child.toLowerCase())) throw codedError2("AUDIT_INTEGRITY_FAILURE_FULL_SCOPE");
       assertFullScopeClaimsSupported(child, seen);
     }
   }
@@ -5498,18 +5656,18 @@ function validateFullEligibilityDecision(value, expectedRun = null) {
 function enforcePublicOnlyPublication(input = {}, { firstBaseline = false, fullEligibility = null, expectedRun = null } = {}) {
   const validated = validateFullEligibilityDecision(fullEligibility, expectedRun);
   if (validated.reason === "structure") {
-    throw codedError("AUDIT_INTEGRITY_FAILURE_FULL_ELIGIBILITY");
+    throw codedError2("AUDIT_INTEGRITY_FAILURE_FULL_ELIGIBILITY");
   }
   const decision = validated.decision;
   const publishFull = decision !== null && decision.status === "complete_full";
   const nonPublishing = decision !== null && NON_PUBLISHING_STATUSES.has(decision.status);
   if (input?.payloadArtifacts && input?.projections && input?.manifestInput) {
-    if (nonPublishing) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+    if (nonPublishing) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
     const expectedStatus = publishFull ? "complete_full" : "complete_partial";
     const coverage2 = input.payloadArtifacts["coverage.json"];
     const machine = input.payloadArtifacts["metrics-and-findings.json"];
     const limitations = Array.isArray(coverage2?.limitations) ? new Set(coverage2.limitations) : /* @__PURE__ */ new Set();
-    if (input.manifestInput.status !== expectedStatus || coverage2?.state !== expectedStatus || machine?.sealedInputs?.run?.status !== expectedStatus || !publishFull && !limitations.has("INTERNAL_WORKFLOW_DEFINITION_MISSING") || !publishFull && !limitations.has("INTERNAL_WORKFLOW_RUNTIME_MISSING")) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+    if (input.manifestInput.status !== expectedStatus || coverage2?.state !== expectedStatus || machine?.sealedInputs?.run?.status !== expectedStatus || !publishFull && !limitations.has("INTERNAL_WORKFLOW_DEFINITION_MISSING") || !publishFull && !limitations.has("INTERNAL_WORKFLOW_RUNTIME_MISSING")) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
     if (publishFull) {
       for (const artifact of Object.values(input.payloadArtifacts)) {
         assertNoPrivateContent(artifact);
@@ -5525,9 +5683,9 @@ function enforcePublicOnlyPublication(input = {}, { firstBaseline = false, fullE
       }
       assertNoPublicOnlyOverclaim(input.projections);
     }
-    if (typeof input.payloadArtifacts["REPORT.md"] !== "string" || !publishFull && BROAD_REPORT_LANGUAGE.test(input.payloadArtifacts["REPORT.md"])) throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
+    if (typeof input.payloadArtifacts["REPORT.md"] !== "string" || !publishFull && BROAD_REPORT_LANGUAGE.test(input.payloadArtifacts["REPORT.md"])) throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_SCOPE");
     const serialized = canonicalJson(input.payloadArtifacts);
-    if (firstBaseline && [...FORBIDDEN_MOVEMENT].some((label) => serialized.includes(`"${label}"`))) throw codedError("AUDIT_INTEGRITY_FAILURE_FIRST_BASELINE_MOVEMENT");
+    if (firstBaseline && [...FORBIDDEN_MOVEMENT].some((label) => serialized.includes(`"${label}"`))) throw codedError2("AUDIT_INTEGRITY_FAILURE_FIRST_BASELINE_MOVEMENT");
     return deepFreeze({ ...structuredClone(input), status: expectedStatus });
   }
   const coverage = input.coverage && typeof input.coverage === "object" ? structuredClone(input.coverage) : {};
@@ -5574,42 +5732,42 @@ function enforcePublicOnlyPublication(input = {}, { firstBaseline = false, fullE
 function safeFixturePath(root, candidate, code) {
   const resolvedRoot = realpathSync(root);
   const resolvedCandidate = realpathSync(candidate);
-  if (resolvedCandidate !== resolvedRoot && !resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)) throw codedError(code);
+  if (resolvedCandidate !== resolvedRoot && !resolvedCandidate.startsWith(`${resolvedRoot}${sep}`)) throw codedError2(code);
   return resolvedCandidate;
 }
 function writeReplayArtifact(pathname, bytes) {
   if (existsSync(pathname)) {
     const metadata = lstatSync(pathname);
-    if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync(pathname).equals(bytes)) throw codedError("AUDIT_INTEGRITY_FAILURE_REPLAY_CONFLICT");
+    if (metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync(pathname).equals(bytes)) throw codedError2("AUDIT_INTEGRITY_FAILURE_REPLAY_CONFLICT");
     return;
   }
   writeFileSync(pathname, bytes, { mode: 256, flag: "wx" });
 }
 function replayWeeklyFixture({ fixtureRoot, outputRoot }) {
   if (typeof fixtureRoot !== "string" || typeof outputRoot !== "string") {
-    throw codedError("AUDIT_COMMAND_INVALID_REPLAY", TypeError);
+    throw codedError2("AUDIT_COMMAND_INVALID_REPLAY", TypeError);
   }
   const fixtureDir = safeFixturePath(fixtureRoot, fixtureRoot, "AUDIT_COMMAND_INVALID_FIXTURE");
   let fixture;
   try {
     fixture = JSON.parse(readFileSync(join(fixtureDir, "fixture.json"), "utf8"));
   } catch {
-    throw codedError("AUDIT_COMMAND_INVALID_FIXTURE");
+    throw codedError2("AUDIT_COMMAND_INVALID_FIXTURE");
   }
-  if (fixture?.schemaVersion !== "1.0.0" || !Array.isArray(fixture.pages) || typeof fixture.locationId !== "string") throw codedError("AUDIT_COMMAND_INVALID_FIXTURE");
+  if (fixture?.schemaVersion !== "1.0.0" || !Array.isArray(fixture.pages) || typeof fixture.locationId !== "string") throw codedError2("AUDIT_COMMAND_INVALID_FIXTURE");
   mkdirSync(outputRoot, { recursive: true, mode: 448 });
   const canonicalOutput = realpathSync(outputRoot);
   const events = [];
   for (const page of fixture.pages) {
-    if (!Array.isArray(page.events)) throw codedError("AUDIT_COMMAND_INVALID_FIXTURE");
+    if (!Array.isArray(page.events)) throw codedError2("AUDIT_COMMAND_INVALID_FIXTURE");
     events.push(...page.events);
   }
   const byId = /* @__PURE__ */ new Map();
   for (const event of events) {
-    if (typeof event.nativeEventId !== "string") throw codedError("AUDIT_COMMAND_INVALID_FIXTURE");
+    if (typeof event.nativeEventId !== "string") throw codedError2("AUDIT_COMMAND_INVALID_FIXTURE");
     const existing = byId.get(event.nativeEventId);
     if (existing && canonicalJson(existing) !== canonicalJson(event)) {
-      throw codedError("AUDIT_INTEGRITY_FAILURE_EVENT_CONFLICT");
+      throw codedError2("AUDIT_INTEGRITY_FAILURE_EVENT_CONFLICT");
     }
     byId.set(event.nativeEventId, event);
   }
@@ -5623,7 +5781,7 @@ function replayWeeklyFixture({ fixtureRoot, outputRoot }) {
   const relativePublication = join("weekly", week, publicationId);
   const publicationRoot = resolve(canonicalOutput, relativePublication);
   if (!publicationRoot.startsWith(`${canonicalOutput}${sep}`)) {
-    throw codedError("AUDIT_COMMAND_INVALID_OUTPUT");
+    throw codedError2("AUDIT_COMMAND_INVALID_OUTPUT");
   }
   mkdirSync(publicationRoot, { recursive: true, mode: 448 });
   const plan = planWeeklyCollection({
@@ -5697,7 +5855,7 @@ async function collectInternalEvidencePhase({
   signal
 } = {}) {
   if (publicEvidence === void 0 || publicEvidence === null) {
-    throw codedError("AUDIT_INTEGRITY_FAILURE_PUBLIC_EVIDENCE_MISSING");
+    throw codedError2("AUDIT_INTEGRITY_FAILURE_PUBLIC_EVIDENCE_MISSING");
   }
   const preservedPublic = jsonClone(publicEvidence);
   const preservedCheckpoint = jsonClone(checkpoint);
@@ -5711,7 +5869,7 @@ async function collectInternalEvidencePhase({
     });
   }
   if (typeof adapter.collectAuditEvidence !== "function") {
-    throw codedError("INTERNAL_AUDIT_REQUEST_INVALID", TypeError);
+    throw codedError2("INTERNAL_AUDIT_REQUEST_INVALID", TypeError);
   }
   const internalEvidence = await adapter.collectAuditEvidence({
     target,
@@ -6653,7 +6811,7 @@ import {
   resolve as resolve2,
   sep as sep2
 } from "node:path";
-function codedError2(code) {
+function codedError3(code) {
   return Object.assign(new Error(code), { code });
 }
 function invalidLocationId(locationId) {
@@ -6677,11 +6835,11 @@ function ensureDirectory(path, missingCode) {
     mkdirSync2(path);
     entry = lstatSync2(path);
   }
-  if (entry.isSymbolicLink()) throw codedError2("AUDIT_PATH_SYMLINK");
-  if (!entry.isDirectory()) throw codedError2(missingCode);
+  if (entry.isSymbolicLink()) throw codedError3("AUDIT_PATH_SYMLINK");
+  if (!entry.isDirectory()) throw codedError3(missingCode);
 }
 function assertRealpathWithin(auditRoot, candidate) {
-  if (!isWithin(auditRoot, realpathSync2(candidate))) throw codedError2("AUDIT_PATH_ESCAPE");
+  if (!isWithin(auditRoot, realpathSync2(candidate))) throw codedError3("AUDIT_PATH_ESCAPE");
 }
 function auditPaths(projectRoot, locationId) {
   if (typeof projectRoot !== "string" || projectRoot.trim().length === 0) {
@@ -6706,20 +6864,20 @@ function auditPaths(projectRoot, locationId) {
   });
 }
 function validateAuditPaths(paths) {
-  if (!paths || typeof paths !== "object" || Array.isArray(paths) || typeof paths.project !== "string" || typeof paths.root !== "string") throw codedError2("AUDIT_PATHS_INVALID");
+  if (!paths || typeof paths !== "object" || Array.isArray(paths) || typeof paths.project !== "string" || typeof paths.root !== "string") throw codedError3("AUDIT_PATHS_INVALID");
   let expected;
   try {
     expected = auditPaths(paths.project, basename(paths.root));
   } catch {
-    throw codedError2("AUDIT_PATHS_INVALID");
+    throw codedError3("AUDIT_PATHS_INVALID");
   }
-  if (Object.keys(paths).length !== Object.keys(expected).length || Object.entries(expected).some(([key, value]) => paths[key] !== value)) throw codedError2("AUDIT_PATHS_INVALID");
+  if (Object.keys(paths).length !== Object.keys(expected).length || Object.entries(expected).some(([key, value]) => paths[key] !== value)) throw codedError3("AUDIT_PATHS_INVALID");
   return expected;
 }
 function ensureAuditPaths(paths) {
   const projectEntry = lstatIfExists(paths.project);
-  if (!projectEntry || !projectEntry.isDirectory()) throw codedError2("INVALID_PROJECT_ROOT");
-  if (projectEntry.isSymbolicLink()) throw codedError2("AUDIT_PATH_SYMLINK");
+  if (!projectEntry || !projectEntry.isDirectory()) throw codedError3("INVALID_PROJECT_ROOT");
+  if (projectEntry.isSymbolicLink()) throw codedError3("AUDIT_PATH_SYMLINK");
   const auditContainer = resolve2(paths.project, "audits");
   const memory = resolve2(paths.root, "memory");
   const privateRoot = resolve2(paths.root, "private");
@@ -6740,15 +6898,15 @@ function ensureAuditPaths(paths) {
   const auditRoot = realpathSync2(paths.auditRoot);
   for (const directory of directories.slice(1)) assertRealpathWithin(auditRoot, directory);
   const database = lstatIfExists(paths.stateDb);
-  if (database?.isSymbolicLink()) throw codedError2("AUDIT_PATH_SYMLINK");
-  if (database && !database.isFile()) throw codedError2("AUDIT_DATABASE_INVALID");
+  if (database?.isSymbolicLink()) throw codedError3("AUDIT_PATH_SYMLINK");
+  if (database && !database.isFile()) throw codedError3("AUDIT_DATABASE_INVALID");
   return auditRoot;
 }
 function verifyAuditDatabasePath(paths, auditRoot) {
   const database = lstatIfExists(paths.stateDb);
-  if (!database) throw codedError2("AUDIT_DATABASE_MISSING");
-  if (database.isSymbolicLink()) throw codedError2("AUDIT_PATH_SYMLINK");
-  if (!database.isFile()) throw codedError2("AUDIT_DATABASE_INVALID");
+  if (!database) throw codedError3("AUDIT_DATABASE_MISSING");
+  if (database.isSymbolicLink()) throw codedError3("AUDIT_PATH_SYMLINK");
+  if (!database.isFile()) throw codedError3("AUDIT_DATABASE_INVALID");
   assertRealpathWithin(auditRoot, paths.stateDb);
 }
 var init_paths = __esm({
@@ -6770,14 +6928,14 @@ function databaseSyncConstructor() {
   }
   return DatabaseSync;
 }
-function codedError3(code) {
+function codedError4(code) {
   return Object.assign(new Error(code), { code });
 }
 function assertNonEmptyString(value, code) {
-  if (typeof value !== "string" || value.length === 0) throw codedError3(code);
+  if (typeof value !== "string" || value.length === 0) throw codedError4(code);
 }
 function assertTimestamp(value, code) {
-  if (!Number.isFinite(value)) throw codedError3(code);
+  if (!Number.isFinite(value)) throw codedError4(code);
 }
 function isPlainObject2(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -6785,7 +6943,7 @@ function isPlainObject2(value) {
   return prototype === Object.prototype || prototype === null;
 }
 function invalidFrozenInputs() {
-  throw codedError3("INVALID_FROZEN_INPUTS");
+  throw codedError4("INVALID_FROZEN_INPUTS");
 }
 function assertExactFields(value, fields) {
   if (!isPlainObject2(value)) invalidFrozenInputs();
@@ -6831,27 +6989,27 @@ function validateTarget(target) {
 function assertSafeInvocationValue(value, seen = /* @__PURE__ */ new WeakSet(), keyName = "") {
   if (value === null || typeof value === "boolean" || typeof value === "number") return;
   if (typeof value === "string") {
-    if (!(keyName === "configHash" && /^[a-f0-9]{64}$/u.test(value)) && /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+?\d[\d ()-]{8,}\d|eyJ[A-Za-z0-9_-]{8,}\.)/iu.test(value)) throw codedError3("RUN_INVOCATION_PRIVATE_VALUE");
+    if (!(keyName === "configHash" && /^[a-f0-9]{64}$/u.test(value)) && /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+?\d[\d ()-]{8,}\d|eyJ[A-Za-z0-9_-]{8,}\.)/iu.test(value)) throw codedError4("RUN_INVOCATION_PRIVATE_VALUE");
     return;
   }
   if (!value || typeof value !== "object" || seen.has(value)) {
-    throw codedError3("RUN_INVOCATION_INVALID");
+    throw codedError4("RUN_INVOCATION_INVALID");
   }
   seen.add(value);
   if (Array.isArray(value)) {
     for (const child of value) assertSafeInvocationValue(child, seen, keyName);
   } else {
-    if (!isPlainObject2(value)) throw codedError3("RUN_INVOCATION_INVALID");
+    if (!isPlainObject2(value)) throw codedError4("RUN_INVOCATION_INVALID");
     for (const [key, child] of Object.entries(value)) {
       const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
-      if (/(?:authorization|cookie|password|secret|token|credential|keyreference|vault)/u.test(normalized)) throw codedError3("RUN_INVOCATION_PRIVATE_VALUE");
+      if (/(?:authorization|cookie|password|secret|token|credential|keyreference|vault)/u.test(normalized)) throw codedError4("RUN_INVOCATION_PRIVATE_VALUE");
       assertSafeInvocationValue(child, seen, key);
     }
   }
   seen.delete(value);
 }
 function validateRunInvocation(invocation, frozenInputs) {
-  if (!isPlainObject2(invocation)) throw codedError3("RUN_INVOCATION_INVALID");
+  if (!isPlainObject2(invocation)) throw codedError4("RUN_INVOCATION_INVALID");
   assertExactFields(invocation, [
     "mode",
     "target",
@@ -6860,21 +7018,21 @@ function validateRunInvocation(invocation, frozenInputs) {
     "profile",
     "providerDescriptor"
   ]);
-  if (invocation.mode !== "weekly" || canonicalJson(invocation.target) !== canonicalJson(frozenInputs.target) || invocation.cutoff !== frozenInputs.cutoff || typeof invocation.providerId !== "string" || invocation.providerId.length === 0 || invocation.profile !== frozenInputs.target.operatingProfile || !isPlainObject2(invocation.providerDescriptor)) throw codedError3("RUN_INVOCATION_INVALID");
+  if (invocation.mode !== "weekly" || canonicalJson(invocation.target) !== canonicalJson(frozenInputs.target) || invocation.cutoff !== frozenInputs.cutoff || typeof invocation.providerId !== "string" || invocation.providerId.length === 0 || invocation.profile !== frozenInputs.target.operatingProfile || !isPlainObject2(invocation.providerDescriptor)) throw codedError4("RUN_INVOCATION_INVALID");
   const descriptor = invocation.providerDescriptor;
   if (descriptor.kind === "inline_safe") {
     assertExactFields(descriptor, ["kind", "configHash", "config"]);
     if (sha256(descriptor.config) !== descriptor.configHash) {
-      throw codedError3("RUN_INVOCATION_INVALID");
+      throw codedError4("RUN_INVOCATION_INVALID");
     }
   } else if (descriptor.kind === "project_file") {
     assertExactFields(descriptor, ["kind", "configHash", "relativePath"]);
-    if (typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || descriptor.relativePath.startsWith("/") || descriptor.relativePath.includes("..") || descriptor.relativePath.includes("\\")) throw codedError3("RUN_INVOCATION_INVALID");
+    if (typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || descriptor.relativePath.startsWith("/") || descriptor.relativePath.includes("..") || descriptor.relativePath.includes("\\")) throw codedError4("RUN_INVOCATION_INVALID");
   } else {
-    throw codedError3("RUN_INVOCATION_INVALID");
+    throw codedError4("RUN_INVOCATION_INVALID");
   }
   if (typeof descriptor.configHash !== "string" || !/^[a-f0-9]{64}$/u.test(descriptor.configHash)) {
-    throw codedError3("RUN_INVOCATION_INVALID");
+    throw codedError4("RUN_INVOCATION_INVALID");
   }
   assertSafeInvocationValue(invocation);
 }
@@ -7081,7 +7239,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         assertTimestamp(now, "INVALID_TIMESTAMP");
         validateFrozenInputs(frozenInputs);
         if (frozenInputs.locationId !== this.locationId || frozenInputs.target.locationId !== this.locationId) {
-          throw codedError3("LOCATION_MISMATCH");
+          throw codedError4("LOCATION_MISMATCH");
         }
         const frozenInputsJson = canonicalJson(frozenInputs);
         const frozenInputsHash = sha256(frozenInputs);
@@ -7094,12 +7252,12 @@ CREATE TABLE IF NOT EXISTS publication_intents (
           ).get(runId);
           if (existing) {
             if (existing.location_id !== this.locationId || existing.frozen_inputs_hash !== frozenInputsHash) {
-              throw codedError3("RUN_ID_COLLISION");
+              throw codedError4("RUN_ID_COLLISION");
             }
             const existingInvocation = this.db.prepare(
               "SELECT invocation_hash FROM run_invocations WHERE run_id = ?"
             ).get(runId);
-            if (invocationHash !== void 0 && existingInvocation?.invocation_hash !== invocationHash) throw codedError3("RUN_INVOCATION_CONFLICT");
+            if (invocationHash !== void 0 && existingInvocation?.invocation_hash !== invocationHash) throw codedError4("RUN_INVOCATION_CONFLICT");
             return this.#runRecord(existing);
           }
           this.db.prepare(`
@@ -7132,9 +7290,9 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       }) {
         assertNonEmptyString(runId, "INVALID_RUN_ID");
         assertTimestamp(now, "INVALID_TIMESTAMP");
-        if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw codedError3("INVALID_LEASE_TTL");
+        if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw codedError4("INVALID_LEASE_TTL");
         validateFrozenInputs(frozenInputs);
-        if (frozenInputs.locationId !== this.locationId || frozenInputs.target.locationId !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+        if (frozenInputs.locationId !== this.locationId || frozenInputs.target.locationId !== this.locationId) throw codedError4("LOCATION_MISMATCH");
         const frozenInputsJson = canonicalJson(frozenInputs);
         const frozenInputsHash = sha256(frozenInputs);
         if (invocation !== void 0) validateRunInvocation(invocation, frozenInputs);
@@ -7145,18 +7303,18 @@ CREATE TABLE IF NOT EXISTS publication_intents (
             "SELECT run_id, expires_at FROM leases WHERE location_id = ?"
           ).get(this.locationId);
           if (lease && lease.expires_at > now && lease.run_id !== runId) {
-            throw codedError3("LEASE_HELD");
+            throw codedError4("LEASE_HELD");
           }
           const existing = this.db.prepare(
             "SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?"
           ).get(runId);
           let run;
           if (existing) {
-            if (existing.location_id !== this.locationId || existing.frozen_inputs_hash !== frozenInputsHash) throw codedError3("RUN_ID_COLLISION");
+            if (existing.location_id !== this.locationId || existing.frozen_inputs_hash !== frozenInputsHash) throw codedError4("RUN_ID_COLLISION");
             const existingInvocation = this.db.prepare(
               "SELECT invocation_hash FROM run_invocations WHERE run_id = ?"
             ).get(runId);
-            if (invocationHash !== void 0 && existingInvocation?.invocation_hash !== invocationHash) throw codedError3("RUN_INVOCATION_CONFLICT");
+            if (invocationHash !== void 0 && existingInvocation?.invocation_hash !== invocationHash) throw codedError4("RUN_INVOCATION_CONFLICT");
             run = this.#runRecord(existing);
           } else {
             this.db.prepare(`
@@ -7201,10 +7359,10 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         const row = this.db.prepare(
           "SELECT invocation_json, invocation_hash FROM run_invocations WHERE run_id = ?"
         ).get(runId);
-        if (!row) throw codedError3("RUN_INVOCATION_NOT_FOUND");
+        if (!row) throw codedError4("RUN_INVOCATION_NOT_FOUND");
         const invocation = JSON.parse(row.invocation_json);
         if (sha256(invocation) !== row.invocation_hash) {
-          throw codedError3("RUN_INVOCATION_INVALID_HASH");
+          throw codedError4("RUN_INVOCATION_INVALID_HASH");
         }
         return JSON.parse(canonicalJson(invocation));
       }
@@ -7213,8 +7371,8 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         const run = this.db.prepare(
           "SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?"
         ).get(runId);
-        if (!run) throw codedError3("RUN_NOT_FOUND");
-        if (run.location_id !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+        if (!run) throw codedError4("RUN_NOT_FOUND");
+        if (run.location_id !== this.locationId) throw codedError4("LOCATION_MISMATCH");
         return this.#runRecord(run);
       }
       updateRunStatus({ runId, status, now = Date.now() }) {
@@ -7226,7 +7384,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         UPDATE runs SET status = ?, updated_at = ?
         WHERE run_id = ? AND location_id = ?
       `).run(status, now, runId, this.locationId);
-          if (changed.changes !== 1) throw codedError3("RUN_NOT_FOUND");
+          if (changed.changes !== 1) throw codedError4("RUN_NOT_FOUND");
           return this.getRun(runId);
         });
       }
@@ -7241,13 +7399,13 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       acquireLease({ runId, now, ttlMs }) {
         assertNonEmptyString(runId, "INVALID_RUN_ID");
         assertTimestamp(now, "INVALID_TIMESTAMP");
-        if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw codedError3("INVALID_LEASE_TTL");
+        if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw codedError4("INVALID_LEASE_TTL");
         return this.#transaction(() => {
           const lease = this.db.prepare(
             "SELECT run_id, expires_at FROM leases WHERE location_id = ?"
           ).get(this.locationId);
           if (lease && lease.expires_at > now && lease.run_id !== runId) {
-            throw codedError3("LEASE_HELD");
+            throw codedError4("LEASE_HELD");
           }
           const expiresAt = now + ttlMs;
           this.db.prepare(`
@@ -7263,9 +7421,9 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         const run = this.db.prepare(
           "SELECT run_id, location_id, status, frozen_inputs_json, frozen_inputs_hash, created_at, updated_at FROM runs WHERE run_id = ?"
         ).get(runId);
-        if (!run) throw codedError3("RUN_NOT_FOUND");
+        if (!run) throw codedError4("RUN_NOT_FOUND");
         if (run.location_id !== this.locationId || frozenInputs.locationId !== this.locationId || frozenInputs.target.locationId !== this.locationId || sha256(frozenInputs) !== run.frozen_inputs_hash) {
-          throw codedError3("RESUME_INPUT_MISMATCH");
+          throw codedError4("RESUME_INPUT_MISMATCH");
         }
         return this.#runRecord(run);
       }
@@ -7277,15 +7435,15 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         const payloadJson = canonicalJson(payload);
         return this.#transaction(() => {
           const run = this.db.prepare("SELECT location_id FROM runs WHERE run_id = ?").get(runId);
-          if (!run) throw codedError3("RUN_NOT_FOUND");
-          if (run.location_id !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+          if (!run) throw codedError4("RUN_NOT_FOUND");
+          if (run.location_id !== this.locationId) throw codedError4("LOCATION_MISMATCH");
           const existing = this.db.prepare(`
         SELECT run_id, phase, input_hash, output_hash, payload_json
         FROM checkpoints WHERE run_id = ? AND phase = ?
       `).get(runId, phase);
           if (existing) {
             if (existing.input_hash !== inputHash2 || existing.output_hash !== outputHash || existing.payload_json !== payloadJson) {
-              throw codedError3("CHECKPOINT_CONFLICT");
+              throw codedError4("CHECKPOINT_CONFLICT");
             }
             return this.#checkpointRecord(existing);
           }
@@ -7325,23 +7483,23 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       }) {
         assertNonEmptyString(runId, "INVALID_RUN_ID");
         if (!["conversation", "mechanism"].includes(kind)) {
-          throw codedError3("REVIEW_REQUEST_STATE_INVALID_KIND", TypeError);
+          throw codedError4("REVIEW_REQUEST_STATE_INVALID_KIND", TypeError);
         }
         if (!isPlainObject2(request) || !isPlainObject2(validatorState)) {
-          throw codedError3("REVIEW_REQUEST_STATE_INVALID_SHAPE", TypeError);
+          throw codedError4("REVIEW_REQUEST_STATE_INVALID_SHAPE", TypeError);
         }
         const requestId = request.requestId;
         const nonceRef = request.nonceRef ?? request.nonce;
         assertNonEmptyString(requestId, "REVIEW_REQUEST_STATE_INVALID_ID");
         assertNonEmptyString(nonceRef, "REVIEW_REQUEST_STATE_INVALID_NONCE");
         if (typeof request.requestHash !== "string" || !/^[a-f0-9]{64}$/u.test(request.requestHash)) {
-          throw codedError3("REVIEW_REQUEST_STATE_INVALID_HASH");
+          throw codedError4("REVIEW_REQUEST_STATE_INVALID_HASH");
         }
-        if (typeof sealedRelativePath !== "string" || sealedRelativePath.startsWith("/") || sealedRelativePath.includes("..") || sealedRelativePath.includes("\\")) throw codedError3("REVIEW_REQUEST_STATE_INVALID_PATH");
+        if (typeof sealedRelativePath !== "string" || sealedRelativePath.startsWith("/") || sealedRelativePath.includes("..") || sealedRelativePath.includes("\\")) throw codedError4("REVIEW_REQUEST_STATE_INVALID_PATH");
         assertTimestamp(createdAt, "REVIEW_REQUEST_STATE_INVALID_TIME");
         assertTimestamp(deadline, "REVIEW_REQUEST_STATE_INVALID_TIME");
         if (deadline < createdAt || !Array.isArray(grants)) {
-          throw codedError3("REVIEW_REQUEST_STATE_INVALID_TIME");
+          throw codedError4("REVIEW_REQUEST_STATE_INVALID_TIME");
         }
         const requestJson = canonicalJson(request);
         const validatorStateJson = canonicalJson(validatorState);
@@ -7350,14 +7508,14 @@ CREATE TABLE IF NOT EXISTS publication_intents (
           const run = this.db.prepare(
             "SELECT location_id FROM runs WHERE run_id = ?"
           ).get(runId);
-          if (!run) throw codedError3("RUN_NOT_FOUND");
-          if (run.location_id !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+          if (!run) throw codedError4("RUN_NOT_FOUND");
+          if (run.location_id !== this.locationId) throw codedError4("LOCATION_MISMATCH");
           const existing = this.db.prepare(
             "SELECT * FROM review_requests WHERE request_id = ?"
           ).get(requestId);
           if (existing) {
             const record2 = this.#reviewRequestRecord(existing);
-            if (record2.runId !== runId || record2.kind !== kind || record2.requestHash !== request.requestHash || record2.nonceRef !== nonceRef || canonicalJson(record2.request) !== requestJson || canonicalJson(record2.validatorState) !== validatorStateJson || record2.sealedRelativePath !== sealedRelativePath) throw codedError3("REVIEW_REQUEST_STATE_INVALID_CONFLICT");
+            if (record2.runId !== runId || record2.kind !== kind || record2.requestHash !== request.requestHash || record2.nonceRef !== nonceRef || canonicalJson(record2.request) !== requestJson || canonicalJson(record2.validatorState) !== validatorStateJson || record2.sealedRelativePath !== sealedRelativePath) throw codedError4("REVIEW_REQUEST_STATE_INVALID_CONFLICT");
             return record2;
           }
           this.db.prepare(`
@@ -7381,7 +7539,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
           );
           const seen = /* @__PURE__ */ new Set();
           for (const grant of grants) {
-            if (!isPlainObject2(grant) || typeof grant.grantRef !== "string" || typeof grant.evidenceRef !== "string" || seen.has(grant.grantRef)) throw codedError3("REVIEW_REQUEST_STATE_INVALID_GRANT");
+            if (!isPlainObject2(grant) || typeof grant.grantRef !== "string" || typeof grant.evidenceRef !== "string" || seen.has(grant.grantRef)) throw codedError4("REVIEW_REQUEST_STATE_INVALID_GRANT");
             seen.add(grant.grantRef);
             this.db.prepare(`
           INSERT INTO review_grants (
@@ -7397,10 +7555,10 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         const row = this.db.prepare(
           "SELECT * FROM review_requests WHERE request_id = ?"
         ).get(requestId);
-        if (!row) throw codedError3("REVIEW_REQUEST_STATE_INVALID_NOT_FOUND");
+        if (!row) throw codedError4("REVIEW_REQUEST_STATE_INVALID_NOT_FOUND");
         const record2 = this.#reviewRequestRecord(row);
         const run = this.db.prepare("SELECT location_id FROM runs WHERE run_id = ?").get(record2.runId);
-        if (!run || run.location_id !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+        if (!run || run.location_id !== this.locationId) throw codedError4("LOCATION_MISMATCH");
         return record2;
       }
       listReviewRequests(runId) {
@@ -7415,26 +7573,26 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         transcriptAvailability
       }) {
         if (!["AVAILABLE", "MISSING", "EXPIRED"].includes(transcriptAvailability)) {
-          throw codedError3("REVIEW_REQUEST_STATE_INVALID_GRANT");
+          throw codedError4("REVIEW_REQUEST_STATE_INVALID_GRANT");
         }
         return this.#transaction(() => {
           const request = this.db.prepare(
             "SELECT validator_state_json, status FROM review_requests WHERE request_id = ?"
           ).get(requestId);
           if (!request || request.status !== "pending") {
-            throw codedError3("REVIEW_REQUEST_STATE_INVALID_STATUS");
+            throw codedError4("REVIEW_REQUEST_STATE_INVALID_STATUS");
           }
           const changed = this.db.prepare(`
         UPDATE review_grants
         SET status = 'consumed', transcript_availability = ?
         WHERE request_id = ? AND grant_ref = ? AND status = 'unread'
       `).run(transcriptAvailability, requestId, grantRef);
-          if (changed.changes !== 1) throw codedError3("REVIEW_RESPONSE_REPLAYED_GRANT");
+          if (changed.changes !== 1) throw codedError4("REVIEW_RESPONSE_REPLAYED_GRANT");
           const validatorState = JSON.parse(request.validator_state_json);
           if (Array.isArray(validatorState.grants)) {
             const grant = validatorState.grants.find((candidate) => candidate.grantRef === grantRef);
             if (!grant || grant.status !== "UNREAD") {
-              throw codedError3("REVIEW_REQUEST_STATE_INVALID_GRANT");
+              throw codedError4("REVIEW_REQUEST_STATE_INVALID_GRANT");
             }
             grant.status = "CONSUMED";
             grant.transcriptAvailability = transcriptAvailability;
@@ -7456,25 +7614,25 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         assertNonEmptyString(requestId, "REVIEW_REQUEST_STATE_INVALID_ID");
         for (const hash2 of [responseHash, resultHash]) {
           if (typeof hash2 !== "string" || !/^[a-f0-9]{64}$/u.test(hash2)) {
-            throw codedError3("REVIEW_RESPONSE_MISMATCH_HASH");
+            throw codedError4("REVIEW_RESPONSE_MISMATCH_HASH");
           }
         }
         assertTimestamp(consumedAt, "REVIEW_REQUEST_STATE_INVALID_TIME");
         const resultJson = canonicalJson(result);
-        if (sha256(result) !== resultHash) throw codedError3("REVIEW_RESPONSE_MISMATCH_RESULT");
+        if (sha256(result) !== resultHash) throw codedError4("REVIEW_RESPONSE_MISMATCH_RESULT");
         return this.#transaction(() => {
           const current = this.db.prepare(
             "SELECT * FROM review_requests WHERE request_id = ?"
           ).get(requestId);
-          if (!current) throw codedError3("REVIEW_REQUEST_STATE_INVALID_NOT_FOUND");
-          if (current.status === "consumed") throw codedError3("REVIEW_RESPONSE_REPLAYED");
-          if (current.status !== "pending") throw codedError3("REVIEW_REQUEST_STATE_INVALID_STATUS");
+          if (!current) throw codedError4("REVIEW_REQUEST_STATE_INVALID_NOT_FOUND");
+          if (current.status === "consumed") throw codedError4("REVIEW_RESPONSE_REPLAYED");
+          if (current.status !== "pending") throw codedError4("REVIEW_REQUEST_STATE_INVALID_STATUS");
           const changed = this.db.prepare(`
         UPDATE review_requests
         SET status = 'consumed', consumed_at = ?, response_hash = ?, result_hash = ?
         WHERE request_id = ? AND status = 'pending'
       `).run(consumedAt, responseHash, resultHash, requestId);
-          if (changed.changes !== 1) throw codedError3("REVIEW_RESPONSE_REPLAYED");
+          if (changed.changes !== 1) throw codedError4("REVIEW_RESPONSE_REPLAYED");
           this.db.prepare(`
         INSERT INTO review_results (request_id, result_json, result_hash, created_at)
         VALUES (?, ?, ?, ?)
@@ -7489,9 +7647,9 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         validate,
         checkpoint
       }) {
-        if (typeof validate !== "function") throw codedError3("REVIEW_REQUEST_STATE_INVALID_VALIDATOR");
+        if (typeof validate !== "function") throw codedError4("REVIEW_REQUEST_STATE_INVALID_VALIDATOR");
         const current = this.getReviewRequest(requestId);
-        if (current.status === "consumed") throw codedError3("REVIEW_RESPONSE_REPLAYED");
+        if (current.status === "consumed") throw codedError4("REVIEW_RESPONSE_REPLAYED");
         const result = validate({
           request: current.request,
           response,
@@ -7508,13 +7666,13 @@ CREATE TABLE IF NOT EXISTS publication_intents (
             consumedAt
           });
         }
-        if (!isPlainObject2(checkpoint) || checkpoint.runId !== current.runId || !/^review-result-(?:conversation|mechanism)$/u.test(checkpoint.phase)) throw codedError3("REVIEW_REQUEST_STATE_INVALID_CHECKPOINT");
+        if (!isPlainObject2(checkpoint) || checkpoint.runId !== current.runId || !/^review-result-(?:conversation|mechanism)$/u.test(checkpoint.phase)) throw codedError4("REVIEW_REQUEST_STATE_INVALID_CHECKPOINT");
         const payloadJson = canonicalJson(checkpoint.payload);
         return this.#transaction(() => {
           const row = this.db.prepare(
             "SELECT status FROM review_requests WHERE request_id = ?"
           ).get(requestId);
-          if (!row || row.status !== "pending") throw codedError3("REVIEW_RESPONSE_REPLAYED");
+          if (!row || row.status !== "pending") throw codedError4("REVIEW_RESPONSE_REPLAYED");
           this.db.prepare(`
         UPDATE review_requests
         SET status = 'consumed', consumed_at = ?, response_hash = ?, result_hash = ?
@@ -7529,7 +7687,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         WHERE run_id = ? AND phase = ?
       `).get(checkpoint.runId, checkpoint.phase);
           if (prior) {
-            if (prior.input_hash !== checkpoint.inputHash || prior.output_hash !== checkpoint.outputHash || prior.payload_json !== payloadJson) throw codedError3("CHECKPOINT_CONFLICT");
+            if (prior.input_hash !== checkpoint.inputHash || prior.output_hash !== checkpoint.outputHash || prior.payload_json !== payloadJson) throw codedError4("CHECKPOINT_CONFLICT");
           } else {
             this.db.prepare(`
           INSERT INTO checkpoints (run_id, phase, input_hash, output_hash, payload_json)
@@ -7554,15 +7712,15 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         assertNonEmptyString(runId, "INVALID_RUN_ID");
         assertNonEmptyString(publicationId, "PUBLICATION_INTENT_CONFLICT_ID");
         if (typeof revisionHash !== "string" || !/^[a-f0-9]{64}$/u.test(revisionHash)) {
-          throw codedError3("PUBLICATION_INTENT_CONFLICT_REVISION");
+          throw codedError4("PUBLICATION_INTENT_CONFLICT_REVISION");
         }
         assertTimestamp(now, "INVALID_TIMESTAMP");
         return this.#transaction(() => {
           const run = this.db.prepare(
             "SELECT location_id FROM runs WHERE run_id = ?"
           ).get(runId);
-          if (!run) throw codedError3("RUN_NOT_FOUND");
-          if (run.location_id !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+          if (!run) throw codedError4("RUN_NOT_FOUND");
+          if (run.location_id !== this.locationId) throw codedError4("LOCATION_MISMATCH");
           const existing = this.db.prepare(`
         SELECT * FROM publication_intents
         WHERE run_id = ? AND revision_hash = ?
@@ -7575,7 +7733,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
           ) VALUES (?, ?, ?, 'prepared', ?, ?)
         `).run(runId, revisionHash, publicationId, now, now);
           } catch {
-            throw codedError3("PUBLICATION_INTENT_CONFLICT_ID");
+            throw codedError4("PUBLICATION_INTENT_CONFLICT_ID");
           }
           return this.getPublicationIntent(runId, revisionHash);
         });
@@ -7589,7 +7747,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       }) {
         for (const hash2 of [revisionHash, manifestHash, publicationRoot]) {
           if (typeof hash2 !== "string" || !/^[a-f0-9]{64}$/u.test(hash2)) {
-            throw codedError3("PUBLICATION_INTENT_CONFLICT_HASH");
+            throw codedError4("PUBLICATION_INTENT_CONFLICT_HASH");
           }
         }
         return this.#transaction(() => {
@@ -7597,9 +7755,9 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         SELECT * FROM publication_intents
         WHERE run_id = ? AND revision_hash = ?
       `).get(runId, revisionHash);
-          if (!current) throw codedError3("PUBLICATION_INTENT_CONFLICT_MISSING");
+          if (!current) throw codedError4("PUBLICATION_INTENT_CONFLICT_MISSING");
           if (current.status === "published") {
-            if (current.manifest_hash !== manifestHash || current.publication_root !== publicationRoot) throw codedError3("PUBLICATION_INTENT_CONFLICT_PUBLISHED");
+            if (current.manifest_hash !== manifestHash || current.publication_root !== publicationRoot) throw codedError4("PUBLICATION_INTENT_CONFLICT_PUBLISHED");
             return this.#publicationIntentRecord(current);
           }
           this.db.prepare(`
@@ -7615,7 +7773,7 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       SELECT * FROM publication_intents
       WHERE run_id = ? AND revision_hash = ?
     `).get(runId, revisionHash);
-        if (!row) throw codedError3("PUBLICATION_INTENT_CONFLICT_MISSING");
+        if (!row) throw codedError4("PUBLICATION_INTENT_CONFLICT_MISSING");
         return this.#publicationIntentRecord(row);
       }
       listPublicationIntents(runId) {
@@ -7630,8 +7788,8 @@ CREATE TABLE IF NOT EXISTS publication_intents (
         const run = this.db.prepare(
           "SELECT location_id, frozen_inputs_json, frozen_inputs_hash FROM runs WHERE run_id = ?"
         ).get(runId);
-        if (!run) throw codedError3("RUN_NOT_FOUND");
-        if (run.location_id !== this.locationId) throw codedError3("LOCATION_MISMATCH");
+        if (!run) throw codedError4("RUN_NOT_FOUND");
+        if (run.location_id !== this.locationId) throw codedError4("LOCATION_MISMATCH");
         const frozenInputs = JSON.parse(run.frozen_inputs_json);
         validatePrivateSourceInventory(
           frozenInputs.privateSourceInventory,
@@ -7723,7 +7881,7 @@ __export(review_bridge_exports, {
   validateConversationReview: () => validateConversationReview
 });
 import { randomBytes } from "node:crypto";
-function codedError4(code, ErrorType = Error) {
+function codedError5(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function plain(value) {
@@ -7746,20 +7904,20 @@ function ensureHash(value) {
 }
 function inputHash(value, idKey, contentKey) {
   if (!plain(value) || typeof value[idKey] !== "string" || typeof value[contentKey] !== "string") {
-    throw codedError4("REVIEW_REQUEST_INVALID", TypeError);
+    throw codedError5("REVIEW_REQUEST_INVALID", TypeError);
   }
   return sha256(value);
 }
 function validateSerializedRequest(request) {
-  if (!exactKeys(request, REQUEST_KEYS) || request.schemaVersion !== "1.0.0" || !NONCE.test(request.nonce) || request.requestId !== `review_${request.nonce}` || !ensureHash(request.requestHash) || !Array.isArray(request.grants)) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+  if (!exactKeys(request, REQUEST_KEYS) || request.schemaVersion !== "1.0.0" || !NONCE.test(request.nonce) || request.requestId !== `review_${request.nonce}` || !ensureHash(request.requestHash) || !Array.isArray(request.grants)) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
   const { requestHash, ...sealed } = request;
-  if (sha256(sealed) !== requestHash) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+  if (sha256(sealed) !== requestHash) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
 }
 function requestState(request) {
   validateSerializedRequest(request);
   const state = REQUESTS.get(request.requestId);
   if (!state || state.requestHash !== request.requestHash || state.nonce !== request.nonce) {
-    throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+    throw codedError5("REVIEW_REQUEST_UNTRUSTED");
   }
   return state;
 }
@@ -7779,10 +7937,10 @@ function serializeConversationState(request, state) {
 }
 function stateFromSnapshot(request, snapshot) {
   validateSerializedRequest(request);
-  if (!exactKeys(snapshot, VALIDATOR_STATE_KEYS) || snapshot.schemaVersion !== "1.0.0" || snapshot.requestHash !== request.requestHash || snapshot.nonce !== request.nonce || snapshot.consumedResponse !== false || !Array.isArray(snapshot.grants) || !Array.isArray(snapshot.interactionEvidence) || !plain(snapshot.modelPolicy)) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+  if (!exactKeys(snapshot, VALIDATOR_STATE_KEYS) || snapshot.schemaVersion !== "1.0.0" || snapshot.requestHash !== request.requestHash || snapshot.nonce !== request.nonce || snapshot.consumedResponse !== false || !Array.isArray(snapshot.grants) || !Array.isArray(snapshot.interactionEvidence) || !plain(snapshot.modelPolicy)) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
   const interactionEvidence = /* @__PURE__ */ new Map();
   for (const binding of snapshot.interactionEvidence) {
-    if (!exactKeys(binding, ["interactionRef", "evidenceRefs"]) || !INTERACTION_REF.test(binding.interactionRef) || interactionEvidence.has(binding.interactionRef) || !Array.isArray(binding.evidenceRefs) || binding.evidenceRefs.length === 0 || binding.evidenceRefs.some((ref) => !EVIDENCE_REF.test(ref)) || new Set(binding.evidenceRefs).size !== binding.evidenceRefs.length) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+    if (!exactKeys(binding, ["interactionRef", "evidenceRefs"]) || !INTERACTION_REF.test(binding.interactionRef) || interactionEvidence.has(binding.interactionRef) || !Array.isArray(binding.evidenceRefs) || binding.evidenceRefs.length === 0 || binding.evidenceRefs.some((ref) => !EVIDENCE_REF.test(ref)) || new Set(binding.evidenceRefs).size !== binding.evidenceRefs.length) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
     interactionEvidence.set(binding.interactionRef, new Set(binding.evidenceRefs));
   }
   const grants = /* @__PURE__ */ new Map();
@@ -7795,13 +7953,13 @@ function stateFromSnapshot(request, snapshot) {
       "interactionRef",
       "status",
       "transcriptAvailability"
-    ]) || !GRANT_REF.test(grant.grantRef) || !EVIDENCE_REF.test(grant.evidenceRef) || !INTERACTION_REF.test(grant.interactionRef) || grants.has(grant.grantRef) || !["UNREAD", "CONSUMED"].includes(grant.status) || ![null, "AVAILABLE", "MISSING", "EXPIRED"].includes(grant.transcriptAvailability) || !interactionEvidence.get(grant.interactionRef)?.has(grant.evidenceRef)) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+    ]) || !GRANT_REF.test(grant.grantRef) || !EVIDENCE_REF.test(grant.evidenceRef) || !INTERACTION_REF.test(grant.interactionRef) || grants.has(grant.grantRef) || !["UNREAD", "CONSUMED"].includes(grant.status) || ![null, "AVAILABLE", "MISSING", "EXPIRED"].includes(grant.transcriptAvailability) || !interactionEvidence.get(grant.interactionRef)?.has(grant.evidenceRef)) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
     grants.set(grant.grantRef, structuredClone(grant));
   }
   if (grants.size !== request.grants.length || request.grants.some((grant) => {
     const durable = grants.get(grant.grantRef);
     return !durable || durable.evidenceRef !== grant.evidenceRef || durable.interactionRef !== grant.interactionRef || durable.expiresAt !== grant.expiresAt || durable.readOnce !== grant.readOnce;
-  })) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+  })) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
   return {
     requestHash: request.requestHash,
     nonce: request.nonce,
@@ -7818,8 +7976,8 @@ function exportConversationReviewValidationState({ request }) {
 function restoreConversationReviewValidationState({ request, validatorState }) {
   const restored = stateFromSnapshot(request, validatorState);
   const existing = REQUESTS.get(request.requestId);
-  if (existing?.consumedResponse) throw codedError4("REVIEW_RESPONSE_REPLAYED");
-  if (existing && (existing.requestHash !== restored.requestHash || existing.nonce !== restored.nonce)) throw codedError4("REVIEW_REQUEST_UNTRUSTED");
+  if (existing?.consumedResponse) throw codedError5("REVIEW_RESPONSE_REPLAYED");
+  if (existing && (existing.requestHash !== restored.requestHash || existing.nonce !== restored.nonce)) throw codedError5("REVIEW_REQUEST_UNTRUSTED");
   REQUESTS.set(request.requestId, restored);
   return serializeConversationState(request, restored);
 }
@@ -7838,25 +7996,25 @@ function createConversationReviewRequest({
     "maxJudgments",
     "maxOutputTokens",
     "allowedTools"
-  ]) || typeof modelPolicy.policyId !== "string" || typeof modelPolicy.provider !== "string" || typeof modelPolicy.model !== "string" || !Number.isInteger(modelPolicy.maxJudgments) || modelPolicy.maxJudgments < sample.selections.length || !Number.isInteger(modelPolicy.maxOutputTokens) || modelPolicy.maxOutputTokens < 1 || !Array.isArray(modelPolicy.allowedTools) || modelPolicy.allowedTools.length !== 0) throw codedError4("REVIEW_REQUEST_INVALID", TypeError);
+  ]) || typeof modelPolicy.policyId !== "string" || typeof modelPolicy.provider !== "string" || typeof modelPolicy.model !== "string" || !Number.isInteger(modelPolicy.maxJudgments) || modelPolicy.maxJudgments < sample.selections.length || !Number.isInteger(modelPolicy.maxOutputTokens) || modelPolicy.maxOutputTokens < 1 || !Array.isArray(modelPolicy.allowedTools) || modelPolicy.allowedTools.length !== 0) throw codedError5("REVIEW_REQUEST_INVALID", TypeError);
   const { sampleHash: declaredSampleHash, ...sampleBody } = sample;
-  if (sha256(sampleBody) !== declaredSampleHash) throw codedError4("REVIEW_SAMPLE_HASH_MISMATCH");
+  if (sha256(sampleBody) !== declaredSampleHash) throw codedError5("REVIEW_SAMPLE_HASH_MISMATCH");
   const selectionByEvidence = /* @__PURE__ */ new Map();
   const interactionEvidence = /* @__PURE__ */ new Map();
   for (const selection of sample.selections) {
-    if (!plain(selection) || !INTERACTION_REF.test(selection.interactionRef) || !Array.isArray(selection.evidenceRefs) || selection.evidenceRefs.length === 0 || !selection.evidenceRefs.every((ref) => EVIDENCE_REF.test(ref)) || interactionEvidence.has(selection.interactionRef)) throw codedError4("REVIEW_REQUEST_INVALID", TypeError);
+    if (!plain(selection) || !INTERACTION_REF.test(selection.interactionRef) || !Array.isArray(selection.evidenceRefs) || selection.evidenceRefs.length === 0 || !selection.evidenceRefs.every((ref) => EVIDENCE_REF.test(ref)) || interactionEvidence.has(selection.interactionRef)) throw codedError5("REVIEW_REQUEST_INVALID", TypeError);
     const refs = new Set(selection.evidenceRefs);
     interactionEvidence.set(selection.interactionRef, refs);
     for (const ref of refs) {
-      if (selectionByEvidence.has(ref)) throw codedError4("REVIEW_REQUEST_INVALID");
+      if (selectionByEvidence.has(ref)) throw codedError5("REVIEW_REQUEST_INVALID");
       selectionByEvidence.set(ref, selection.interactionRef);
     }
   }
   const grants = vaultGrants.map((grant) => {
-    if (!exactKeys(grant, ["grantRef", "evidenceRef", "expiresAt", "readOnce"]) || !GRANT_REF.test(grant.grantRef) || !EVIDENCE_REF.test(grant.evidenceRef) || !selectionByEvidence.has(grant.evidenceRef) || !iso2(grant.expiresAt) || grant.readOnce !== true) throw codedError4("REVIEW_GRANT_INVALID", TypeError);
+    if (!exactKeys(grant, ["grantRef", "evidenceRef", "expiresAt", "readOnce"]) || !GRANT_REF.test(grant.grantRef) || !EVIDENCE_REF.test(grant.evidenceRef) || !selectionByEvidence.has(grant.evidenceRef) || !iso2(grant.expiresAt) || grant.readOnce !== true) throw codedError5("REVIEW_GRANT_INVALID", TypeError);
     return { ...grant };
   }).sort((left, right) => left.grantRef.localeCompare(right.grantRef));
-  if (new Set(grants.map(({ grantRef }) => grantRef)).size !== grants.length || new Set(grants.map(({ evidenceRef }) => evidenceRef)).size !== grants.length || grants.length !== selectionByEvidence.size) throw codedError4("REVIEW_GRANT_INVALID");
+  if (new Set(grants.map(({ grantRef }) => grantRef)).size !== grants.length || new Set(grants.map(({ evidenceRef }) => evidenceRef)).size !== grants.length || grants.length !== selectionByEvidence.size) throw codedError5("REVIEW_GRANT_INVALID");
   const promptHash = inputHash(prompt, "promptId", "content");
   const rubricHash = inputHash(rubric, "rubricId", "content");
   const modelPolicyHash = sha256(modelPolicy);
@@ -7915,10 +8073,10 @@ async function readSelectedEvidence({
 }) {
   const state = requestState(request);
   const grant = state.grants.get(grantRef);
-  if (!grant) throw codedError4("REVIEW_GRANT_UNREFERENCED");
-  if (!iso2(now)) throw codedError4("REVIEW_TIME_INVALID", TypeError);
-  if (grant.status !== "UNREAD") throw codedError4("REVIEW_GRANT_CONSUMED");
-  if (typeof readEvidence !== "function") throw codedError4("REVIEW_READER_INVALID", TypeError);
+  if (!grant) throw codedError5("REVIEW_GRANT_UNREFERENCED");
+  if (!iso2(now)) throw codedError5("REVIEW_TIME_INVALID", TypeError);
+  if (grant.status !== "UNREAD") throw codedError5("REVIEW_GRANT_CONSUMED");
+  if (typeof readEvidence !== "function") throw codedError5("REVIEW_READER_INVALID", TypeError);
   if (Date.parse(now) >= Date.parse(grant.expiresAt)) {
     return unavailableRead(grant, "EXPIRED", "REVIEW_GRANT_EXPIRED");
   }
@@ -7947,21 +8105,21 @@ async function readSelectedEvidence({
 }
 function validateJudgment(judgment, state) {
   const assignedEvidence = state.interactionEvidence.get(judgment?.interactionRef);
-  if (!exactKeys(judgment, JUDGMENT_KEYS) || !INTERACTION_REF.test(judgment.interactionRef) || !state.interactionRefs.has(judgment.interactionRef) || !Array.isArray(judgment.evidenceRefs) || judgment.evidenceRefs.length === 0 || !judgment.evidenceRefs.every((ref) => EVIDENCE_REF.test(ref) && assignedEvidence?.has(ref)) || !Array.isArray(judgment.counterevidence) || !judgment.counterevidence.every((ref) => EVIDENCE_REF.test(ref) && assignedEvidence?.has(ref)) || !["AVAILABLE", "MISSING", "EXPIRED"].includes(judgment.transcriptAvailability) || !["REVIEWED", "NOT_REVIEWABLE"].includes(judgment.state) || !["low", "medium", "high"].includes(judgment.uncertainty) || !Array.isArray(judgment.safetyFlags) || !judgment.safetyFlags.every((flag) => typeof flag === "string")) throw codedError4("REVIEW_RESPONSE_UNREFERENCED");
+  if (!exactKeys(judgment, JUDGMENT_KEYS) || !INTERACTION_REF.test(judgment.interactionRef) || !state.interactionRefs.has(judgment.interactionRef) || !Array.isArray(judgment.evidenceRefs) || judgment.evidenceRefs.length === 0 || !judgment.evidenceRefs.every((ref) => EVIDENCE_REF.test(ref) && assignedEvidence?.has(ref)) || !Array.isArray(judgment.counterevidence) || !judgment.counterevidence.every((ref) => EVIDENCE_REF.test(ref) && assignedEvidence?.has(ref)) || !["AVAILABLE", "MISSING", "EXPIRED"].includes(judgment.transcriptAvailability) || !["REVIEWED", "NOT_REVIEWABLE"].includes(judgment.state) || !["low", "medium", "high"].includes(judgment.uncertainty) || !Array.isArray(judgment.safetyFlags) || !judgment.safetyFlags.every((flag) => typeof flag === "string")) throw codedError5("REVIEW_RESPONSE_UNREFERENCED");
   const grants = [...state.grants.values()].filter(({ interactionRef }) => interactionRef === judgment.interactionRef);
   const expectedAvailability = grants.some(({ transcriptAvailability }) => transcriptAvailability === "EXPIRED") ? "EXPIRED" : grants.some(({ transcriptAvailability }) => transcriptAvailability === "MISSING") ? "MISSING" : "AVAILABLE";
   if (judgment.transcriptAvailability !== expectedAvailability) {
-    throw codedError4("REVIEW_RESPONSE_MISMATCH");
+    throw codedError5("REVIEW_RESPONSE_MISMATCH");
   }
   if (judgment.state === "NOT_REVIEWABLE") {
     if (expectedAvailability === "AVAILABLE" || judgment.scores !== null) {
-      throw codedError4("REVIEW_RESPONSE_INVALID");
+      throw codedError5("REVIEW_RESPONSE_INVALID");
     }
-  } else if (expectedAvailability !== "AVAILABLE" || !plain(judgment.scores) || Object.keys(judgment.scores).length !== SCORE_KEYS.size || Object.keys(judgment.scores).some((key) => !SCORE_KEYS.has(key)) || Object.values(judgment.scores).some((score) => !Number.isInteger(score) || score < 1 || score > 5)) throw codedError4("REVIEW_RESPONSE_INVALID");
+  } else if (expectedAvailability !== "AVAILABLE" || !plain(judgment.scores) || Object.keys(judgment.scores).length !== SCORE_KEYS.size || Object.keys(judgment.scores).some((key) => !SCORE_KEYS.has(key)) || Object.values(judgment.scores).some((score) => !Number.isInteger(score) || score < 1 || score > 5)) throw codedError5("REVIEW_RESPONSE_INVALID");
 }
 function validateConversationReviewResponse({ request, response, state }) {
-  if (state.consumedResponse) throw codedError4("REVIEW_RESPONSE_REPLAYED");
-  if (!exactKeys(response, RESPONSE_KEYS)) throw codedError4("REVIEW_RESPONSE_INVALID");
+  if (state.consumedResponse) throw codedError5("REVIEW_RESPONSE_REPLAYED");
+  if (!exactKeys(response, RESPONSE_KEYS)) throw codedError5("REVIEW_RESPONSE_INVALID");
   const bindings = [
     "requestId",
     "nonce",
@@ -7976,19 +8134,19 @@ function validateConversationReviewResponse({ request, response, state }) {
     "evidenceSetHash"
   ];
   if (bindings.some((key) => response[key] !== request[key])) {
-    throw codedError4("REVIEW_RESPONSE_MISMATCH");
+    throw codedError5("REVIEW_RESPONSE_MISMATCH");
   }
-  if (!iso2(response.reviewedAt)) throw codedError4("REVIEW_RESPONSE_INVALID");
-  if (!exactKeys(response.usage, ["outputTokens"]) || !Number.isInteger(response.usage.outputTokens) || response.usage.outputTokens < 0 || response.usage.outputTokens > state.modelPolicy.maxOutputTokens) throw codedError4("REVIEW_RESPONSE_OVER_BUDGET");
-  if (!exactKeys(response.reviewer, ["kind", "provider", "model", "reviewerRef"]) || !["model", "human"].includes(response.reviewer.kind) || typeof response.reviewer.provider !== "string" || typeof response.reviewer.model !== "string" || !ACTOR_REF.test(response.reviewer.reviewerRef) || response.reviewer.provider !== state.modelPolicy.provider || response.reviewer.model !== state.modelPolicy.model || !Array.isArray(response.judgments)) throw codedError4("REVIEW_RESPONSE_INVALID");
+  if (!iso2(response.reviewedAt)) throw codedError5("REVIEW_RESPONSE_INVALID");
+  if (!exactKeys(response.usage, ["outputTokens"]) || !Number.isInteger(response.usage.outputTokens) || response.usage.outputTokens < 0 || response.usage.outputTokens > state.modelPolicy.maxOutputTokens) throw codedError5("REVIEW_RESPONSE_OVER_BUDGET");
+  if (!exactKeys(response.reviewer, ["kind", "provider", "model", "reviewerRef"]) || !["model", "human"].includes(response.reviewer.kind) || typeof response.reviewer.provider !== "string" || typeof response.reviewer.model !== "string" || !ACTOR_REF.test(response.reviewer.reviewerRef) || response.reviewer.provider !== state.modelPolicy.provider || response.reviewer.model !== state.modelPolicy.model || !Array.isArray(response.judgments)) throw codedError5("REVIEW_RESPONSE_INVALID");
   if ([...state.grants.values()].some(({ status }) => status !== "CONSUMED")) {
-    throw codedError4("REVIEW_GRANTS_NOT_CONSUMED");
+    throw codedError5("REVIEW_GRANTS_NOT_CONSUMED");
   }
-  if (response.judgments.length !== state.interactionRefs.size || response.judgments.length > state.modelPolicy.maxJudgments || new Set(response.judgments.map(({ interactionRef }) => interactionRef)).size !== response.judgments.length) throw codedError4("REVIEW_RESPONSE_INCOMPLETE");
+  if (response.judgments.length !== state.interactionRefs.size || response.judgments.length > state.modelPolicy.maxJudgments || new Set(response.judgments.map(({ interactionRef }) => interactionRef)).size !== response.judgments.length) throw codedError5("REVIEW_RESPONSE_INCOMPLETE");
   for (const judgment of response.judgments) validateJudgment(judgment, state);
   for (const judgment of response.judgments.filter(({ state: value }) => value === "REVIEWED")) {
     const expired = [...state.grants.values()].some((grant) => grant.interactionRef === judgment.interactionRef && Date.parse(response.reviewedAt) >= Date.parse(grant.expiresAt));
-    if (expired) throw codedError4("REVIEW_RESPONSE_STALE");
+    if (expired) throw codedError5("REVIEW_RESPONSE_STALE");
   }
   const output = deepFreeze2({
     schemaVersion: "1.0.0",
@@ -8130,7 +8288,7 @@ __export(mechanisms_exports, {
   restoreMechanismReviewValidationState: () => restoreMechanismReviewValidationState,
   validateMechanismReview: () => validateMechanismReview
 });
-function codedError5(code, ErrorType = Error) {
+function codedError6(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
 function plain2(value) {
@@ -8150,12 +8308,12 @@ function deepFreeze3(value, seen = /* @__PURE__ */ new WeakSet()) {
 }
 function assertDeepFrozen(value, code = "MECHANISM_INPUT_INVALID", seen = /* @__PURE__ */ new WeakSet()) {
   if (!value || typeof value !== "object" || seen.has(value)) return;
-  if (!Object.isFrozen(value)) throw codedError5(code, TypeError);
+  if (!Object.isFrozen(value)) throw codedError6(code, TypeError);
   seen.add(value);
   for (const child of Object.values(value)) assertDeepFrozen(child, code, seen);
 }
 function strings(values, pattern = OPAQUE) {
-  if (!Array.isArray(values) || !values.every((value) => typeof value === "string" && pattern.test(value))) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  if (!Array.isArray(values) || !values.every((value) => typeof value === "string" && pattern.test(value))) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   return [...new Set(values)].sort();
 }
 function stable(prefix, value) {
@@ -8170,7 +8328,7 @@ function safeDescriptorText(value) {
 }
 function sortedUniqueCodes(values) {
   if (!Array.isArray(values) || !values.every(safeCode)) {
-    throw codedError5("MECHANISM_PACKET_INVALID", TypeError);
+    throw codedError6("MECHANISM_PACKET_INVALID", TypeError);
   }
   return [...new Set(values)].sort();
 }
@@ -8181,14 +8339,14 @@ function coverageContract(coverage) {
     "capabilityStates",
     "limits",
     "edgeScopes"
-  ]) || !["complete_full", "complete_partial"].includes(coverage.state) || !Array.isArray(coverage.comparableSubsets) || !Array.isArray(coverage.capabilityStates) || !Array.isArray(coverage.limits) || !coverage.limits.every((limit) => typeof limit === "string") || !Array.isArray(coverage.edgeScopes)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  ]) || !["complete_full", "complete_partial"].includes(coverage.state) || !Array.isArray(coverage.comparableSubsets) || !Array.isArray(coverage.capabilityStates) || !Array.isArray(coverage.limits) || !coverage.limits.every((limit) => typeof limit === "string") || !Array.isArray(coverage.edgeScopes)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   for (const subset of coverage.comparableSubsets) {
-    if (!exactKeys2(subset, ["subsetId", "journeyInstanceIds", "metricIds"]) || !OPAQUE.test(subset.subsetId)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!exactKeys2(subset, ["subsetId", "journeyInstanceIds", "metricIds"]) || !OPAQUE.test(subset.subsetId)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
     strings(subset.journeyInstanceIds);
-    if (!Array.isArray(subset.metricIds) || !subset.metricIds.every((id) => typeof id === "string" && id.length > 0)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!Array.isArray(subset.metricIds) || !subset.metricIds.every((id) => typeof id === "string" && id.length > 0)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   }
   for (const capability of coverage.capabilityStates) {
-    if (!exactKeys2(capability, ["capabilityId", "state"]) || typeof capability.capabilityId !== "string" || !["COMPLETE", "PARTIAL", "MISSING", "NOT_APPLICABLE"].includes(capability.state)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!exactKeys2(capability, ["capabilityId", "state"]) || typeof capability.capabilityId !== "string" || !["COMPLETE", "PARTIAL", "MISSING", "NOT_APPLICABLE"].includes(capability.state)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   }
   const inconsistent = coverage.state === "complete_full" && coverage.capabilityStates.some(({ state }) => ["PARTIAL", "MISSING"].includes(state));
   return {
@@ -8197,12 +8355,12 @@ function coverageContract(coverage) {
   };
 }
 function canonicalFalsification(values, overallCoverage) {
-  if (!Array.isArray(values)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  if (!Array.isArray(values)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   const byFamily = /* @__PURE__ */ new Map();
   for (const value of values) {
-    if (!exactKeys2(value, ["family", "state", "evidenceRefs", "reasonCode"]) || !FAMILIES.includes(value.family) || !FALSIFICATION_STATES.has(value.state) || !safeCode(value.reasonCode) || byFamily.has(value.family)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!exactKeys2(value, ["family", "state", "evidenceRefs", "reasonCode"]) || !FAMILIES.includes(value.family) || !FALSIFICATION_STATES.has(value.state) || !safeCode(value.reasonCode) || byFamily.has(value.family)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
     const evidenceRefs = strings(value.evidenceRefs, EVIDENCE);
-    if (["RULED_OUT", "SUPPORTED"].includes(value.state) && evidenceRefs.length === 0 || value.state === "NOT_APPLICABLE" && value.reasonCode === "CAPABILITY_INCOMPLETE") throw codedError5("MECHANISM_INPUT_INVALID");
+    if (["RULED_OUT", "SUPPORTED"].includes(value.state) && evidenceRefs.length === 0 || value.state === "NOT_APPLICABLE" && value.reasonCode === "CAPABILITY_INCOMPLETE") throw codedError6("MECHANISM_INPUT_INVALID");
     byFamily.set(value.family, { ...value, evidenceRefs });
   }
   return FAMILIES.map((family) => byFamily.get(family) ?? {
@@ -8244,8 +8402,8 @@ function validateScope(scope, coverage) {
     "sealedPath"
   ];
   const optionalKeys2 = ["metricWindow"];
-  if (!exactKeys2(scope, keys, optionalKeys2) || Object.hasOwn(scope, "metricWindow") && !WINDOW_NAMES.includes(scope.metricWindow) || typeof scope.metricId !== "string" || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(scope.metricId) || !OPAQUE.test(scope.journeyId) || !OPAQUE.test(scope.journeyInstanceId) || !safeCode(scope.symptomCode) || !safeCode(scope.predictionCode) || !safeCode(scope.mechanismClass.toUpperCase()) || typeof scope.critical !== "boolean" || scope.critical && !CRITICAL_CLASSES.has(scope.criticalClass) || !scope.critical && scope.criticalClass !== null || !["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"].includes(scope.severityBand) || !plain2(scope.commercialValue) || !exactKeys2(scope.commercialValue, ["kind", "lower", "upper"]) || !["MEASURED", "BOUNDED", "UNKNOWN"].includes(scope.commercialValue.kind) || !Array.isArray(scope.competingExplanations) || !Array.isArray(scope.repeatSegmentIds) || !Array.isArray(scope.supplementalReadAllowlist) || !exactKeys2(scope.sealedPath, ["pathRef", "relativePath"]) || !OPAQUE.test(scope.sealedPath.pathRef) || typeof scope.sealedPath.relativePath !== "string" || scope.sealedPath.relativePath.startsWith("/") || scope.sealedPath.relativePath.includes("..")) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
-  if (scope.commercialValue.kind === "UNKNOWN" ? scope.commercialValue.lower !== null || scope.commercialValue.upper !== null : !Number.isFinite(scope.commercialValue.lower) || !Number.isFinite(scope.commercialValue.upper) || scope.commercialValue.lower < 0 || scope.commercialValue.upper < scope.commercialValue.lower) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  if (!exactKeys2(scope, keys, optionalKeys2) || Object.hasOwn(scope, "metricWindow") && !WINDOW_NAMES.includes(scope.metricWindow) || typeof scope.metricId !== "string" || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(scope.metricId) || !OPAQUE.test(scope.journeyId) || !OPAQUE.test(scope.journeyInstanceId) || !safeCode(scope.symptomCode) || !safeCode(scope.predictionCode) || !safeCode(scope.mechanismClass.toUpperCase()) || typeof scope.critical !== "boolean" || scope.critical && !CRITICAL_CLASSES.has(scope.criticalClass) || !scope.critical && scope.criticalClass !== null || !["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"].includes(scope.severityBand) || !plain2(scope.commercialValue) || !exactKeys2(scope.commercialValue, ["kind", "lower", "upper"]) || !["MEASURED", "BOUNDED", "UNKNOWN"].includes(scope.commercialValue.kind) || !Array.isArray(scope.competingExplanations) || !Array.isArray(scope.repeatSegmentIds) || !Array.isArray(scope.supplementalReadAllowlist) || !exactKeys2(scope.sealedPath, ["pathRef", "relativePath"]) || !OPAQUE.test(scope.sealedPath.pathRef) || typeof scope.sealedPath.relativePath !== "string" || scope.sealedPath.relativePath.startsWith("/") || scope.sealedPath.relativePath.includes("..")) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
+  if (scope.commercialValue.kind === "UNKNOWN" ? scope.commercialValue.lower !== null || scope.commercialValue.upper !== null : !Number.isFinite(scope.commercialValue.lower) || !Number.isFinite(scope.commercialValue.upper) || scope.commercialValue.lower < 0 || scope.commercialValue.upper < scope.commercialValue.lower) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   const bandKeys = [
     "recoverabilityBand",
     "recurrenceBand",
@@ -8256,21 +8414,21 @@ function validateScope(scope, coverage) {
     "operationalRiskBand"
   ];
   if (!bandKeys.every((key) => safeCode(scope[key]))) {
-    throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   }
   for (const explanation of scope.competingExplanations) {
-    if (!exactKeys2(explanation, ["code", "material", "addressed"]) || !safeCode(explanation.code) || typeof explanation.material !== "boolean" || typeof explanation.addressed !== "boolean") throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!exactKeys2(explanation, ["code", "material", "addressed"]) || !safeCode(explanation.code) || typeof explanation.material !== "boolean" || typeof explanation.addressed !== "boolean") throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   }
   for (const descriptor of scope.supplementalReadAllowlist) {
-    if (!exactKeys2(descriptor, ["descriptorId", "capabilityId", "objectRef"]) || !OPAQUE.test(descriptor.descriptorId) || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(descriptor.capabilityId) || !OPAQUE.test(descriptor.objectRef)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!exactKeys2(descriptor, ["descriptorId", "capabilityId", "objectRef"]) || !OPAQUE.test(descriptor.descriptorId) || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(descriptor.capabilityId) || !OPAQUE.test(descriptor.objectRef)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   }
-  if (new Set(scope.supplementalReadAllowlist.map(({ descriptorId }) => descriptorId)).size !== scope.supplementalReadAllowlist.length || new Set(scope.competingExplanations.map(({ code }) => code)).size !== scope.competingExplanations.length || new Set(scope.repeatSegmentIds).size !== scope.repeatSegmentIds.length || !scope.repeatSegmentIds.every((id) => OPAQUE.test(id))) throw codedError5("MECHANISM_INPUT_INVALID");
+  if (new Set(scope.supplementalReadAllowlist.map(({ descriptorId }) => descriptorId)).size !== scope.supplementalReadAllowlist.length || new Set(scope.competingExplanations.map(({ code }) => code)).size !== scope.competingExplanations.length || new Set(scope.repeatSegmentIds).size !== scope.repeatSegmentIds.length || !scope.repeatSegmentIds.every((id) => OPAQUE.test(id))) throw codedError6("MECHANISM_INPUT_INVALID");
   if (!exactKeys2(scope.discriminatingTest, [
     "testId",
     "strongestAlternativeCode",
     "expectedObservationCodes",
     "decisionRuleCodes"
-  ]) || !OPAQUE.test(scope.discriminatingTest.testId) || !safeCode(scope.discriminatingTest.strongestAlternativeCode) || !Array.isArray(scope.discriminatingTest.expectedObservationCodes) || !Array.isArray(scope.discriminatingTest.decisionRuleCodes)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  ]) || !OPAQUE.test(scope.discriminatingTest.testId) || !safeCode(scope.discriminatingTest.strongestAlternativeCode) || !Array.isArray(scope.discriminatingTest.expectedObservationCodes) || !Array.isArray(scope.discriminatingTest.decisionRuleCodes)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   canonicalFalsification(scope.falsificationResults, coverage.state);
 }
 function exactOperationalEdge(edge) {
@@ -8534,7 +8692,7 @@ function nominateMechanisms({
   coverage,
   maxCandidates = 5
 }) {
-  if (!plain2(graph) || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges) || !Array.isArray(graph.conflicts) || !Array.isArray(graph.unresolvedJoins) || !plain2(metrics) || !plain2(metrics.metrics) || !plain2(metrics.metrics.currentClosedWeek) || !Number.isInteger(maxCandidates) || maxCandidates < 0 || maxCandidates > 5) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  if (!plain2(graph) || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges) || !Array.isArray(graph.conflicts) || !Array.isArray(graph.unresolvedJoins) || !plain2(metrics) || !plain2(metrics.metrics) || !plain2(metrics.metrics.currentClosedWeek) || !Number.isInteger(maxCandidates) || maxCandidates < 0 || maxCandidates > 5) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   assertDeepFrozen(graph);
   assertDeepFrozen(metrics);
   assertDeepFrozen(coverage);
@@ -8543,13 +8701,13 @@ function nominateMechanisms({
   const seenMetricIds = /* @__PURE__ */ new Set();
   for (const scope of [...coverage.edgeScopes].sort((left, right) => left.metricId.localeCompare(right.metricId) || left.journeyInstanceId.localeCompare(right.journeyInstanceId))) {
     validateScope(scope, coverage);
-    if (seenMetricIds.has(scope.metricId)) throw codedError5("MECHANISM_INPUT_INVALID");
+    if (seenMetricIds.has(scope.metricId)) throw codedError6("MECHANISM_INPUT_INVALID");
     seenMetricIds.add(scope.metricId);
     const scopeWindow = scope.metricWindow ?? DEFAULT_SCOPE_WINDOW;
     const windowMetrics = metrics.metrics[scopeWindow];
-    if (!plain2(windowMetrics)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!plain2(windowMetrics)) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
     const metric = windowMetrics[scope.metricId];
-    if (!plain2(metric) || !["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"].includes(metric.state) || typeof metric.rankEligible !== "boolean") throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    if (!plain2(metric) || !["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"].includes(metric.state) || typeof metric.rankEligible !== "boolean") throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
     const eligibleEvidenceRefs = eligibleEvidence(graph);
     let rejectedEvidence = false;
     const falsificationResults = canonicalFalsification(
@@ -8707,7 +8865,7 @@ function packetBody(candidate) {
     "sealedPath"
   ];
   if (!exactKeys2(candidate, keys) || !CONFIDENCE.has(candidate.mechanismConfidence)) {
-    throw codedError5("MECHANISM_PACKET_INVALID", TypeError);
+    throw codedError6("MECHANISM_PACKET_INVALID", TypeError);
   }
   const basisKeys = [
     "version",
@@ -8732,7 +8890,7 @@ function packetBody(candidate) {
     "rankEligible",
     "threshold",
     "eligibleAffectedVolume"
-  ]) || typeof candidate.eligibility.rankEligible !== "boolean" || candidate.eligibility.threshold !== null && (!Number.isInteger(candidate.eligibility.threshold) || candidate.eligibility.threshold < 0) || candidate.eligibility.eligibleAffectedVolume !== null && (!Number.isFinite(candidate.eligibility.eligibleAffectedVolume) || candidate.eligibility.eligibleAffectedVolume < 0) || !exactKeys2(candidate.coverage, ["state", "scope", "subsetId"]) || !["complete_full", "complete_partial"].includes(candidate.coverage.state) || !["account_wide", "comparable_subset", "unranked_partial"].includes(candidate.coverage.scope) || typeof candidate.reviewEligible !== "boolean" || typeof candidate.promotionEligible !== "boolean") throw codedError5("MECHANISM_PACKET_INVALID", TypeError);
+  ]) || typeof candidate.eligibility.rankEligible !== "boolean" || candidate.eligibility.threshold !== null && (!Number.isInteger(candidate.eligibility.threshold) || candidate.eligibility.threshold < 0) || candidate.eligibility.eligibleAffectedVolume !== null && (!Number.isFinite(candidate.eligibility.eligibleAffectedVolume) || candidate.eligibility.eligibleAffectedVolume < 0) || !exactKeys2(candidate.coverage, ["state", "scope", "subsetId"]) || !["complete_full", "complete_partial"].includes(candidate.coverage.state) || !["account_wide", "comparable_subset", "unranked_partial"].includes(candidate.coverage.scope) || typeof candidate.reviewEligible !== "boolean" || typeof candidate.promotionEligible !== "boolean") throw codedError6("MECHANISM_PACKET_INVALID", TypeError);
   for (const key of [
     "directChainEdgeIds",
     "repeatedSegmentIds",
@@ -8744,7 +8902,7 @@ function packetBody(candidate) {
       key === "proofEvidenceRefs" ? EVIDENCE : OPAQUE
     );
     if (canonicalJson(canonical2) !== canonicalJson(candidate.confidenceBasis[key])) {
-      throw codedError5("MECHANISM_PACKET_INVALID");
+      throw codedError6("MECHANISM_PACKET_INVALID");
     }
   }
   if (!exactKeys2(candidate.denominator, [
@@ -8756,7 +8914,7 @@ function packetBody(candidate) {
     "metricId"
   ]) || typeof candidate.denominator.kind !== "string" || typeof candidate.denominator.metricId !== "string" || candidate.symptom?.metricId !== candidate.denominator.metricId || candidate.symptom?.state !== candidate.denominator.metricState || !["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"].includes(
     candidate.denominator.metricState
-  ) || candidate.denominator.metricState === "OBSERVED" && (!Number.isInteger(candidate.denominator.value) || candidate.denominator.value < 0 || !Number.isInteger(candidate.denominator.numerator) || candidate.denominator.numerator < 0 || candidate.denominator.numerator > candidate.denominator.value || candidate.denominator.rate !== (candidate.denominator.value === 0 ? null : candidate.denominator.numerator / candidate.denominator.value)) || candidate.denominator.metricState !== "OBSERVED" && (candidate.denominator.value !== null || candidate.denominator.numerator !== null || candidate.denominator.rate !== null)) throw codedError5("MECHANISM_PACKET_INVALID", TypeError);
+  ) || candidate.denominator.metricState === "OBSERVED" && (!Number.isInteger(candidate.denominator.value) || candidate.denominator.value < 0 || !Number.isInteger(candidate.denominator.numerator) || candidate.denominator.numerator < 0 || candidate.denominator.numerator > candidate.denominator.value || candidate.denominator.rate !== (candidate.denominator.value === 0 ? null : candidate.denominator.numerator / candidate.denominator.value)) || candidate.denominator.metricState !== "OBSERVED" && (candidate.denominator.value !== null || candidate.denominator.numerator !== null || candidate.denominator.rate !== null)) throw codedError6("MECHANISM_PACKET_INVALID", TypeError);
   const expectedConfidence = confidenceFromFacts({
     basis: candidate.confidenceBasis,
     falsificationResults: candidate.falsificationResults,
@@ -8764,10 +8922,10 @@ function packetBody(candidate) {
   });
   const expectedReviewEligible = expectedConfidence !== "C0" && candidate.coverage.scope !== "unranked_partial";
   const expectedPromotionEligible = !candidate.critical && expectedReviewEligible && candidate.eligibility.rankEligible && ["C2", "C3"].includes(expectedConfidence) && !candidate.falsificationResults.some(({ state }) => state === "INCONCLUSIVE") && !candidate.competingExplanations.some(({ material, addressed }) => material && !addressed);
-  if (candidate.mechanismConfidence !== expectedConfidence || candidate.reviewEligible !== expectedReviewEligible || candidate.promotionEligible !== expectedPromotionEligible || candidate.priorityInputs.mechanismConfidence !== expectedConfidence || candidate.priorityInputs.promotionEligibility !== (expectedPromotionEligible ? "ELIGIBLE" : "INELIGIBLE") || candidate.priorityInputs.candidateId !== candidate.candidateId || candidate.priorityInputs.rootMechanismFingerprint !== candidate.candidateMechanism.rootMechanismFingerprint || candidate.priorityInputs.coverageScope !== candidate.coverage.scope || candidate.priorityInputs.eligibleAffectedVolume !== candidate.eligibility.eligibleAffectedVolume || candidate.eligibility.eligibleAffectedVolume !== (candidate.denominator.metricState === "OBSERVED" ? candidate.denominator.value : null) || candidate.priorityInputs.excessObservedLoss !== (candidate.denominator.metricState === "OBSERVED" ? Math.max(0, candidate.denominator.value - candidate.denominator.numerator) : null) || candidate.confidenceBasis.associationObserved !== (candidate.denominator.metricState === "OBSERVED" && Number.isFinite(candidate.denominator.value) && candidate.denominator.value > 0 && candidate.supportingEvidenceRefs.length > 0) || candidate.confidenceBasis.predictedFailureObserved && !(candidate.confidenceBasis.failureOutcomeNodeIds.length > 0 && candidate.confidenceBasis.failurePatternCode !== null) || !candidate.confidenceBasis.predictedFailureObserved && (candidate.confidenceBasis.failureOutcomeNodeIds.length > 0 || candidate.confidenceBasis.failurePatternCode !== null) || candidate.confidenceBasis.supportingEvidenceBound !== (candidate.confidenceBasis.directChainEdgeIds.length === 3 || candidate.confidenceBasis.repeatedSegmentIds.length >= 2) || candidate.confidenceBasis.proofEvidenceRefs.some((ref) => !candidate.supportingEvidenceRefs.includes(ref)) || candidate.coverage.scope === "account_wide" && (!candidate.confidenceBasis.coverageConsistent || candidate.coverage.state !== "complete_full") || candidate.coverage.scope !== "account_wide" && candidate.priorityInputs.commercialValue.kind !== "UNKNOWN") throw codedError5("MECHANISM_PACKET_INVALID");
+  if (candidate.mechanismConfidence !== expectedConfidence || candidate.reviewEligible !== expectedReviewEligible || candidate.promotionEligible !== expectedPromotionEligible || candidate.priorityInputs.mechanismConfidence !== expectedConfidence || candidate.priorityInputs.promotionEligibility !== (expectedPromotionEligible ? "ELIGIBLE" : "INELIGIBLE") || candidate.priorityInputs.candidateId !== candidate.candidateId || candidate.priorityInputs.rootMechanismFingerprint !== candidate.candidateMechanism.rootMechanismFingerprint || candidate.priorityInputs.coverageScope !== candidate.coverage.scope || candidate.priorityInputs.eligibleAffectedVolume !== candidate.eligibility.eligibleAffectedVolume || candidate.eligibility.eligibleAffectedVolume !== (candidate.denominator.metricState === "OBSERVED" ? candidate.denominator.value : null) || candidate.priorityInputs.excessObservedLoss !== (candidate.denominator.metricState === "OBSERVED" ? Math.max(0, candidate.denominator.value - candidate.denominator.numerator) : null) || candidate.confidenceBasis.associationObserved !== (candidate.denominator.metricState === "OBSERVED" && Number.isFinite(candidate.denominator.value) && candidate.denominator.value > 0 && candidate.supportingEvidenceRefs.length > 0) || candidate.confidenceBasis.predictedFailureObserved && !(candidate.confidenceBasis.failureOutcomeNodeIds.length > 0 && candidate.confidenceBasis.failurePatternCode !== null) || !candidate.confidenceBasis.predictedFailureObserved && (candidate.confidenceBasis.failureOutcomeNodeIds.length > 0 || candidate.confidenceBasis.failurePatternCode !== null) || candidate.confidenceBasis.supportingEvidenceBound !== (candidate.confidenceBasis.directChainEdgeIds.length === 3 || candidate.confidenceBasis.repeatedSegmentIds.length >= 2) || candidate.confidenceBasis.proofEvidenceRefs.some((ref) => !candidate.supportingEvidenceRefs.includes(ref)) || candidate.coverage.scope === "account_wide" && (!candidate.confidenceBasis.coverageConsistent || candidate.coverage.state !== "complete_full") || candidate.coverage.scope !== "account_wide" && candidate.priorityInputs.commercialValue.kind !== "UNKNOWN") throw codedError6("MECHANISM_PACKET_INVALID");
   const discriminatingText = canonicalJson(candidate.discriminatingTest);
   if (!safeDescriptorText(discriminatingText)) {
-    throw codedError5("MECHANISM_PACKET_INVALID");
+    throw codedError6("MECHANISM_PACKET_INVALID");
   }
   const canonical = {
     candidateId: candidate.candidateId,
@@ -8820,7 +8978,7 @@ function buildMechanismPacket(candidate) {
     return deepFreeze3({ ...body, packetHash: sha256(body) });
   } catch (error51) {
     if (error51?.code === "MECHANISM_PACKET_INVALID") throw error51;
-    throw codedError5("MECHANISM_PACKET_INVALID", TypeError);
+    throw codedError6("MECHANISM_PACKET_INVALID", TypeError);
   }
 }
 function validatePacket(packet) {
@@ -8856,10 +9014,10 @@ function validatePacket(packet) {
     "packetHash"
   ];
   if (!exactKeys2(packet, packetKeys) || !HASH2.test(packet.packetHash ?? "") || packet.rootMechanismFingerprint !== packet.candidateMechanism?.rootMechanismFingerprint) {
-    throw codedError5("MECHANISM_PACKET_INVALID", TypeError);
+    throw codedError6("MECHANISM_PACKET_INVALID", TypeError);
   }
   const { packetHash, ...body } = packet;
-  if (sha256(body) !== packetHash) throw codedError5("MECHANISM_PACKET_INVALID");
+  if (sha256(body) !== packetHash) throw codedError6("MECHANISM_PACKET_INVALID");
   const candidate = deepFreeze3({
     candidateId: packet.candidateId,
     symptom: structuredClone(packet.symptom),
@@ -8891,21 +9049,21 @@ function validatePacket(packet) {
   try {
     rebuilt = packetBody(candidate);
   } catch {
-    throw codedError5("MECHANISM_PACKET_INVALID");
+    throw codedError6("MECHANISM_PACKET_INVALID");
   }
   if (canonicalJson(rebuilt) !== canonicalJson(body)) {
-    throw codedError5("MECHANISM_PACKET_INVALID");
+    throw codedError6("MECHANISM_PACKET_INVALID");
   }
   return packet;
 }
 function sealedInput(value, idKeys, contentKey, pathRequired = false) {
   if (!plain2(value) || !idKeys.every((key) => typeof value[key] === "string")) {
-    throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
+    throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
   }
   if (typeof value[contentKey] !== "string") {
-    throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
+    throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
   }
-  if (pathRequired && (!exactKeys2(value.sealedPath, ["pathRef", "relativePath"]) || !OPAQUE.test(value.sealedPath.pathRef) || value.sealedPath.relativePath.startsWith("/") || value.sealedPath.relativePath.includes(".."))) throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
+  if (pathRequired && (!exactKeys2(value.sealedPath, ["pathRef", "relativePath"]) || !OPAQUE.test(value.sealedPath.pathRef) || value.sealedPath.relativePath.startsWith("/") || value.sealedPath.relativePath.includes(".."))) throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
   return sha256(value);
 }
 function validateModelPolicy(policy) {
@@ -8915,12 +9073,12 @@ function validateModelPolicy(policy) {
     "model",
     "maxOutputTokens",
     "allowedTools"
-  ]) || typeof policy.policyId !== "string" || typeof policy.provider !== "string" || typeof policy.model !== "string" || !Number.isInteger(policy.maxOutputTokens) || policy.maxOutputTokens < 1 || !Array.isArray(policy.allowedTools) || policy.allowedTools.length !== 0) throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
+  ]) || typeof policy.policyId !== "string" || typeof policy.provider !== "string" || typeof policy.model !== "string" || !Number.isInteger(policy.maxOutputTokens) || policy.maxOutputTokens < 1 || !Array.isArray(policy.allowedTools) || policy.allowedTools.length !== 0) throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
 }
 function validateSerializedRequest2(request) {
-  if (!exactKeys2(request, REQUEST_KEYS2) || request.schemaVersion !== "1.0.0" || !OPAQUE.test(request.requestId) || !OPAQUE.test(request.nonceRef) || !HASH2.test(request.requestHash) || !HASH2.test(request.codeHash) || !HASH2.test(request.packetSetHash) || !HASH2.test(request.evidenceSetHash) || !HASH2.test(request.promptHash) || !HASH2.test(request.modelPolicyHash) || !iso3(request.cutoff) || !iso3(request.reviewDeadline) || !Array.isArray(request.packets) || request.packets.length > 3) throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
+  if (!exactKeys2(request, REQUEST_KEYS2) || request.schemaVersion !== "1.0.0" || !OPAQUE.test(request.requestId) || !OPAQUE.test(request.nonceRef) || !HASH2.test(request.requestHash) || !HASH2.test(request.codeHash) || !HASH2.test(request.packetSetHash) || !HASH2.test(request.evidenceSetHash) || !HASH2.test(request.promptHash) || !HASH2.test(request.modelPolicyHash) || !iso3(request.cutoff) || !iso3(request.reviewDeadline) || !Array.isArray(request.packets) || request.packets.length > 3) throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
   const { requestHash, ...body } = request;
-  if (sha256(body) !== requestHash) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+  if (sha256(body) !== requestHash) throw codedError6("MECHANISM_REVIEW_MISMATCH");
 }
 function buildMechanismReviewRequest({
   run,
@@ -8929,13 +9087,13 @@ function buildMechanismReviewRequest({
   prompt,
   modelPolicy
 }) {
-  if (!exactKeys2(run, ["runId", "cutoff", "reviewDeadline", "codeHash", "nonceRef"]) || typeof run.runId !== "string" || !iso3(run.cutoff) || !iso3(run.reviewDeadline) || Date.parse(run.reviewDeadline) <= Date.parse(run.cutoff) || !HASH2.test(run.codeHash) || !OPAQUE.test(run.nonceRef) || !Array.isArray(packets) || packets.length < 1 || packets.length > 3) throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
+  if (!exactKeys2(run, ["runId", "cutoff", "reviewDeadline", "codeHash", "nonceRef"]) || typeof run.runId !== "string" || !iso3(run.cutoff) || !iso3(run.reviewDeadline) || Date.parse(run.reviewDeadline) <= Date.parse(run.cutoff) || !HASH2.test(run.codeHash) || !OPAQUE.test(run.nonceRef) || !Array.isArray(packets) || packets.length < 1 || packets.length > 3) throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID", TypeError);
   validateModelPolicy(modelPolicy);
   const packetIds = /* @__PURE__ */ new Set();
   const sealedPackets = packets.map((packet) => {
     validatePacket(packet);
     if (!packet.reviewEligible || packetIds.has(packet.packetId)) {
-      throw codedError5("MECHANISM_REVIEW_REQUEST_INVALID");
+      throw codedError6("MECHANISM_REVIEW_REQUEST_INVALID");
     }
     packetIds.add(packet.packetId);
     return {
@@ -9014,7 +9172,7 @@ function buildMechanismReviewRequest({
 function createMechanismReviewRequest(inputs) {
   const { request, state } = buildMechanismReviewRequest(inputs);
   if (NONCE_STATES.has(request.nonceRef) || REQUEST_STATES.has(request.requestId)) {
-    throw codedError5("MECHANISM_REVIEW_REPLAYED");
+    throw codedError6("MECHANISM_REVIEW_REPLAYED");
   }
   REQUEST_STATES.set(request.requestId, state);
   NONCE_STATES.set(request.nonceRef, request.requestId);
@@ -9023,7 +9181,7 @@ function createMechanismReviewRequest(inputs) {
 function requestState2(request) {
   validateSerializedRequest2(request);
   const state = REQUEST_STATES.get(request.requestId);
-  if (!state || state.requestHash !== request.requestHash || state.nonceRef !== request.nonceRef) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+  if (!state || state.requestHash !== request.requestHash || state.nonceRef !== request.nonceRef) throw codedError6("MECHANISM_REVIEW_MISMATCH");
   return state;
 }
 function serializeMechanismState(request, state) {
@@ -9039,26 +9197,26 @@ function serializeMechanismState(request, state) {
 }
 function mechanismStateFromSnapshot(request, snapshot) {
   validateSerializedRequest2(request);
-  if (!exactKeys2(snapshot, VALIDATOR_STATE_KEYS2) || snapshot.schemaVersion !== "1.0.0" || snapshot.requestHash !== request.requestHash || snapshot.nonceRef !== request.nonceRef || snapshot.consumed !== false || !plain2(snapshot.modelPolicy) || !Array.isArray(snapshot.packetEvidence) || !Array.isArray(snapshot.supplemental)) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+  if (!exactKeys2(snapshot, VALIDATOR_STATE_KEYS2) || snapshot.schemaVersion !== "1.0.0" || snapshot.requestHash !== request.requestHash || snapshot.nonceRef !== request.nonceRef || snapshot.consumed !== false || !plain2(snapshot.modelPolicy) || !Array.isArray(snapshot.packetEvidence) || !Array.isArray(snapshot.supplemental)) throw codedError6("MECHANISM_REVIEW_MISMATCH");
   const packetEvidence = /* @__PURE__ */ new Map();
   for (const binding of snapshot.packetEvidence) {
-    if (!exactKeys2(binding, ["packetId", "evidenceRefs"]) || packetEvidence.has(binding.packetId) || !request.packets.some(({ packetId }) => packetId === binding.packetId) || !Array.isArray(binding.evidenceRefs) || binding.evidenceRefs.some((ref) => !EVIDENCE.test(ref)) || new Set(binding.evidenceRefs).size !== binding.evidenceRefs.length) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+    if (!exactKeys2(binding, ["packetId", "evidenceRefs"]) || packetEvidence.has(binding.packetId) || !request.packets.some(({ packetId }) => packetId === binding.packetId) || !Array.isArray(binding.evidenceRefs) || binding.evidenceRefs.some((ref) => !EVIDENCE.test(ref)) || new Set(binding.evidenceRefs).size !== binding.evidenceRefs.length) throw codedError6("MECHANISM_REVIEW_MISMATCH");
     const expected = request.packets.find(({ packetId }) => packetId === binding.packetId).eligibleEvidenceRefs;
     if (canonicalJson([...binding.evidenceRefs].sort()) !== canonicalJson(expected)) {
-      throw codedError5("MECHANISM_REVIEW_MISMATCH");
+      throw codedError6("MECHANISM_REVIEW_MISMATCH");
     }
     packetEvidence.set(binding.packetId, new Set(binding.evidenceRefs));
   }
   const supplemental = /* @__PURE__ */ new Map();
   for (const binding of snapshot.supplemental) {
-    if (!exactKeys2(binding, ["packetId", "descriptorIds"]) || supplemental.has(binding.packetId) || !request.packets.some(({ packetId }) => packetId === binding.packetId) || !Array.isArray(binding.descriptorIds) || new Set(binding.descriptorIds).size !== binding.descriptorIds.length) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+    if (!exactKeys2(binding, ["packetId", "descriptorIds"]) || supplemental.has(binding.packetId) || !request.packets.some(({ packetId }) => packetId === binding.packetId) || !Array.isArray(binding.descriptorIds) || new Set(binding.descriptorIds).size !== binding.descriptorIds.length) throw codedError6("MECHANISM_REVIEW_MISMATCH");
     const expected = request.packets.find(({ packetId }) => packetId === binding.packetId).supplementalReadDescriptorIds;
     if (canonicalJson([...binding.descriptorIds].sort()) !== canonicalJson(expected)) {
-      throw codedError5("MECHANISM_REVIEW_MISMATCH");
+      throw codedError6("MECHANISM_REVIEW_MISMATCH");
     }
     supplemental.set(binding.packetId, new Set(binding.descriptorIds));
   }
-  if (packetEvidence.size !== request.packets.length || supplemental.size !== request.packets.length) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+  if (packetEvidence.size !== request.packets.length || supplemental.size !== request.packets.length) throw codedError6("MECHANISM_REVIEW_MISMATCH");
   return {
     requestHash: request.requestHash,
     nonceRef: request.nonceRef,
@@ -9076,9 +9234,9 @@ function restoreMechanismReviewValidationState({ request, validatorState }) {
   const existing = REQUEST_STATES.get(request.requestId);
   const nonceOwner = NONCE_STATES.get(request.nonceRef);
   if (existing?.consumed || nonceOwner && nonceOwner !== request.requestId) {
-    throw codedError5("MECHANISM_REVIEW_REPLAYED");
+    throw codedError6("MECHANISM_REVIEW_REPLAYED");
   }
-  if (existing && (existing.requestHash !== state.requestHash || existing.nonceRef !== state.nonceRef)) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+  if (existing && (existing.requestHash !== state.requestHash || existing.nonceRef !== state.nonceRef)) throw codedError6("MECHANISM_REVIEW_MISMATCH");
   REQUEST_STATES.set(request.requestId, state);
   NONCE_STATES.set(request.nonceRef, request.requestId);
   return serializeMechanismState(request, state);
@@ -9101,22 +9259,22 @@ function mismatch(response, request) {
 }
 function validateReview(review, request, state) {
   if (!exactKeys2(review, REVIEW_KEYS)) {
-    throw codedError5("MECHANISM_REVIEW_UNSAFE_OUTPUT");
+    throw codedError6("MECHANISM_REVIEW_UNSAFE_OUTPUT");
   }
   const packet = request.packets.find(({ packetId }) => packetId === review.packetId);
-  if (!packet) throw codedError5("MECHANISM_REVIEW_MISMATCH");
-  if (!VERDICTS.has(review.verdict) || !Array.isArray(review.reasoningCodes) || !review.reasoningCodes.every(safeCode) || !Array.isArray(review.competingExplanationCodes) || !review.competingExplanationCodes.every(safeCode) || !UNCERTAINTY.has(review.uncertainty) || !Array.isArray(review.safetyFlags) || !review.safetyFlags.every((flag) => SAFETY_FLAGS.has(flag))) throw codedError5("MECHANISM_REVIEW_UNSAFE_OUTPUT");
+  if (!packet) throw codedError6("MECHANISM_REVIEW_MISMATCH");
+  if (!VERDICTS.has(review.verdict) || !Array.isArray(review.reasoningCodes) || !review.reasoningCodes.every(safeCode) || !Array.isArray(review.competingExplanationCodes) || !review.competingExplanationCodes.every(safeCode) || !UNCERTAINTY.has(review.uncertainty) || !Array.isArray(review.safetyFlags) || !review.safetyFlags.every((flag) => SAFETY_FLAGS.has(flag))) throw codedError6("MECHANISM_REVIEW_UNSAFE_OUTPUT");
   const evidence = state.packetEvidence.get(review.packetId);
   for (const refs of [review.supportingEvidenceRefs, review.counterEvidenceRefs]) {
     if (!Array.isArray(refs) || refs.some((ref) => !evidence.has(ref))) {
-      throw codedError5("MECHANISM_REVIEW_EVIDENCE_INELIGIBLE");
+      throw codedError6("MECHANISM_REVIEW_EVIDENCE_INELIGIBLE");
     }
   }
-  if (!Array.isArray(review.supplementalReadDescriptorIds) || review.supplementalReadDescriptorIds.length > 10) throw codedError5("MECHANISM_REVIEW_OVER_BUDGET");
-  if (new Set(review.supplementalReadDescriptorIds).size !== review.supplementalReadDescriptorIds.length || new Set(review.supportingEvidenceRefs).size !== review.supportingEvidenceRefs.length || new Set(review.counterEvidenceRefs).size !== review.counterEvidenceRefs.length) throw codedError5("MECHANISM_REVIEW_UNSAFE_OUTPUT");
+  if (!Array.isArray(review.supplementalReadDescriptorIds) || review.supplementalReadDescriptorIds.length > 10) throw codedError6("MECHANISM_REVIEW_OVER_BUDGET");
+  if (new Set(review.supplementalReadDescriptorIds).size !== review.supplementalReadDescriptorIds.length || new Set(review.supportingEvidenceRefs).size !== review.supportingEvidenceRefs.length || new Set(review.counterEvidenceRefs).size !== review.counterEvidenceRefs.length) throw codedError6("MECHANISM_REVIEW_UNSAFE_OUTPUT");
   const supplemental = state.supplemental.get(review.packetId);
   if (review.supplementalReadDescriptorIds.some((id) => !supplemental.has(id))) {
-    throw codedError5("MECHANISM_REVIEW_SUPPLEMENTAL_INELIGIBLE");
+    throw codedError6("MECHANISM_REVIEW_SUPPLEMENTAL_INELIGIBLE");
   }
 }
 function validateMechanismReviewResponse({
@@ -9125,19 +9283,19 @@ function validateMechanismReviewResponse({
   state,
   registerValidated = true
 }) {
-  if (state.consumed) throw codedError5("MECHANISM_REVIEW_REPLAYED");
+  if (state.consumed) throw codedError6("MECHANISM_REVIEW_REPLAYED");
   if (!exactKeys2(response, RESPONSE_KEYS2)) {
-    throw codedError5("MECHANISM_REVIEW_UNSAFE_OUTPUT");
+    throw codedError6("MECHANISM_REVIEW_UNSAFE_OUTPUT");
   }
   if (response.schemaVersion !== "1.0.0" || mismatch(response, request) || !exactKeys2(response.reviewer, [
     "kind",
     "provider",
     "model",
     "reviewerRef"
-  ]) || response.reviewer.kind !== "model" || response.reviewer.provider !== state.modelPolicy.provider || response.reviewer.model !== state.modelPolicy.model || !OPAQUE.test(response.reviewer.reviewerRef)) throw codedError5("MECHANISM_REVIEW_MISMATCH");
-  if (!iso3(response.reviewedAt) || Date.parse(response.reviewedAt) < Date.parse(request.cutoff) || Date.parse(response.reviewedAt) > Date.parse(request.reviewDeadline)) throw codedError5("MECHANISM_REVIEW_STALE");
-  if (!exactKeys2(response.usage, ["outputTokens"]) || !Number.isInteger(response.usage.outputTokens) || response.usage.outputTokens < 0 || response.usage.outputTokens > state.modelPolicy.maxOutputTokens) throw codedError5("MECHANISM_REVIEW_OVER_BUDGET");
-  if (!Array.isArray(response.reviews) || response.reviews.length !== request.packets.length || new Set(response.reviews.map(({ packetId }) => packetId)).size !== response.reviews.length) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+  ]) || response.reviewer.kind !== "model" || response.reviewer.provider !== state.modelPolicy.provider || response.reviewer.model !== state.modelPolicy.model || !OPAQUE.test(response.reviewer.reviewerRef)) throw codedError6("MECHANISM_REVIEW_MISMATCH");
+  if (!iso3(response.reviewedAt) || Date.parse(response.reviewedAt) < Date.parse(request.cutoff) || Date.parse(response.reviewedAt) > Date.parse(request.reviewDeadline)) throw codedError6("MECHANISM_REVIEW_STALE");
+  if (!exactKeys2(response.usage, ["outputTokens"]) || !Number.isInteger(response.usage.outputTokens) || response.usage.outputTokens < 0 || response.usage.outputTokens > state.modelPolicy.maxOutputTokens) throw codedError6("MECHANISM_REVIEW_OVER_BUDGET");
+  if (!Array.isArray(response.reviews) || response.reviews.length !== request.packets.length || new Set(response.reviews.map(({ packetId }) => packetId)).size !== response.reviews.length) throw codedError6("MECHANISM_REVIEW_MISMATCH");
   for (const review of response.reviews) validateReview(review, request, state);
   const result = deepFreeze3({
     kind: "VALIDATED_MECHANISM_REVIEW",
@@ -9190,23 +9348,23 @@ function replayMechanismReview({ requestInputs, response }) {
     return validateMechanismReviewResponse({ request, response, state });
   } catch (error51) {
     if (typeof error51?.code === "string" && error51.code.startsWith("MECHANISM_")) throw error51;
-    throw codedError5("MECHANISM_REVIEW_MISMATCH");
+    throw codedError6("MECHANISM_REVIEW_MISMATCH");
   }
 }
 function validatedReviewMap(reviews, packets) {
   const packetHashes = new Map(packets.map(({ packetId, packetHash }) => [packetId, packetHash]));
   const result = /* @__PURE__ */ new Map();
   for (const reviewSet of reviews) {
-    if (!plain2(reviewSet) || reviewSet.kind !== "VALIDATED_MECHANISM_REVIEW" || !HASH2.test(reviewSet.validationHash ?? "") || !Array.isArray(reviewSet.packetHashes) || !Array.isArray(reviewSet.reviews)) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+    if (!plain2(reviewSet) || reviewSet.kind !== "VALIDATED_MECHANISM_REVIEW" || !HASH2.test(reviewSet.validationHash ?? "") || !Array.isArray(reviewSet.packetHashes) || !Array.isArray(reviewSet.reviews)) throw codedError6("MECHANISM_REVIEW_MISMATCH");
     const validation = VALIDATED_REVIEWS.get(reviewSet.validationHash);
-    if (!validation || validation.packetHashes !== sha256(reviewSet.packetHashes) || validation.reviews !== sha256(reviewSet.reviews)) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+    if (!validation || validation.packetHashes !== sha256(reviewSet.packetHashes) || validation.reviews !== sha256(reviewSet.reviews)) throw codedError6("MECHANISM_REVIEW_MISMATCH");
     for (const binding of reviewSet.packetHashes) {
       if (packetHashes.get(binding.packetId) !== binding.packetHash) {
-        throw codedError5("MECHANISM_REVIEW_MISMATCH");
+        throw codedError6("MECHANISM_REVIEW_MISMATCH");
       }
     }
     for (const review of reviewSet.reviews) {
-      if (result.has(review.packetId)) throw codedError5("MECHANISM_REVIEW_MISMATCH");
+      if (result.has(review.packetId)) throw codedError6("MECHANISM_REVIEW_MISMATCH");
       result.set(review.packetId, review);
     }
   }
@@ -9217,7 +9375,7 @@ function reconcileExpertReviews({
   reviews,
   maxPromoted = 3
 }) {
-  if (!Array.isArray(packets) || !Array.isArray(reviews) || !Number.isInteger(maxPromoted) || maxPromoted < 0 || maxPromoted > 3) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  if (!Array.isArray(packets) || !Array.isArray(reviews) || !Number.isInteger(maxPromoted) || maxPromoted < 0 || maxPromoted > 3) throw codedError6("MECHANISM_INPUT_INVALID", TypeError);
   for (const packet of packets) validatePacket(packet);
   const ordered = [...packets].sort(compareCandidates);
   const reviewByPacket = validatedReviewMap(reviews, packets);
@@ -9368,155 +9526,6 @@ var init_mechanisms = __esm({
   }
 });
 
-// lib/adapters/collection.mjs
-function codedError6(code, ErrorType = Error) {
-  return Object.assign(new ErrorType(code), { code });
-}
-function cloneJson(value, code = "COLLECTION_VALUE_INVALID") {
-  try {
-    return JSON.parse(canonicalJson(value));
-  } catch {
-    throw codedError6(code, TypeError);
-  }
-}
-function deepFreezeJson(value) {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const nested of Object.values(value)) deepFreezeJson(nested);
-    Object.freeze(value);
-  }
-  return value;
-}
-function isIsoTimestamp(value) {
-  if (typeof value !== "string") return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
-}
-function validateCollectionWindow(value, code = "COLLECTION_WINDOW_INVALID") {
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(",") !== "from,to" || !isIsoTimestamp(value.from) || !isIsoTimestamp(value.to) || Date.parse(value.from) >= Date.parse(value.to)) throw codedError6(code, TypeError);
-  return deepFreezeJson(cloneJson(value, code));
-}
-function assertWindowWithin(applied, requested, code = "WINDOW_SCOPE_MISMATCH") {
-  if (Date.parse(applied.from) < Date.parse(requested.from) || Date.parse(applied.to) > Date.parse(requested.to)) throw codedError6(code);
-  return true;
-}
-function capturedAt(runtime = {}) {
-  const value = typeof runtime.now === "function" ? runtime.now() : Date.now();
-  const date5 = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date5.getTime())) throw codedError6("COLLECTION_CLOCK_INVALID", TypeError);
-  return date5.toISOString();
-}
-function inventorySourceId(source, operationId) {
-  return `${source}.${sha256({ operationId, source }).slice(0, 32)}`;
-}
-function privatePayload(value, root = false) {
-  if (typeof value === "number") return { $number: JSON.stringify(value) };
-  if (Array.isArray(value)) return { $array: value.map((entry) => privatePayload(entry)) };
-  if (value && typeof value === "object") {
-    const encoded = Object.fromEntries(Object.entries(value).map(([key, nested]) => [
-      key,
-      privatePayload(nested)
-    ]));
-    return root ? encoded : { $object: encoded };
-  }
-  return value;
-}
-function assertTerminalCollection(collection) {
-  if (!collection || typeof collection !== "object" || !collection.page || collection.page.complete !== true || collection.page.truncated !== false || collection.page.nextCursor !== null || !Array.isArray(collection.items) || collection.page.collectedCount !== collection.items.length || collection.page.reportedCount !== collection.page.collectedCount || Object.hasOwn(collection, "incompleteReason")) throw codedError6("PRIVATE_SOURCE_INVENTORY_NOT_TERMINAL");
-}
-function buildPrivateSourceEnvelope(collection) {
-  assertTerminalCollection(collection);
-  const source = cloneJson(collection, "PRIVATE_SOURCE_COLLECTION_INVALID");
-  const envelope = {
-    sourceId: inventorySourceId(source.source, source.operationId),
-    kind: "private-content",
-    payload: privatePayload(source, true)
-  };
-  return deepFreezeJson(envelope);
-}
-function authorizeTerminalCollection(collection) {
-  assertTerminalCollection(collection);
-  const source = deepFreezeJson(cloneJson(collection));
-  const privateSourceEnvelope = buildPrivateSourceEnvelope(source);
-  const privateSourceInventory = [{
-    sourceId: privateSourceEnvelope.sourceId,
-    kind: privateSourceEnvelope.kind,
-    sourceHash: sha256({ schemaVersion: "1.0.0", source: privateSourceEnvelope })
-  }].sort((left, right) => left.sourceId.localeCompare(right.sourceId));
-  return deepFreezeJson({
-    ...collection,
-    privateSourceEnvelope,
-    privateSourceInventory
-  });
-}
-function completeCollection({
-  source,
-  operationId,
-  boundLocationId,
-  requestedWindow,
-  appliedWindow,
-  capturedAt: captured,
-  items,
-  cursor = null,
-  reportedCount
-}) {
-  const collection = {
-    source,
-    operationId,
-    boundLocationId,
-    requestedWindow: cloneJson(requestedWindow),
-    appliedWindow: cloneJson(appliedWindow),
-    capturedAt: captured,
-    items: cloneJson(items),
-    page: {
-      cursor,
-      nextCursor: null,
-      reportedCount,
-      collectedCount: items.length,
-      complete: true,
-      truncated: false
-    }
-  };
-  return authorizeTerminalCollection(collection);
-}
-function incompleteCollection({
-  source,
-  operationId,
-  boundLocationId,
-  requestedWindow,
-  appliedWindow,
-  capturedAt: captured,
-  items,
-  cursor = null,
-  nextCursor = null,
-  reportedCount,
-  reason,
-  truncated = false
-}) {
-  return deepFreezeJson({
-    source,
-    operationId,
-    boundLocationId,
-    requestedWindow: cloneJson(requestedWindow),
-    appliedWindow: cloneJson(appliedWindow),
-    capturedAt: captured,
-    items: cloneJson(items),
-    page: {
-      cursor,
-      nextCursor,
-      reportedCount,
-      collectedCount: items.length,
-      complete: false,
-      truncated
-    },
-    incompleteReason: reason
-  });
-}
-var init_collection = __esm({
-  "lib/adapters/collection.mjs"() {
-    init_canonical();
-  }
-});
-
 // lib/adapters/internal-ghl.mjs
 import { createHmac, randomBytes as randomBytes2 } from "node:crypto";
 function isPlainObject3(value) {
@@ -9541,7 +9550,7 @@ function isoOrNull(value) {
 function nowMs(runtime) {
   const value = typeof runtime?.now === "function" ? runtime.now() : Date.now();
   const parsed = value instanceof Date ? value.getTime() : Number(value);
-  if (!Number.isFinite(parsed)) throw codedError6(CODES.REQUEST, TypeError);
+  if (!Number.isFinite(parsed)) throw codedError(CODES.REQUEST, TypeError);
   return parsed;
 }
 function safeClone(value, code = CODES.REQUEST) {
@@ -9597,7 +9606,7 @@ function resolvePseudonymKey(candidate) {
   let key = null;
   if (Buffer.isBuffer(candidate) || candidate instanceof Uint8Array) key = Buffer.from(candidate);
   else if (typeof candidate === "string") key = Buffer.from(candidate, "utf8");
-  if (key === null || key.length < PSEUDONYM_KEY_BYTES) throw codedError6(CODES.REQUEST, TypeError);
+  if (key === null || key.length < PSEUDONYM_KEY_BYTES) throw codedError(CODES.REQUEST, TypeError);
   return { key, source: "injected" };
 }
 function projectRoute(route, manifest) {
@@ -9714,24 +9723,24 @@ function collectLocationIndicators(value, indicators = [], seen = /* @__PURE__ *
 function assertResponseLocation(body, expectedLocationId) {
   const indicators = collectLocationIndicators(body);
   if (indicators.some((locationId) => locationId !== expectedLocationId)) {
-    throw codedError6(CODES.LOCATION);
+    throw codedError(CODES.LOCATION);
   }
 }
 function assertBoundLocation(body, expectedLocationId) {
   if (!isPlainObject3(body) || body.boundLocationId !== expectedLocationId) {
-    throw codedError6(CODES.LOCATION);
+    throw codedError(CODES.LOCATION);
   }
   const binding = body.locationBinding;
-  if (!isPlainObject3(binding)) throw codedError6(CODES.LOCATION);
-  if (binding.quarantined === true) throw codedError6(CODES.QUARANTINED);
-  if (binding.inspectionIncomplete === true) throw codedError6(CODES.QUARANTINED);
+  if (!isPlainObject3(binding)) throw codedError(CODES.LOCATION);
+  if (binding.quarantined === true) throw codedError(CODES.QUARANTINED);
+  if (binding.inspectionIncomplete === true) throw codedError(CODES.QUARANTINED);
   if (Array.isArray(binding.conflicts) && binding.conflicts.length > 0) {
-    throw codedError6(CODES.QUARANTINED);
+    throw codedError(CODES.QUARANTINED);
   }
   assertResponseLocation(body, expectedLocationId);
 }
 function assertContractVersion(body, expectedContractVersion) {
-  if (body.contractVersion !== expectedContractVersion) throw codedError6(CODES.CONTRACT);
+  if (body.contractVersion !== expectedContractVersion) throw codedError(CODES.CONTRACT);
 }
 function scanForbiddenSurface(text) {
   const normalized = normalizeToken(text);
@@ -9739,68 +9748,68 @@ function scanForbiddenSurface(text) {
 }
 function validateToolRegistry(listing) {
   const source = isPlainObject3(listing) && Array.isArray(listing.content) ? parseToolBody(listing).data : listing;
-  if (!isPlainObject3(source) || !Array.isArray(source.tools)) throw codedError6(CODES.HANDSHAKE);
+  if (!isPlainObject3(source) || !Array.isArray(source.tools)) throw codedError(CODES.HANDSHAKE);
   const tools = source.tools;
-  if (tools.length !== AUDIT_TOOL_NAMES.length) throw codedError6(CODES.HANDSHAKE);
+  if (tools.length !== AUDIT_TOOL_NAMES.length) throw codedError(CODES.HANDSHAKE);
   for (const tool of tools) {
-    if (!isPlainObject3(tool) || !isNonEmptyString(tool.name)) throw codedError6(CODES.HANDSHAKE);
-    if (scanForbiddenSurface(tool.name)) throw codedError6(CODES.READ_ONLY);
+    if (!isPlainObject3(tool) || !isNonEmptyString(tool.name)) throw codedError(CODES.HANDSHAKE);
+    if (scanForbiddenSurface(tool.name)) throw codedError(CODES.READ_ONLY);
   }
   const names = tools.map((tool) => tool.name);
   if (canonicalJson(names) !== canonicalJson([...AUDIT_TOOL_NAMES])) {
-    throw codedError6(CODES.HANDSHAKE);
+    throw codedError(CODES.HANDSHAKE);
   }
   for (const tool of tools) {
     const schema = tool.inputSchema;
-    if (!isPlainObject3(schema) || schema.type !== "object") throw codedError6(CODES.HANDSHAKE);
+    if (!isPlainObject3(schema) || schema.type !== "object") throw codedError(CODES.HANDSHAKE);
     const properties = schema.properties;
-    if (!isPlainObject3(properties)) throw codedError6(CODES.HANDSHAKE);
+    if (!isPlainObject3(properties)) throw codedError(CODES.HANDSHAKE);
     const allowed = AUDIT_TOOL_INPUT_KEYS[tool.name];
     for (const key of Object.keys(properties)) {
-      if (scanForbiddenSurface(key)) throw codedError6(CODES.READ_ONLY);
-      if (!allowed.includes(key)) throw codedError6(CODES.HANDSHAKE);
+      if (scanForbiddenSurface(key)) throw codedError(CODES.READ_ONLY);
+      if (!allowed.includes(key)) throw codedError(CODES.HANDSHAKE);
     }
     if (Object.hasOwn(schema, "required")) {
-      if (!Array.isArray(schema.required)) throw codedError6(CODES.HANDSHAKE);
+      if (!Array.isArray(schema.required)) throw codedError(CODES.HANDSHAKE);
       for (const key of schema.required) {
-        if (scanForbiddenSurface(key)) throw codedError6(CODES.READ_ONLY);
-        if (!allowed.includes(key)) throw codedError6(CODES.HANDSHAKE);
+        if (scanForbiddenSurface(key)) throw codedError(CODES.READ_ONLY);
+        if (!allowed.includes(key)) throw codedError(CODES.HANDSHAKE);
       }
     }
   }
   return Object.freeze([...names]);
 }
 function validateManifest(manifest, bundleHash) {
-  if (!isPlainObject3(manifest)) throw codedError6(CODES.MANIFEST);
-  if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION) throw codedError6(CODES.MANIFEST);
-  if (manifest.profile !== MANIFEST_PROFILE) throw codedError6(CODES.MANIFEST);
-  if (manifest.proofModel !== MANIFEST_PROOF_MODEL) throw codedError6(CODES.MANIFEST);
+  if (!isPlainObject3(manifest)) throw codedError(CODES.MANIFEST);
+  if (manifest.schemaVersion !== MANIFEST_SCHEMA_VERSION) throw codedError(CODES.MANIFEST);
+  if (manifest.profile !== MANIFEST_PROFILE) throw codedError(CODES.MANIFEST);
+  if (manifest.proofModel !== MANIFEST_PROOF_MODEL) throw codedError(CODES.MANIFEST);
   if (!Array.isArray(manifest.capabilities) || manifest.capabilities.length === 0) {
-    throw codedError6(CODES.MANIFEST);
+    throw codedError(CODES.MANIFEST);
   }
-  if (!Array.isArray(manifest.tools) || canonicalJson(manifest.tools) !== canonicalJson([...AUDIT_TOOL_NAMES])) throw codedError6(CODES.MANIFEST);
+  if (!Array.isArray(manifest.tools) || canonicalJson(manifest.tools) !== canonicalJson([...AUDIT_TOOL_NAMES])) throw codedError(CODES.MANIFEST);
   const declared = manifest.manifestHash;
   if (typeof declared !== "string" || !INTERNAL_DIGEST.test(declared)) {
-    throw codedError6(CODES.MANIFEST);
+    throw codedError(CODES.MANIFEST);
   }
   const { manifestHash: _omitted, ...withoutSelfHash } = manifest;
   let recomputed;
   try {
     recomputed = internalDigest2(withoutSelfHash);
   } catch {
-    throw codedError6(CODES.MANIFEST);
+    throw codedError(CODES.MANIFEST);
   }
-  if (recomputed !== declared) throw codedError6(CODES.MANIFEST);
+  if (recomputed !== declared) throw codedError(CODES.MANIFEST);
   if (typeof bundleHash !== "string" || !INTERNAL_DIGEST.test(bundleHash)) {
-    throw codedError6(CODES.MANIFEST);
+    throw codedError(CODES.MANIFEST);
   }
   const descriptors = /* @__PURE__ */ new Map();
   for (const row of manifest.capabilities) {
-    if (!isPlainObject3(row) || !isNonEmptyString(row.capabilityId)) throw codedError6(CODES.MANIFEST);
+    if (!isPlainObject3(row) || !isNonEmptyString(row.capabilityId)) throw codedError(CODES.MANIFEST);
     const { tool: _tool, ...descriptor } = row;
     const encoded = canonicalJson(descriptor);
     const existing = descriptors.get(descriptor.capabilityId);
-    if (existing && existing.encoded !== encoded) throw codedError6(CODES.MANIFEST);
+    if (existing && existing.encoded !== encoded) throw codedError(CODES.MANIFEST);
     if (!existing) {
       descriptors.set(descriptor.capabilityId, {
         encoded,
@@ -10434,7 +10443,7 @@ function reconcileAiBundle(data, { manifest, coverage }) {
   return { components, complete, reasons };
 }
 function createInternalGhlAdapter(options = {}) {
-  if (!isPlainObject3(options)) throw codedError6(CODES.REQUEST, TypeError);
+  if (!isPlainObject3(options)) throw codedError(CODES.REQUEST, TypeError);
   const {
     client,
     expectedContractVersion,
@@ -10444,7 +10453,7 @@ function createInternalGhlAdapter(options = {}) {
     runtime = {}
   } = options;
   if (!client || typeof client.callTool !== "function") {
-    throw codedError6(CODES.HANDSHAKE, TypeError);
+    throw codedError(CODES.HANDSHAKE, TypeError);
   }
   const { key: pseudonymKey, source: pseudonymKeySource } = resolvePseudonymKey(
     options.pseudonymKey
@@ -10455,7 +10464,7 @@ function createInternalGhlAdapter(options = {}) {
     const declared = options.authorizedCanaryTargetHashes;
     if (declared === null) return null;
     if (!Array.isArray(declared) || !declared.every(isNonEmptyString)) {
-      throw codedError6(CODES.REQUEST, TypeError);
+      throw codedError(CODES.REQUEST, TypeError);
     }
     return new Set(declared);
   })();
@@ -10473,7 +10482,7 @@ function createInternalGhlAdapter(options = {}) {
       return null;
     };
     const dispatch = async (name, args) => {
-      if (!AUDIT_TOOL_NAMES.includes(name)) throw codedError6(CODES.READ_ONLY);
+      if (!AUDIT_TOOL_NAMES.includes(name)) throw codedError(CODES.READ_ONLY);
       toolCalls += 1;
       let response;
       try {
@@ -10534,36 +10543,36 @@ function createInternalGhlAdapter(options = {}) {
   const bundlePinned = Object.hasOwn(options, "expectedBundleHash");
   const { expectedCapabilityManifestHash, expectedBundleHash } = options;
   function preflight(window) {
-    if (typeof expectedContractVersion !== "string" || !SUPPORTED_CONTRACT_VERSIONS.includes(expectedContractVersion)) throw codedError6(CODES.CONTRACT);
-    if (!isNonEmptyString(expectedLocationId)) throw codedError6(CODES.LOCATION);
+    if (typeof expectedContractVersion !== "string" || !SUPPORTED_CONTRACT_VERSIONS.includes(expectedContractVersion)) throw codedError(CODES.CONTRACT);
+    if (!isNonEmptyString(expectedLocationId)) throw codedError(CODES.LOCATION);
     const requestedWindow = validateCollectionWindow(window, CODES.WINDOW);
     if (isPlainObject3(capabilityProofIndex)) {
       for (const key of Object.keys(capabilityProofIndex)) {
-        if (!PROOF_INDEX_KEYS.includes(key)) throw codedError6(CODES.MANIFEST);
+        if (!PROOF_INDEX_KEYS.includes(key)) throw codedError(CODES.MANIFEST);
       }
     }
     const manifest = isPlainObject3(capabilityProofIndex) ? validateManifest(capabilityProofIndex.manifest, capabilityProofIndex.bundleHash) : null;
-    if ((manifestPinned || bundlePinned) && manifest === null) throw codedError6(CODES.MANIFEST);
+    if ((manifestPinned || bundlePinned) && manifest === null) throw codedError(CODES.MANIFEST);
     if (manifestPinned) {
-      if (typeof expectedCapabilityManifestHash !== "string" || !INTERNAL_DIGEST.test(expectedCapabilityManifestHash) || expectedCapabilityManifestHash !== manifest.manifestHash) throw codedError6(CODES.MANIFEST);
+      if (typeof expectedCapabilityManifestHash !== "string" || !INTERNAL_DIGEST.test(expectedCapabilityManifestHash) || expectedCapabilityManifestHash !== manifest.manifestHash) throw codedError(CODES.MANIFEST);
     }
     if (bundlePinned) {
-      if (typeof expectedBundleHash !== "string" || !INTERNAL_DIGEST.test(expectedBundleHash) || expectedBundleHash !== manifest.bundleHash) throw codedError6(CODES.MANIFEST);
+      if (typeof expectedBundleHash !== "string" || !INTERNAL_DIGEST.test(expectedBundleHash) || expectedBundleHash !== manifest.bundleHash) throw codedError(CODES.MANIFEST);
     }
     return { requestedWindow, manifest };
   }
   function assertHandshake(listing) {
     const names = validateToolRegistry(listing);
     const toolProfileHash = internalDigest2([...names]);
-    if (typeof expectedToolProfileHash !== "string" || !INTERNAL_DIGEST.test(expectedToolProfileHash) || expectedToolProfileHash !== toolProfileHash) throw codedError6(CODES.PROFILE);
+    if (typeof expectedToolProfileHash !== "string" || !INTERNAL_DIGEST.test(expectedToolProfileHash) || expectedToolProfileHash !== toolProfileHash) throw codedError(CODES.PROFILE);
     return toolProfileHash;
   }
   async function collectAuditEvidence(request = {}) {
-    if (!isPlainObject3(request)) throw codedError6(CODES.REQUEST, TypeError);
+    if (!isPlainObject3(request)) throw codedError(CODES.REQUEST, TypeError);
     const { target, window, applicability, stepRosterRequests, signal } = request;
     const { requestedWindow, manifest } = preflight(window);
     if (!isPlainObject3(target) || target.locationId !== expectedLocationId) {
-      throw codedError6(CODES.LOCATION);
+      throw codedError(CODES.LOCATION);
     }
     const expectedCompanyId = isNonEmptyString(target.companyId) ? target.companyId : null;
     const declaredCapabilityIds = Array.isArray(applicability?.capabilityIds) ? [...new Set(applicability.capabilityIds)] : null;
@@ -10776,7 +10785,7 @@ function createInternalGhlAdapter(options = {}) {
     try {
       listing = await session.listTools();
     } catch {
-      throw codedError6(CODES.HANDSHAKE);
+      throw codedError(CODES.HANDSHAKE);
     }
     toolProfileHash = assertHandshake(listing);
     const proofs = evaluateCapabilityProofs({
@@ -11131,11 +11140,11 @@ function createInternalGhlAdapter(options = {}) {
     };
   }
   async function collect(request = {}) {
-    if (!isPlainObject3(request)) throw codedError6(CODES.REQUEST, TypeError);
+    if (!isPlainObject3(request)) throw codedError(CODES.REQUEST, TypeError);
     const { capability, window, cursor = null, signal } = request;
     const { requestedWindow, manifest } = preflight(window);
     if (!isPlainObject3(capability) || capability.capabilityId !== "workflow_roster_list") {
-      throw codedError6(CODES.UNPROVEN);
+      throw codedError(CODES.UNPROVEN);
     }
     const session = makeSession({ signal, manifest });
     const operationId = isNonEmptyString(capability.operationId) ? capability.operationId : "internal_ghl.workflow_roster_list";
@@ -11159,7 +11168,7 @@ function createInternalGhlAdapter(options = {}) {
     try {
       listing = await session.listTools();
     } catch {
-      throw codedError6(CODES.HANDSHAKE);
+      throw codedError(CODES.HANDSHAKE);
     }
     const toolProfileHash = assertHandshake(listing);
     const now = nowMs(runtime);
@@ -27329,7 +27338,7 @@ function isPlainObject5(value) {
   );
 }
 function fail(code) {
-  return codedError6(code);
+  return codedError(code);
 }
 function encodeCursor(actionId, state) {
   return Buffer.from(
@@ -27347,8 +27356,28 @@ function decodeCursor(actionId, cursor) {
   if (!isPlainObject5(decoded) || decoded.version !== 1 || decoded.action !== actionId || !isPlainObject5(decoded.state)) throw fail("GHL_TRANSLATION_CURSOR_INVALID");
   return decoded.state;
 }
+function isWorkerEnvelope(value) {
+  return isPlainObject5(value) && Object.hasOwn(value, "ok") && Object.hasOwn(value, "data");
+}
+function assertEnvelopeSucceeded(envelope) {
+  const status = typeof envelope.status === "number" ? envelope.status : null;
+  const failed = envelope.ok !== true || status !== null && (status < 200 || status > 299) || envelope.error !== void 0 && envelope.error !== null;
+  if (!failed) return;
+  let code = "GHL_UPSTREAM_ACTION_FAILED";
+  if (status === 429) code = "RATE_LIMITED";
+  else if (status !== null && status >= 500 && status <= 599) code = "RETRYABLE";
+  const error51 = codedError(code);
+  error51.upstreamStatus = status;
+  throw error51;
+}
+function assertEnvelopeUnshaped(envelope) {
+  if (envelope.filter !== void 0 && envelope.filter !== null || envelope.pagination !== void 0 && envelope.pagination !== null) throw fail("GHL_UPSTREAM_RESPONSE_SHAPED");
+}
 function parseUpstreamResult(response) {
   let value = response;
+  if (isPlainObject5(response) && response.isError === true) {
+    throw fail("GHL_UPSTREAM_TOOL_REFUSED");
+  }
   if (isPlainObject5(response) && isPlainObject5(response.structuredContent)) {
     value = response.structuredContent;
   } else if (isPlainObject5(response) && Array.isArray(response.content)) {
@@ -27361,7 +27390,15 @@ function parseUpstreamResult(response) {
     }
   }
   if (!isPlainObject5(value)) throw fail("GHL_UPSTREAM_RESPONSE_INVALID");
-  return value;
+  if (!isWorkerEnvelope(value)) return value;
+  assertEnvelopeSucceeded(value);
+  assertEnvelopeUnshaped(value);
+  const body = value.data;
+  if (typeof body === "string") {
+    throw fail("GHL_UPSTREAM_RESPONSE_TRUNCATED");
+  }
+  if (!isPlainObject5(body)) throw fail("GHL_UPSTREAM_RESPONSE_INVALID");
+  return body;
 }
 function pickRecords(body, keys) {
   for (const container of [body, body.data, body.body, body.result, body.response]) {
@@ -27373,7 +27410,7 @@ function pickRecords(body, keys) {
   throw fail("GHL_RESPONSE_SHAPE_UNRECOGNISED");
 }
 function pickServerTotal(body) {
-  for (const container of [body, body.data, body.meta, body.data?.meta]) {
+  for (const container of [body, body.meta, body.data, body.data?.meta]) {
     if (!isPlainObject5(container)) continue;
     for (const key of ["total", "totalCount", "count"]) {
       const value = container[key];
@@ -27383,12 +27420,19 @@ function pickServerTotal(body) {
   return null;
 }
 function pickPath(body, key) {
-  for (const container of [body, body.data, body.meta, body.data?.meta]) {
+  for (const container of [body, body.meta, body.data, body.data?.meta]) {
     if (isPlainObject5(container) && container[key] !== void 0 && container[key] !== null) {
       return container[key];
     }
   }
   return null;
+}
+function recordTraceId(body, counters) {
+  const traceId = body?.traceId;
+  if (typeof traceId !== "string" || traceId.length === 0) return;
+  if (counters.upstreamTraceIds.length >= MAXIMUM_TRACE_IDS) return;
+  if (counters.upstreamTraceIds.includes(traceId)) return;
+  counters.upstreamTraceIds.push(traceId);
 }
 function recordId(record2) {
   if (!isPlainObject5(record2)) return null;
@@ -27448,8 +27492,17 @@ function newCounters() {
     serverReportedTotal: null,
     upstreamRequests: 0,
     parentCalendarsResolved: null,
-    paginationCursorUnavailable: false
+    paginationCursorUnavailable: false,
+    // The ONLY upstream metadata kept. See `recordTraceId`; the worker envelope itself is stripped.
+    upstreamTraceIds: []
   };
+}
+function upstreamToolRequest(actionId, params) {
+  if (typeof actionId !== "string" || actionId.length === 0) {
+    throw fail("GHL_TRANSLATION_REQUEST_INVALID");
+  }
+  if (!isPlainObject5(params)) throw fail("GHL_TRANSLATION_REQUEST_INVALID");
+  return { name: "execute_action", arguments: { action_id: actionId, params } };
 }
 function assertTranslatableCapabilities(capabilities) {
   const offending = [];
@@ -27460,7 +27513,7 @@ function assertTranslatableCapabilities(capabilities) {
     }
   }
   if (offending.length > 0) {
-    const error51 = codedError6("AUDIT_PREFLIGHT_FAILED_PUBLIC_CAPABILITY_NOT_TRANSLATED");
+    const error51 = codedError("AUDIT_PREFLIGHT_FAILED_PUBLIC_CAPABILITY_NOT_TRANSLATED");
     error51.actionIds = Object.freeze([...new Set(offending)].sort());
     throw error51;
   }
@@ -27468,9 +27521,10 @@ function assertTranslatableCapabilities(capabilities) {
 }
 async function calendarEventInitialState(context) {
   const body = parseUpstreamResult(await context.call({
-    action: PLANS["calendars-v3__get-calendars"].upstreamAction,
+    actionId: PLANS["calendars-v3__get-calendars"].upstreamAction,
     params: { locationId: context.locationId }
   }));
+  recordTraceId(body, context.counters);
   const calendars = pickRecords(body, PLANS["calendars-v3__get-calendars"].recordKeys);
   const calendarIds = [...new Set(
     calendars.map((calendar) => recordId(calendar)).filter((id) => id !== null)
@@ -27508,7 +27562,7 @@ async function translateScope({ actionId, params, call, options, now }) {
   const plan = PLANS[actionId];
   if (!plan) {
     const reason = NOT_TRANSLATED[actionId] ?? NOT_COLLECTABLE_IN_THIS_SHAPE[actionId] ?? null;
-    const error51 = codedError6(
+    const error51 = codedError(
       Object.hasOwn(NOT_COLLECTABLE_IN_THIS_SHAPE, actionId) ? "GHL_ACTION_NOT_COLLECTABLE_IN_THIS_SHAPE" : "GHL_ACTION_NOT_TRANSLATED"
     );
     if (reason !== null) error51.reason = reason;
@@ -27540,10 +27594,11 @@ async function translateScope({ actionId, params, call, options, now }) {
       break;
     }
     const body = parseUpstreamResult(await call({
-      action: plan.upstreamAction,
+      actionId: plan.upstreamAction,
       params: plan.request(state, context)
     }));
     counters.upstreamRequests += 1;
+    recordTraceId(body, counters);
     const records = pickRecords(body, plan.recordKeys);
     bytes += byteLength(records);
     const serverTotal = pickServerTotal(body);
@@ -27629,23 +27684,26 @@ async function translateScope({ actionId, params, call, options, now }) {
   };
 }
 function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
-  if (typeof connect !== "function") throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  if (typeof connect !== "function") throw codedError("MCP_TRANSPORT_INVALID", TypeError);
   const now = typeof runtime.now === "function" ? () => Number(runtime.now()) : () => Date.now();
   return async function translatingConnect(transportOptions) {
     const delegate = await connect(transportOptions);
     if (!delegate || typeof delegate.callTool !== "function") {
-      throw codedError6("MCP_CONNECTION_FAILED");
+      throw codedError("MCP_CONNECTION_FAILED");
     }
     return Object.freeze({
       async callTool(request, options) {
         if (!isPlainObject5(request) || request.name !== "execute_action" || !isPlainObject5(request.arguments) || !isPlainObject5(request.arguments.params)) throw fail("GHL_TRANSLATION_REQUEST_INVALID");
         const structured = await translateScope({
+          // INBOUND: our own dialect, `arguments.action`. See the module header for why the two
+          // names are different and where the boundary between them is.
           actionId: request.arguments.action,
           params: request.arguments.params,
-          // Every upstream call carries the caller's own signal and timeout, so the adapter's
-          // budget still governs the wire even though one adapter request is now N of them.
+          // OUTBOUND: the worker's tool contract, `arguments.action_id`, built in exactly one
+          // place. Every upstream call carries the caller's own signal and timeout, so the
+          // adapter's budget still governs the wire even though one adapter request is now N.
           call: (upstream) => delegate.callTool(
-            { name: "execute_action", arguments: upstream },
+            upstreamToolRequest(upstream.actionId, upstream.params),
             options
           ),
           options,
@@ -27659,7 +27717,7 @@ function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
     });
   };
 }
-var UPSTREAM_PAGE_LIMIT, CALENDAR_CHUNK_DAYS, DAY_MS, DEADLINE_FRACTION, MINIMUM_DEADLINE_MS, CREATED_FIELDS, UPDATED_FIELDS, QUALITY_KEY, PLANS, NOT_COLLECTABLE_IN_THIS_SHAPE, NOT_TRANSLATED;
+var UPSTREAM_PAGE_LIMIT, CALENDAR_CHUNK_DAYS, DAY_MS, DEADLINE_FRACTION, MINIMUM_DEADLINE_MS, MAXIMUM_TRACE_IDS, CREATED_FIELDS, UPDATED_FIELDS, QUALITY_KEY, PLANS, NOT_COLLECTABLE_IN_THIS_SHAPE, NOT_TRANSLATED;
 var init_ghl_public_translator = __esm({
   "lib/adapters/ghl-public-translator.mjs"() {
     init_canonical();
@@ -27670,6 +27728,7 @@ var init_ghl_public_translator = __esm({
     DAY_MS = 864e5;
     DEADLINE_FRACTION = 0.8;
     MINIMUM_DEADLINE_MS = 1e3;
+    MAXIMUM_TRACE_IDS = 32;
     CREATED_FIELDS = Object.freeze([
       "dateAdded",
       "createdAt",
@@ -27698,6 +27757,11 @@ var init_ghl_public_translator = __esm({
           pageLimit: UPSTREAM_PAGE_LIMIT,
           ...state.searchAfter === null ? {} : { searchAfter: state.searchAfter }
         }),
+        // REAL, from the captured contacts response: the body root carries ONLY
+        // `{ contacts, total, traceId }` — there is NO body-level cursor. Every contact instead
+        // carries its own `searchAfter: [<number>, <its own id>]`, present on every row, so the
+        // last-record derivation below is the real mechanism and the body-level lookup is only a
+        // fallback for a differently-shaped server.
         advance: (state, body, records) => {
           if (records.length < UPSTREAM_PAGE_LIMIT) return null;
           const last = records.at(-1);
@@ -27719,14 +27783,41 @@ var init_ghl_public_translator = __esm({
           // `status` is a VERIFIED enum on this endpoint and `all` is one of its values. Without it
           // the default is unstated, and a default of `open` would silently exclude every won and
           // lost opportunity — i.e. every opportunity that carries realised `monetaryValue`.
+          //
+          // CONFIRMED LIVE against the UK account, decisively: `status: 'bogus_value'` comes back
+          // `ok: false`, so the enum IS validated server-side and `all` is genuinely accepted rather
+          // than being ignored. `all` and omitting `status` both report total 159; `won` reports 0 and
+          // `lost` reports 56. Sending it is therefore safe AND load-bearing.
           status: "all",
           ...state.startAfter === null ? {} : { startAfter: state.startAfter },
           ...state.startAfterId === null ? {} : { startAfterId: state.startAfterId }
         }),
+        /**
+         * REAL, from the captured opportunities response: the cursors are at `body.meta`, NOT at the
+         * body root —
+         *
+         *     meta: { total: 159, nextPageUrl, startAfterId: "<id>", startAfter: 1785099111627,
+         *             currentPage: 1, nextPage: 2, prevPage: null }
+         *
+         * `pickPath` searches `body.meta`, so this resolves. It is worth being exact about the
+         * history: this was NOT previously broken. The old `pickPath` also searched `body.data?.meta`,
+         * which reached the same field through the un-stripped envelope, and a replay of the previous
+         * revision paged correctly through all 159 of the UK account's opportunities. The change here
+         * is that the lookup now points at the shape that is actually documented above rather than
+         * finding it by accident two containers away.
+         *
+         * The last record's `sort` array is the same pair — VERIFIED on the capture,
+         * `meta.startAfter === last.sort[0]` and `meta.startAfterId === last.sort[1]` — and is used as
+         * a fallback so a body that ever drops `meta` still pages rather than truncating. Note
+         * `startAfterId` is NOT the last row's `id`; it is whatever the server's sort key resolves to,
+         * so it is only ever read, never reconstructed.
+         */
         advance: (state, body, records) => {
           if (records.length < UPSTREAM_PAGE_LIMIT) return null;
-          const startAfter = pickPath(body, "startAfter");
-          const startAfterId = pickPath(body, "startAfterId");
+          const last = records.at(-1);
+          const sort = Array.isArray(last?.sort) && last.sort.length === 2 ? last.sort : null;
+          const startAfter = pickPath(body, "startAfter") ?? sort?.[0] ?? null;
+          const startAfterId = pickPath(body, "startAfterId") ?? sort?.[1] ?? null;
           if (startAfter === null || startAfterId === null) return "EXHAUSTED_WITHOUT_CURSOR";
           if (canonicalJson(startAfter) === canonicalJson(state.startAfter) && startAfterId === state.startAfterId) return null;
           return { startAfter, startAfterId };
@@ -27744,6 +27835,8 @@ var init_ghl_public_translator = __esm({
       "calendars-v3__get-calendars": {
         upstreamAction: "calendars-v3__get-calendars",
         category: "appointments",
+        // REAL: `body.calendars` (+ `body.traceId`). No total and no cursor — the account's calendars
+        // come back in one body, three of them on the UK account.
         recordKeys: ["calendars"],
         windowFilter: "none",
         initialState: () => ({ single: true }),
@@ -27765,10 +27858,24 @@ var init_ghl_public_translator = __esm({
           endDate: toMs,
           ...state.startAfterDate === null ? {} : { startAfterDate: state.startAfterDate }
         }),
+        /**
+         * REAL, from the captured conversations response: the body root carries only
+         * `{ conversations, total: 176, traceId }` — NO body-level cursor, and NO `sortValue` on any
+         * record. What each conversation DOES carry is `sort: [<number>]`, and on the capture
+         * `sort[0] === lastMessageDate` exactly (and equals neither `dateUpdated` nor `dateAdded`), so
+         * `sort[0]` is the server's own sort value and is read first. `lastMessageDate`, `dateUpdated`
+         * and `dateAdded` are all epoch-millisecond NUMBERS here, not ISO strings.
+         */
         advance: (state, body, records) => {
           if (records.length < UPSTREAM_PAGE_LIMIT) return null;
           const last = records.at(-1);
-          const startAfterDate = [last?.sortValue, last?.lastMessageDate, last?.dateUpdated, last?.dateAdded].map((value) => toEpochMs(value)).find((value) => value !== null) ?? null;
+          const startAfterDate = [
+            Array.isArray(last?.sort) && last.sort.length > 0 ? last.sort[0] : void 0,
+            last?.sortValue,
+            last?.lastMessageDate,
+            last?.dateUpdated,
+            last?.dateAdded
+          ].map((value) => toEpochMs(value)).find((value) => value !== null) ?? null;
           if (startAfterDate === null) return "EXHAUSTED_WITHOUT_CURSOR";
           if (startAfterDate === state.startAfterDate) return null;
           return { startAfterDate };
@@ -27804,6 +27911,18 @@ var init_ghl_public_translator = __esm({
       "calendars-v3__get-calendar-events": {
         upstreamAction: "calendars-v3__get-calendar-events",
         category: "appointments",
+        /**
+         * REAL: `body.events` (+ `body.traceId`). No total and no cursor, which is exactly why the
+         * window has to be the pagination.
+         *
+         * Each event carries, verbatim: `appointmentStatus`, `appoinmentStatus` (GHL ships BOTH
+         * spellings and the second is their own long-standing typo; on the capture the two always
+         * agreed), `assignedUserId`, `address`, `calendarId`, `contactId`, `dateAdded`, `dateUpdated`,
+         * `endTime`, `id`, `locationId`, `notes`, `description`, `startTime`, `title`,
+         * `assignedResources`, `isRecurring`, `createdBy: { source, userId }`, `deleted`. Times are
+         * ISO strings WITH an offset (not `Z`, not epoch millis). Records pass through unchanged; any
+         * consumer that reads a status must tolerate both spellings.
+         */
         recordKeys: ["events"],
         windowFilter: "chunked",
         // Resolved parent + chunk walk; see `calendarEventInitialState` / `calendarEventChunks`.
@@ -40039,7 +40158,7 @@ function isPlainObject7(value) {
   );
 }
 function transportInvalid() {
-  throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  throw codedError("MCP_TRANSPORT_INVALID", TypeError);
 }
 function assertGhlNativeUrl(value) {
   if (typeof value !== "string" || value.length === 0) transportInvalid();
@@ -40083,7 +40202,7 @@ function createGhlNativeConnect({
     if (assertGhlNativeUrl(options.url) !== checked.url) transportInvalid();
     const credential = options.credential;
     if (typeof credential !== "string" || credential.length === 0) {
-      throw codedError6("GHL_NATIVE_CREDENTIAL_REQUIRED");
+      throw codedError("GHL_NATIVE_CREDENTIAL_REQUIRED");
     }
     const client = new Client(CLIENT_IDENTITY, { capabilities: {} });
     const transport = new StreamableHTTPClientTransport(new URL(checked.url), {
@@ -40880,7 +40999,7 @@ function isPlainObject8(value) {
 }
 function validateCredentialRef(reference) {
   if (reference === null) return null;
-  if (!isPlainObject8(reference)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject8(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(reference).sort();
   if (reference.kind === "environment" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof reference.name === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(reference.name)) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (reference.kind === "secret-store" && keys.length === 4 && keys[0] === "kind" && keys[1] === "provenance" && keys[2] === "provider" && keys[3] === "reference" && typeof reference.provider === "string" && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider) && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance && typeof reference.reference === "string" && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference) && !RAW_CREDENTIAL_SHAPE.test(reference.reference) && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
@@ -40891,12 +41010,12 @@ function validateCredentialRef(reference) {
     provenance: reference.provenance,
     reference: reference.reference
   });
-  throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
 }
 function validateProviderConfig(config2) {
-  if (!isPlainObject8(config2)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject8(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(config2).sort();
-  if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   return Object.freeze({
     providerId: config2.providerId,
     expectedLocationId: config2.expectedLocationId,
@@ -40935,20 +41054,20 @@ function collectLocationIndicators2(value, indicators = [], stack = /* @__PURE__
   }
 }
 function validateTransport(transport) {
-  if (!isPlainObject8(transport)) throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  if (!isPlainObject8(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).some((key) => !["connect", "fetch", "kind", "url"].includes(key))) {
-      throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+      throw codedError("MCP_TRANSPORT_INVALID", TypeError);
     }
-    if (typeof transport.url !== "string") throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+    if (typeof transport.url !== "string") throw codedError("MCP_TRANSPORT_INVALID", TypeError);
     let url2;
     try {
       url2 = new URL(transport.url);
     } catch {
-      throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+      throw codedError("MCP_TRANSPORT_INVALID", TypeError);
     }
     if (url2.protocol !== "https:" && !(url2.protocol === "http:" && (url2.hostname === "localhost" || url2.hostname === "127.0.0.1")) || url2.username !== "" || url2.password !== "" || url2.search !== "" || url2.hash !== "") {
-      throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+      throw codedError("MCP_TRANSPORT_INVALID", TypeError);
     }
     return Object.freeze({
       kind: transport.kind,
@@ -40959,9 +41078,9 @@ function validateTransport(transport) {
   }
   if (transport.kind === "stdio") {
     if (Object.keys(transport).some((key) => !["args", "command", "connect", "kind"].includes(key))) {
-      throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+      throw codedError("MCP_TRANSPORT_INVALID", TypeError);
     }
-    if (typeof transport.command !== "string" || transport.command.length === 0 || !Array.isArray(transport.args) || transport.args.some((argument) => typeof argument !== "string") || transport.args.some((argument) => /authorization|bearer|cookie|password|secret|token/iu.test(argument))) throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+    if (typeof transport.command !== "string" || transport.command.length === 0 || !Array.isArray(transport.args) || transport.args.some((argument) => typeof argument !== "string") || transport.args.some((argument) => /authorization|bearer|cookie|password|secret|token/iu.test(argument))) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
     return Object.freeze({
       kind: transport.kind,
       command: transport.command,
@@ -40969,7 +41088,7 @@ function validateTransport(transport) {
       connect: typeof transport.connect === "function" ? transport.connect : null
     });
   }
-  throw codedError6("MCP_TRANSPORT_INVALID", TypeError);
+  throw codedError("MCP_TRANSPORT_INVALID", TypeError);
 }
 async function defaultConnect(transport, credential) {
   const client = new Client(
@@ -40994,7 +41113,7 @@ async function defaultConnect(transport, credential) {
   return client;
 }
 function safeFailure(code) {
-  return codedError6(code);
+  return codedError(code);
 }
 async function connectMcp({ transport, providerConfig, credentialResolver } = {}) {
   let config2;
@@ -41007,7 +41126,7 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     throw safeFailure("MCP_TRANSPORT_INVALID");
   }
   const trustedPolicy = loadTrustedPublicReadPolicy();
-  if (config2.publicCatalogSnapshotHash !== trustedPolicy.snapshotHash || config2.publicReadAllowlistHash !== trustedPolicy.allowlistHash) throw codedError6("PROVIDER_CONFIG_INVALID", TypeError);
+  if (config2.publicCatalogSnapshotHash !== trustedPolicy.snapshotHash || config2.publicReadAllowlistHash !== trustedPolicy.allowlistHash) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   let credential = null;
   if (config2.credentialRef !== null) {
     try {
@@ -41060,21 +41179,21 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
       if (!isPlainObject8(request) || !ALLOWED_TOOLS.has(request.name)) {
-        throw codedError6("TOOL_NOT_AVAILABLE");
+        throw codedError("TOOL_NOT_AVAILABLE");
       }
       if (!isPlainObject8(request.arguments) || containsForbiddenArgument(request.arguments)) {
-        throw codedError6("MUTATION_ARGUMENT_NOT_ALLOWED");
+        throw codedError("MUTATION_ARGUMENT_NOT_ALLOWED");
       }
       const policy = request.arguments.policy;
       try {
         assertTrustedAction(trustedPolicy, policy);
       } catch {
-        throw codedError6("ACTION_NOT_ALLOWED");
+        throw codedError("ACTION_NOT_ALLOWED");
       }
-      if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError6("ACTION_NOT_ALLOWED");
+      if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError("ACTION_NOT_ALLOWED");
       if (!isPlainObject8(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
         (locationId) => locationId !== config2.expectedLocationId
-      )) throw codedError6("LOCATION_MISMATCH");
+      )) throw codedError("LOCATION_MISMATCH");
       try {
         return await delegate.callTool({
           name: "execute_action",
@@ -41085,13 +41204,15 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
         }, options);
       } catch (error51) {
         const rateLimited = error51?.code === 429 || error51?.code === "429" || error51?.code === "RATE_LIMITED" || error51?.status === 429;
-        if (rateLimited) throw codedError6("RATE_LIMITED");
+        if (rateLimited) throw codedError("RATE_LIMITED");
         if (["RETRYABLE", "ECONNRESET", "ETIMEDOUT", "EAI_AGAIN"].includes(error51?.code)) {
-          const retryable = codedError6(error51.code);
+          const retryable = codedError(error51.code);
           if (Number.isInteger(error51.retryAfterMs) && error51.retryAfterMs >= 0 && error51.retryAfterMs <= 3e5) retryable.retryAfterMs = error51.retryAfterMs;
           throw retryable;
         }
-        throw safeFailure("MCP_TOOL_CALL_FAILED");
+        throw Object.assign(safeFailure("MCP_TOOL_CALL_FAILED"), {
+          upstreamCode: boundedUpstreamCode(error51?.code)
+        });
       }
     },
     async close() {
@@ -41138,14 +41259,14 @@ function parseToolResult(response) {
     value = response.structuredContent;
   } else if (isPlainObject9(response) && Array.isArray(response.content)) {
     const text = response.content.find((entry) => entry?.type === "text")?.text;
-    if (typeof text !== "string") throw codedError6("PUBLIC_RESPONSE_INVALID");
+    if (typeof text !== "string") throw codedError("PUBLIC_RESPONSE_INVALID");
     try {
       value = JSON.parse(text);
     } catch {
-      throw codedError6("PUBLIC_RESPONSE_INVALID");
+      throw codedError("PUBLIC_RESPONSE_INVALID");
     }
   }
-  if (!isPlainObject9(value) || !Array.isArray(value.items) || !isPlainObject9(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError6("PUBLIC_RESPONSE_INVALID");
+  if (!isPlainObject9(value) || !Array.isArray(value.items) || !isPlainObject9(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
   return cloneJson(value, "PUBLIC_RESPONSE_INVALID");
 }
 function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalSignal) {
@@ -41159,14 +41280,14 @@ function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalS
   const timeout = new Promise((resolve6) => {
     timer = setTimer(() => {
       timedOut = true;
-      timeoutController.abort(codedError6(timeoutReason));
+      timeoutController.abort(codedError(timeoutReason));
       resolve6({ timeout: true, reason: timeoutReason });
     }, timeoutMs);
   });
   return Promise.race([
     call.then((value) => ({ value })).catch((error51) => {
       if (timedOut) return { timeout: true, reason: timeoutReason };
-      if (externalSignal?.aborted) throw codedError6("COLLECTION_ABORTED");
+      if (externalSignal?.aborted) throw codedError("COLLECTION_ABORTED");
       throw error51;
     }),
     timeout
@@ -41189,7 +41310,7 @@ function collectLocationIndicators3(value, indicators = []) {
 }
 function assertResponseLocation2(response, expectedLocationId) {
   const indicators = collectLocationIndicators3(response);
-  if (indicators.length === 0 || indicators.some((locationId) => locationId !== expectedLocationId)) throw codedError6("LOCATION_MISMATCH");
+  if (indicators.length === 0 || indicators.some((locationId) => locationId !== expectedLocationId)) throw codedError("LOCATION_MISMATCH");
 }
 function elapsed(start, runtime) {
   const now = typeof runtime.now === "function" ? runtime.now() : Date.now();
@@ -41200,17 +41321,17 @@ function startTime(runtime) {
 }
 function normalizeCapability(capability, allowlist, allowlistHash, client) {
   if (!isPlainObject9(capability) || typeof capability.actionId !== "string") {
-    throw codedError6("ACTION_NOT_ALLOWED");
+    throw codedError("ACTION_NOT_ALLOWED");
   }
   const listed = allowlist.actions.find(({ actionId }) => actionId === capability.actionId);
-  if (!listed) throw codedError6("ACTION_NOT_ALLOWED");
-  if (capability.allowlistHash !== allowlistHash) throw codedError6("ALLOWLIST_HASH_MISMATCH");
-  if (capability.providerId !== client.providerId) throw codedError6("PROVIDER_PIN_MISMATCH");
+  if (!listed) throw codedError("ACTION_NOT_ALLOWED");
+  if (capability.allowlistHash !== allowlistHash) throw codedError("ALLOWLIST_HASH_MISMATCH");
+  if (capability.providerId !== client.providerId) throw codedError("PROVIDER_PIN_MISMATCH");
   if (capability.capabilityManifestHash !== client.capabilityManifestHash) {
-    throw codedError6("CAPABILITY_MANIFEST_HASH_MISMATCH");
+    throw codedError("CAPABILITY_MANIFEST_HASH_MISMATCH");
   }
-  if (typeof client.providerId !== "string" || typeof client.capabilityManifestHash !== "string" || !SHA2562.test(client.capabilityManifestHash)) throw codedError6("MCP_CLIENT_PIN_INVALID", TypeError);
-  if (client.publicCatalogSnapshotHash !== allowlist.sourceSnapshotHash || client.publicReadAllowlistHash !== allowlistHash) throw codedError6("MCP_CLIENT_PIN_INVALID", TypeError);
+  if (typeof client.providerId !== "string" || typeof client.capabilityManifestHash !== "string" || !SHA2562.test(client.capabilityManifestHash)) throw codedError("MCP_CLIENT_PIN_INVALID", TypeError);
+  if (client.publicCatalogSnapshotHash !== allowlist.sourceSnapshotHash || client.publicReadAllowlistHash !== allowlistHash) throw codedError("MCP_CLIENT_PIN_INVALID", TypeError);
   try {
     assertAllowedPublicAction(allowlist, {
       actionId: capability.actionId,
@@ -41221,17 +41342,17 @@ function normalizeCapability(capability, allowlist, allowlistHash, client) {
       sourceSnapshotHash: capability.sourceSnapshotHash
     });
   } catch {
-    throw codedError6("ACTION_NOT_ALLOWED");
+    throw codedError("ACTION_NOT_ALLOWED");
   }
   if (typeof capability.operationId !== "string" || capability.operationId.length === 0) {
-    throw codedError6("PUBLIC_CAPABILITY_INVALID", TypeError);
+    throw codedError("PUBLIC_CAPABILITY_INVALID", TypeError);
   }
   return Object.freeze({ ...listed, operationId: capability.operationId });
 }
 function normalizeBudget(budgets, category) {
   const parsed = CollectionBudgetsSchema.parse(budgets ?? loadCollectionBudgets());
   const budget = parsed.capabilities[category];
-  if (!budget) throw codedError6("COLLECTION_BUDGET_MISSING");
+  if (!budget) throw codedError("COLLECTION_BUDGET_MISSING");
   return budget;
 }
 function normalizeWindow(window) {
@@ -41266,7 +41387,7 @@ function responseByteLength(response) {
   try {
     return Buffer.byteLength(canonicalJson(response), "utf8");
   } catch {
-    throw codedError6("PUBLIC_RESPONSE_INVALID");
+    throw codedError("PUBLIC_RESPONSE_INVALID");
   }
 }
 function normalizeRawPageSink(rawPageSink) {
@@ -41276,7 +41397,7 @@ function normalizeRawPageSink(rawPageSink) {
   });
 }
 function validateSealedPage(sealed, payloadHash) {
-  if (!isPlainObject9(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError6("RAW_PAGE_SEAL_FAILED");
+  if (!isPlainObject9(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
   return Object.freeze({
     opaqueRef: sealed.opaqueRef,
     payloadHash: sealed.payloadHash
@@ -41311,7 +41432,7 @@ function validateCheckpointArtifact(artifact, index, expectedCursor, reportedCou
     "reportedCount",
     "responseBytes"
   ];
-  if (!isPlainObject9(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject9(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   return artifact.nextCursor;
 }
 function validateResumeCheckpoint(checkpoint, {
@@ -41340,7 +41461,7 @@ function validateResumeCheckpoint(checkpoint, {
     "scopeHash",
     "source"
   ];
-  if (!isPlainObject9(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject9(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   let appliedWindow;
   try {
     appliedWindow = validateCollectionWindow(
@@ -41349,7 +41470,7 @@ function validateResumeCheckpoint(checkpoint, {
     );
     assertWindowWithin(appliedWindow, requestedWindow, "RESUME_CHECKPOINT_INVALID");
   } catch {
-    throw codedError6("RESUME_CHECKPOINT_INVALID");
+    throw codedError("RESUME_CHECKPOINT_INVALID");
   }
   let expectedCursor = checkpoint.initialCursor;
   let collectedCount = 0;
@@ -41364,7 +41485,7 @@ function validateResumeCheckpoint(checkpoint, {
     collectedCount += artifact.collectedCount;
     responseBytes += artifact.responseBytes;
   }
-  if (expectedCursor !== cursor || collectedCount !== checkpoint.collectedCount || responseBytes !== checkpoint.responseBytes) throw codedError6("RESUME_CHECKPOINT_INVALID");
+  if (expectedCursor !== cursor || collectedCount !== checkpoint.collectedCount || responseBytes !== checkpoint.responseBytes) throw codedError("RESUME_CHECKPOINT_INVALID");
   return Object.freeze({
     ...cloneJson(checkpoint, "RESUME_CHECKPOINT_INVALID"),
     appliedWindow
@@ -41379,16 +41500,16 @@ function createPublicGhlAdapter({
   rawPageSink,
   runtime = {}
 } = {}) {
-  if (!client || typeof client.callTool !== "function" || typeof expectedLocationId !== "string" || expectedLocationId.length === 0) throw codedError6("PUBLIC_ADAPTER_CONFIG_INVALID", TypeError);
+  if (!client || typeof client.callTool !== "function" || typeof expectedLocationId !== "string" || expectedLocationId.length === 0) throw codedError("PUBLIC_ADAPTER_CONFIG_INVALID", TypeError);
   const trustedPolicy = loadTrustedPublicReadPolicy();
   let suppliedAllowlist;
   try {
     suppliedAllowlist = cloneJson(PublicReadAllowlistSchema.parse(allowlist));
   } catch {
-    throw codedError6("TRUSTED_ALLOWLIST_MISMATCH", TypeError);
+    throw codedError("TRUSTED_ALLOWLIST_MISMATCH", TypeError);
   }
   if (canonicalJson(suppliedAllowlist) !== canonicalJson(trustedPolicy.allowlist)) {
-    throw codedError6("TRUSTED_ALLOWLIST_MISMATCH", TypeError);
+    throw codedError("TRUSTED_ALLOWLIST_MISMATCH", TypeError);
   }
   const pinnedAllowlist = trustedPolicy.allowlist;
   const allowlistHash = trustedPolicy.allowlistHash;
@@ -41399,14 +41520,14 @@ function createPublicGhlAdapter({
     publicCatalogSnapshotHash: client.publicCatalogSnapshotHash,
     publicReadAllowlistHash: client.publicReadAllowlistHash
   });
-  if (typeof clientPins.providerId !== "string" || typeof clientPins.capabilityManifestHash !== "string" || !SHA2562.test(clientPins.capabilityManifestHash) || clientPins.publicCatalogSnapshotHash !== trustedPolicy.snapshotHash || clientPins.publicReadAllowlistHash !== trustedPolicy.allowlistHash || clientPins.expectedLocationId !== expectedLocationId) throw codedError6("MCP_CLIENT_PIN_INVALID", TypeError);
+  if (typeof clientPins.providerId !== "string" || typeof clientPins.capabilityManifestHash !== "string" || !SHA2562.test(clientPins.capabilityManifestHash) || clientPins.publicCatalogSnapshotHash !== trustedPolicy.snapshotHash || clientPins.publicReadAllowlistHash !== trustedPolicy.allowlistHash || clientPins.expectedLocationId !== expectedLocationId) throw codedError("MCP_CLIENT_PIN_INVALID", TypeError);
   const dispatchTool = client.callTool.bind(client);
   const sealedPageStore = normalizeRawPageSink(rawPageSink);
   const loadCheckpoint = typeof checkpointStore?.load === "function" ? checkpointStore.load.bind(checkpointStore) : null;
   const persistCheckpoint = typeof checkpointStore?.save === "function" ? checkpointStore.save.bind(checkpointStore) : null;
   const saveCheckpoint = async (checkpoint) => {
     if (checkpointStore !== void 0 && persistCheckpoint === null) {
-      throw codedError6("CHECKPOINT_STORE_INVALID", TypeError);
+      throw codedError("CHECKPOINT_STORE_INVALID", TypeError);
     }
     await persistCheckpoint?.(cloneJson(checkpoint));
   };
@@ -41428,14 +41549,14 @@ function createPublicGhlAdapter({
       try {
         assertTrustedAction(trustedPolicy, scopedAction);
       } catch {
-        throw codedError6("ACTION_NOT_ALLOWED");
+        throw codedError("ACTION_NOT_ALLOWED");
       }
       const budget = normalizeBudget(budgets, action.category);
       const requestedWindow = normalizeWindow(window);
       if (!(cursor === null || typeof cursor === "string")) {
-        throw codedError6("COLLECTION_CURSOR_INVALID", TypeError);
+        throw codedError("COLLECTION_CURSOR_INVALID", TypeError);
       }
-      if (sealedPageStore.sealPage === null) throw codedError6("RAW_PAGE_SINK_REQUIRED");
+      if (sealedPageStore.sealPage === null) throw codedError("RAW_PAGE_SINK_REQUIRED");
       const started = startTime(runtime);
       const scopeHash = checkpointScopeHash({
         action: scopedAction,
@@ -41457,8 +41578,8 @@ function createPublicGhlAdapter({
       const pageArtifacts = [];
       const seenCursors = new Set(cursor === null ? [] : [cursor]);
       if (cursor !== null) {
-        if (loadCheckpoint === null) throw codedError6("RESUME_CHECKPOINT_REQUIRED");
-        if (sealedPageStore.restorePage === null) throw codedError6("RESUME_PAGE_SOURCE_REQUIRED");
+        if (loadCheckpoint === null) throw codedError("RESUME_CHECKPOINT_REQUIRED");
+        if (sealedPageStore.restorePage === null) throw codedError("RESUME_PAGE_SOURCE_REQUIRED");
         let loaded;
         try {
           loaded = await loadCheckpoint({
@@ -41469,7 +41590,7 @@ function createPublicGhlAdapter({
             scopeHash
           });
         } catch {
-          throw codedError6("RESUME_CHECKPOINT_INVALID");
+          throw codedError("RESUME_CHECKPOINT_INVALID");
         }
         const checkpoint = validateResumeCheckpoint(loaded, {
           action,
@@ -41491,7 +41612,7 @@ function createPublicGhlAdapter({
               payloadHash: artifact.artifactHash
             }));
           } catch {
-            throw codedError6("RESUME_PAGE_INVALID");
+            throw codedError("RESUME_PAGE_INVALID");
           }
           try {
             assertResponseLocation2(restored, expectedLocationId);
@@ -41500,9 +41621,9 @@ function createPublicGhlAdapter({
               "RESUME_PAGE_INVALID"
             );
             assertWindowWithin(restoredWindow, requestedWindow, "RESUME_PAGE_INVALID");
-            if (sha256(restored) !== artifact.artifactHash || restored.page.cursor !== artifact.cursor || restored.page.nextCursor !== artifact.nextCursor || restored.page.reportedCount !== artifact.reportedCount || restored.items.length !== artifact.collectedCount || responseByteLength(restored) !== artifact.responseBytes || canonicalJson(restoredWindow) !== canonicalJson(appliedWindow)) throw codedError6("RESUME_PAGE_INVALID");
+            if (sha256(restored) !== artifact.artifactHash || restored.page.cursor !== artifact.cursor || restored.page.nextCursor !== artifact.nextCursor || restored.page.reportedCount !== artifact.reportedCount || restored.items.length !== artifact.collectedCount || responseByteLength(restored) !== artifact.responseBytes || canonicalJson(restoredWindow) !== canonicalJson(appliedWindow)) throw codedError("RESUME_PAGE_INVALID");
           } catch {
-            throw codedError6("RESUME_PAGE_INVALID");
+            throw codedError("RESUME_PAGE_INVALID");
           }
           pageArtifacts.push(cloneJson(artifact));
           items.push(...restored.items);
@@ -41510,10 +41631,10 @@ function createPublicGhlAdapter({
           if (artifact.nextCursor !== null) seenCursors.add(artifact.nextCursor);
         }
         if (items.length !== checkpoint.collectedCount) {
-          throw codedError6("RESUME_PAGE_INVALID");
+          throw codedError("RESUME_PAGE_INVALID");
         }
         collectedRecordCount = items.length;
-        if (signal?.aborted) throw codedError6("COLLECTION_ABORTED");
+        if (signal?.aborted) throw codedError("COLLECTION_ABORTED");
       }
       const finishIncomplete = async (reason, {
         nextCursor = currentCursor,
@@ -41558,7 +41679,7 @@ function createPublicGhlAdapter({
         return result;
       };
       for (; ; ) {
-        if (signal?.aborted) throw codedError6("COLLECTION_ABORTED");
+        if (signal?.aborted) throw codedError("COLLECTION_ABORTED");
         const remainingWallClock = budget.wallClockMs - elapsed(started, runtime);
         if (remainingWallClock <= 0) {
           return finishIncomplete("BUDGET_WALL_CLOCK");
@@ -41601,7 +41722,11 @@ function createPublicGhlAdapter({
           if (error51?.code === 429 || error51?.code === "429" || error51?.code === "RATE_LIMITED") {
             return finishIncomplete("RATE_LIMITED");
           }
-          if (!RETRYABLE.has(error51?.code)) throw codedError6("PUBLIC_COLLECTION_FAILED");
+          if (!RETRYABLE.has(error51?.code)) {
+            const failure = codedError("PUBLIC_COLLECTION_FAILED");
+            const upstreamCode = boundedUpstreamCode(error51?.upstreamCode ?? error51?.code);
+            throw Object.assign(failure, { upstreamCode });
+          }
           if (retryCount >= budget.retryCount) return finishIncomplete("BUDGET_RETRY_COUNT");
           const delay = Number.isInteger(error51.retryAfterMs) && error51.retryAfterMs >= 0 ? error51.retryAfterMs : 0;
           const remainingAfterFailure = budget.wallClockMs - elapsed(started, runtime);
@@ -41638,7 +41763,7 @@ function createPublicGhlAdapter({
         const currentResponseBytes = responseByteLength(response);
         responseBytes += currentResponseBytes;
         assertResponseLocation2(response, expectedLocationId);
-        if (response.page.cursor !== currentCursor) throw codedError6("CURSOR_MISMATCH");
+        if (response.page.cursor !== currentCursor) throw codedError("CURSOR_MISMATCH");
         const checkedAppliedWindow = validateCollectionWindow(
           response.appliedWindow,
           "APPLIED_WINDOW_INVALID"
@@ -41671,9 +41796,9 @@ function createPublicGhlAdapter({
           }), payloadHash);
         } catch (error51) {
           if (error51?.code === "RAW_PAGE_SEAL_FAILED") throw error51;
-          throw codedError6("RAW_PAGE_SEAL_FAILED");
+          throw codedError("RAW_PAGE_SEAL_FAILED");
         }
-        if (signal?.aborted) throw codedError6("COLLECTION_ABORTED");
+        if (signal?.aborted) throw codedError("COLLECTION_ABORTED");
         pageArtifacts.push({
           pageIndex: pageArtifacts.length + 1,
           cursor: response.page.cursor,
@@ -44712,6 +44837,7 @@ var init_local_runtime = __esm({
 });
 
 // cli/audit.mjs
+init_collection();
 init_canonical();
 init_weekly();
 import {
@@ -44982,6 +45108,11 @@ async function runAuditCli({
 `);
   return status;
 }
+function describeFailure(error51) {
+  const code = isMachineCode(error51?.code) ? error51.code : "AUDIT_COMMAND_INVALID";
+  if (error51?.upstreamCode === void 0 || error51?.upstreamCode === null) return code;
+  return `${code} upstream=${boundedUpstreamCode(error51.upstreamCode)}`;
+}
 async function main() {
   const emitWarning = process.emitWarning;
   process.emitWarning = (warning, ...args) => {
@@ -44991,13 +45122,14 @@ async function main() {
   try {
     await runAuditCli();
   } catch (error51) {
-    process.stderr.write(`${error51?.code ?? "AUDIT_COMMAND_INVALID"}
+    process.stderr.write(`${describeFailure(error51)}
 `);
     process.exitCode = 1;
   }
 }
 if (process.argv[1] === fileURLToPath2(import.meta.url)) await main();
 export {
+  describeFailure,
   parseAuditCliArgs,
   runAuditCli
 };

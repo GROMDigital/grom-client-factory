@@ -1,7 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { codedError } from './collection.mjs';
+import { boundedUpstreamCode, codedError } from './collection.mjs';
 import {
   assertTrustedAction,
   loadTrustedPublicReadPolicy,
@@ -347,7 +347,19 @@ export async function connectMcp({ transport, providerConfig, credentialResolver
           ) retryable.retryAfterMs = error.retryAfterMs;
           throw retryable;
         }
-        throw safeFailure('MCP_TOOL_CALL_FAILED');
+        /**
+         * The first of the three layers that used to swallow the cause. Everything that was not
+         * rate-limiting or retryable became a bare `MCP_TOOL_CALL_FAILED`, so a GHL refusal, a
+         * shape surprise and a transport fault were indistinguishable by the time they reached
+         * `lib/adapters/public-ghl.mjs`, which then flattened them again.
+         *
+         * The ORIGINATING code travels, and only the code: `boundedUpstreamCode` refuses anything
+         * that is not an UPPER_SNAKE machine code, because the worker echoes request parameters
+         * into its error channel and this value reaches the publication boundary.
+         */
+        throw Object.assign(safeFailure('MCP_TOOL_CALL_FAILED'), {
+          upstreamCode: boundedUpstreamCode(error?.code),
+        });
       }
     },
     async close() {
