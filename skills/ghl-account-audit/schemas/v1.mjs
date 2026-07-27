@@ -238,13 +238,50 @@ export const ReceiptSchema = z.object({
   executable: z.literal(false),
 }).strict();
 
+/**
+ * THE COVERAGE FLOOR, declared as DATA beside `minimumSample`.
+ *
+ * `minimumSample` bounds how SMALL a measured denominator may be; `minimumCoverage` bounds what
+ * SHARE of the eligible population that denominator has to represent, so an edge measured over a
+ * rump of the account reads UNKNOWN instead of confident. Both are per-edge because the tolerable
+ * loss differs by edge: a revenue edge joined through one native id can demand near-total
+ * coverage, an engagement edge stitched across sources cannot.
+ *
+ * Omitting `minimumCoverage` does NOT disable the guard — `metrics.mjs` falls back to the
+ * profile-level `coverageFloor` and then to `DEFAULT_COVERAGE_FLOOR`. A present-but-invalid value
+ * throws rather than degrading quietly.
+ *
+ * A declared `0` is the one value that DOES disable the guard, and it stays legal because an edge
+ * may legitimately prefer any measurement to none. It is never silent: `metrics.mjs` stamps
+ * `coverageFloorDisabled: true` on the metric and `mechanisms.mjs` raises
+ * `COVERAGE_FLOOR_DISABLED` into the sealed packet.
+ *
+ * `minimumSample` is validated here AND in `metrics.mjs`, which throws `METRICS_CONTRACT_INVALID`
+ * on the same values rather than degrading a broken declaration to a threshold of zero.
+ */
+const EligibilityRuleSchema = JsonRecordSchema.check((ctx) => {
+  const rule = ctx.value;
+  if (Object.hasOwn(rule, 'minimumSample')) {
+    const sample = rule.minimumSample;
+    if (!Number.isInteger(sample) || sample < 0) {
+      ctx.issues.push({ code: 'custom', message: 'minimumSample must be a non-negative integer', input: sample });
+    }
+  }
+  if (Object.hasOwn(rule, 'minimumCoverage')) {
+    const floor = rule.minimumCoverage;
+    if (typeof floor !== 'number' || !Number.isFinite(floor) || floor < 0 || floor > 1) {
+      ctx.issues.push({ code: 'custom', message: 'minimumCoverage must be a number in [0, 1]', input: floor });
+    }
+  }
+});
+
 export const MetricEdgeSchema = z.object({
   edgeId: z.string().min(1),
   journeyId: z.string().min(1),
   journeyInstanceId: JourneyInstanceIdSchema,
   fromStage: z.string().min(1),
   toStage: z.string().min(1),
-  eligibilityRule: JsonRecordSchema,
+  eligibilityRule: EligibilityRuleSchema,
   fromEventFields: z.array(z.string()),
   toEventFields: z.array(z.string()),
   allowedLag: z.object({
@@ -262,6 +299,8 @@ export const MetricEdgeSchema = z.object({
 export const MetricContractsSchema = z.object({
   profileId: z.enum(['client', 'grom_internal']),
   version: z.literal(SCHEMA_VERSION),
+  /** Profile-wide coverage floor, used by every edge that declares no `minimumCoverage`. */
+  coverageFloor: z.number().min(0).max(1).optional(),
   edges: z.array(MetricEdgeSchema).min(1),
 }).strict().superRefine((contracts, ctx) => {
   const ids = contracts.edges.map(({ edgeId }) => edgeId);

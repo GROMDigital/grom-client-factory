@@ -122,16 +122,22 @@ test('adjacent-stage metrics use mature flow cohorts, deduplicate re-entry and l
     windows,
   });
   const metric = result.metrics.currentClosedWeek.first_engagement;
+  // Task A2a: the shape now carries the eligible/measured split as well. Both subjects were
+  // measurable, so `eligible` still equals `denominator` and coverage is still COMPLETE.
   assert.deepEqual(metric, {
     state: 'OBSERVED',
     numerator: 1,
     denominator: 2,
     rate: 0.5,
     eligible: 2,
+    excluded: 0,
+    exclusions: {},
     threshold: 2,
     rankEligible: true,
     window: windows.currentClosedWeek,
     coverage: 'COMPLETE',
+    coverageRatio: 1,
+    coverageFloor: 0.8,
     reasonCode: null,
   });
   assert.equal(result.currentStock.journey_client_sales.first_engagement, 2);
@@ -508,14 +514,55 @@ test('right-censored, incomplete, unresolved, ambiguous, inferred, and unmapped 
     maturityDays: 0,
   });
   const base = event('x', 'psn_xxxxxxxxxxxxxxxx', 'journey_client_sales', 'lead_created', '2026-03-08T12:00:00-07:00');
+  // Task A2a: `base` sits one day before the cutoff, so at any lag its conversion deadline falls
+  // AFTER the cutoff and the cohort is immature. Under the subject-scoped gate that returns early,
+  // before uncertainty is ever consulted, so the five uncertainty cases below would have passed
+  // without exercising the thing this test exists to guard. They now enter on `mature`, whose lag
+  // has expired, and are UNKNOWN because their only subject was EXCLUDED — the same invariant,
+  // proven on the path that now enforces it.
+  const mature = event('m', 'psn_maturemature1', 'journey_client_sales', 'lead_created', '2026-03-04T12:00:00-08:00');
+  const shortLag = { allowedLag: { amount: 1, unit: 'days' } };
   const cases = [
-    { graph: graph([base]), contract: contract('right_censored', 'lead_created', 'first_engagement', { allowedLag: { amount: 2, unit: 'days' } }) },
-    { graph: graph([{ ...base, provenance: { completeness: 'INCOMPLETE' } }]), contract: contract('incomplete', 'lead_created', 'first_engagement') },
-    { graph: graph([base], { unresolvedJoins: [{ journeyInstanceId: 'journey_client_sales' }] }), contract: contract('unresolved', 'lead_created', 'first_engagement') },
-    { graph: graph([base], { conflicts: [{ journeyInstanceId: 'journey_client_sales' }] }), contract: contract('conflict', 'lead_created', 'first_engagement') },
-    { graph: graph([base], { edges: [{ type: 'inferred_match', toNodeId: base.nodeId }] }), contract: contract('inferred', 'lead_created', 'first_engagement') },
-    { graph: graph([base], { edges: [] }), contract: contract('unjoined', 'lead_created', 'first_engagement') },
-    { graph: graph([base]), contract: contract('unmapped', 'lead_created', 'first_engagement', { nativeMapping: 'UNKNOWN' }) },
+    {
+      reasonCode: 'MISSING_REQUIRED_EVIDENCE',
+      graph: graph([base]),
+      contract: contract('right_censored', 'lead_created', 'first_engagement', { allowedLag: { amount: 2, unit: 'days' } }),
+    },
+    {
+      reasonCode: 'ALL_SUBJECTS_EXCLUDED',
+      exclusions: { NON_OBSERVED_EVIDENCE: 1 },
+      graph: graph([{ ...mature, provenance: { completeness: 'INCOMPLETE' } }]),
+      contract: contract('incomplete', 'lead_created', 'first_engagement', shortLag),
+    },
+    {
+      reasonCode: 'ALL_SUBJECTS_EXCLUDED',
+      exclusions: { UNRESOLVED_JOIN: 1 },
+      graph: graph([mature], { unresolvedJoins: [{ journeyInstanceId: 'journey_client_sales' }] }),
+      contract: contract('unresolved', 'lead_created', 'first_engagement', shortLag),
+    },
+    {
+      reasonCode: 'ALL_SUBJECTS_EXCLUDED',
+      exclusions: { IDENTITY_CONFLICT: 1 },
+      graph: graph([mature], { conflicts: [{ journeyInstanceId: 'journey_client_sales' }] }),
+      contract: contract('conflict', 'lead_created', 'first_engagement', shortLag),
+    },
+    {
+      reasonCode: 'ALL_SUBJECTS_EXCLUDED',
+      exclusions: { INFERRED_MATCH: 1 },
+      graph: graph([mature], { edges: [{ type: 'inferred_match', toNodeId: mature.nodeId }] }),
+      contract: contract('inferred', 'lead_created', 'first_engagement', shortLag),
+    },
+    {
+      reasonCode: 'ALL_SUBJECTS_EXCLUDED',
+      exclusions: { UNPROVEN_JOIN: 1 },
+      graph: graph([mature], { edges: [] }),
+      contract: contract('unjoined', 'lead_created', 'first_engagement', shortLag),
+    },
+    {
+      reasonCode: 'MISSING_REQUIRED_EVIDENCE',
+      graph: graph([mature]),
+      contract: contract('unmapped', 'lead_created', 'first_engagement', { ...shortLag, nativeMapping: 'UNKNOWN' }),
+    },
   ];
   for (const item of cases) {
     const metric = computeJourneyMetrics({
@@ -534,7 +581,14 @@ test('right-censored, incomplete, unresolved, ambiguous, inferred, and unmapped 
       numerator: null,
       denominator: null,
       rate: null,
-      reasonCode: 'MISSING_REQUIRED_EVIDENCE',
-    });
+      reasonCode: item.reasonCode,
+    }, item.contract.edgeId);
+    // The excluded subject is COUNTED, so a blanked metric can never be mistaken for an empty one.
+    if (item.exclusions) {
+      assert.deepEqual(metric.exclusions, item.exclusions, item.contract.edgeId);
+      assert.equal(metric.eligible, 1, item.contract.edgeId);
+      assert.equal(metric.excluded, 1, item.contract.edgeId);
+      assert.equal(metric.coverageRatio, 0, item.contract.edgeId);
+    }
   }
 });

@@ -569,7 +569,11 @@ function priorityFor({
     coverageScope: candidateCoverage.scope,
     severityBand: scope.severityBand,
     mechanismConfidence: confidence,
-    eligibleAffectedVolume: metric.eligible ?? null,
+    // Task A2a: `metric.eligible` is now the population BEFORE subject exclusions and can exceed
+    // the measured denominator (and is a number even on an UNKNOWN metric). The affected volume a
+    // priority tuple may claim is only what was actually measured, which `packetBody` re-derives
+    // from `denominator.value` and byte-compares.
+    eligibleAffectedVolume: metric.denominator ?? null,
     excessObservedLoss: metric.denominator === null || metric.numerator === null
       ? null
       : Math.max(0, metric.denominator - metric.numerator),
@@ -597,6 +601,15 @@ function limitationCodes({
     codes.push('CAPABILITY_MISSING');
   }
   if (metric.state === 'UNKNOWN') codes.push('METRIC_UNKNOWN');
+  // Task A2a: a finding built on 80% of the account must not publish indistinguishably from one
+  // built on 100%. `metric.excluded` is the only place the subject-scoped exclusions survive, and
+  // limitation codes are the only channel that reaches the sealed packet and the published
+  // finding, so the partial-coverage fact is turned into one here rather than left on the metric.
+  if (Number.isInteger(metric.excluded) && metric.excluded > 0) {
+    codes.push('PARTIAL_SUBJECT_COVERAGE');
+  }
+  // A declared coverage floor of zero disables the guard above. It is legal, and never silent.
+  if (metric.coverageFloor === 0) codes.push('COVERAGE_FLOOR_DISABLED');
   if (!metric.rankEligible) codes.push('RATE_THRESHOLD_NOT_MET');
   if (confidence === 'C1') codes.push('CAUSAL_PROOF_INCOMPLETE');
   if (confidence === 'C0') codes.push('REQUIRED_EVIDENCE_MISSING');
@@ -824,7 +837,8 @@ export function nominateMechanisms({
       eligibility: {
         rankEligible: metric.rankEligible,
         threshold: metric.threshold ?? null,
-        eligibleAffectedVolume: metric.eligible ?? null,
+        // See `priorityFor`: the measured denominator, not the pre-exclusion eligible population.
+        eligibleAffectedVolume: metric.denominator ?? null,
       },
       critical,
       criticalClass: critical ? scope.criticalClass : null,

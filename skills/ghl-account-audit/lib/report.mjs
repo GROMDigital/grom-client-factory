@@ -424,6 +424,13 @@ function gromJourneyCatalog(run) {
   };
 }
 
+/**
+ * The cohort counts the entrants a metric was allowed to count (`metrics.mjs` `cohortCounts`), so
+ * the label says so. Without that, a reader compares "Denominator: 3" to a rate measured over 2
+ * and cannot tell whether the third entrant converted, was excluded, or never existed.
+ */
+const COHORT_BASIS = 'countable entrants; exclusions are itemised under metric coverage';
+
 function gromScorecards(run, metrics, journeys) {
   if (run.target?.operatingProfile !== 'grom_internal') return '';
   const currentCohorts = metrics.cohorts?.currentClosedWeek ?? {};
@@ -431,7 +438,7 @@ function gromScorecards(run, metrics, journeys) {
     `### ${journey.label} scorecard`,
     '',
     `- Journey ID: ${journey.journeyInstanceId}`,
-    `- Denominator: ${currentCohorts[journey.journeyInstanceId] ?? 0}`,
+    `- Denominator: ${currentCohorts[journey.journeyInstanceId] ?? 0} (${COHORT_BASIS})`,
     `- Clock and KPIs: ${journey.label.toLowerCase()} only`,
     '',
   ];
@@ -439,6 +446,42 @@ function gromScorecards(run, metrics, journeys) {
     ...scorecard(journeys.acquisition),
     ...scorecard(journeys.onboarding),
   ].join('\n');
+}
+
+/**
+ * COVERAGE, IN PROSE, FOR EVERY READER.
+ *
+ * Task A2a lets a rate be measured over PART of its eligible population. Non-negotiable 2 of the
+ * brief requires that to be visible on the report a human actually reads, and CLIENTS are the
+ * primary audience — so this runs for every operating profile, not only `grom_internal`. Every
+ * window is scanned, because a partial trailing-90-day rate is exactly as misleading as a partial
+ * current-week one.
+ *
+ * Deterministic: windows and metric ids are both walked in sorted order.
+ *
+ * The no-exclusions sentence is a claim ABOUT THE RATES THIS RUN REPORTED, so it may only be made
+ * when a rate was in fact reported. A run in which every metric came back UNKNOWN used to print it
+ * anyway — vacuously true, and read by a client as reassurance about a week that measured nothing.
+ */
+function metricCoverageDisclosure(metrics) {
+  const lines = [];
+  let reportedRates = 0;
+  const byWindow = metrics?.metrics ?? {};
+  for (const windowName of Object.keys(byWindow).sort(compareText)) {
+    const window = byWindow[windowName] ?? {};
+    for (const metricId of Object.keys(window).sort(compareText)) {
+      const metric = window[metricId];
+      if (metric?.state === 'OBSERVED' && Number.isInteger(metric.denominator)) reportedRates += 1;
+      if (!Number.isInteger(metric?.excluded) || metric.excluded <= 0) continue;
+      lines.push(Number.isInteger(metric.denominator)
+        ? `${metricId} (${windowName}) measured ${metric.denominator} of ${metric.eligible} eligible`
+        : `${metricId} (${windowName}) not measurable, ${metric.excluded} of ${metric.eligible} eligible subjects excluded`);
+    }
+  }
+  if (lines.length > 0) return lines.join('; ');
+  return reportedRates === 0
+    ? 'no rate was measurable this run, so no coverage is claimed'
+    : 'every reported rate covered its whole eligible population';
 }
 
 function gromJourneyFindings(findings, journey) {
@@ -503,6 +546,7 @@ function renderReport({
     `- Scope: ${partial ? 'complete comparable subset only' : 'complete account scope'}`,
     `- Cutoff: ${run.cutoff}`,
     `- Material limitations: ${(coverage.limitations ?? []).join(', ') || 'none recorded'}`,
+    `- Metric coverage: ${metricCoverageDisclosure(metrics)}`,
     '',
     '## System overview and current operation',
     '',
@@ -524,11 +568,23 @@ function renderReport({
         const cohort = metrics.cohorts?.currentClosedWeek?.[journey.journeyInstanceId] ?? 0;
         const kpis = Object.entries(metrics.metrics?.currentClosedWeek ?? {})
           .filter(([metricId]) => journey.metricIds.includes(metricId))
-          .map(([id, metric]) => `${id}: ${metric.numerator ?? 'unknown'}/${metric.denominator ?? 'unknown'}`)
+          .map(([id, metric]) => {
+            // Task A2a: a rate measured over PART of the eligible population must say so here,
+            // not only in the machine metric. An audit that measured 12% of the account must
+            // never read like one that measured all of it.
+            const partial = Number.isInteger(metric.excluded)
+              && metric.excluded > 0
+              && Number.isInteger(metric.denominator)
+              ? ` (measured ${metric.denominator} of ${metric.eligible} eligible)`
+              : '';
+            return `${id}: ${metric.numerator ?? 'unknown'}/${metric.denominator ?? 'unknown'}${partial}`;
+          })
           .join(', ') || 'No complete KPI';
-        return `Entry cohort: ${cohort}\n\nKPIs: ${kpis}`;
+        return `Entry cohort: ${cohort} (${COHORT_BASIS})\n\nKPIs: ${kpis}`;
       })
-      : 'Movement is reported from the sealed weekly metric outputs only.',
+      // The client branch has no per-journey scorecard to hang an annotation off, so the coverage
+      // behind these numbers is stated here in full rather than left to the machine metric.
+      : `Movement is reported from the sealed weekly metric outputs only. Metric coverage: ${metricCoverageDisclosure(metrics)}.`,
     '',
     '## What is working',
     '',

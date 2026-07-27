@@ -7018,6 +7018,11 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       "codeHash",
       "auditProfileHash",
       "providerToolProfileHash",
+      // SUPPLIED BY THE ORCHESTRATOR, DERIVED BY NOTHING IN THIS REPO. `metrics.mjs` owns the window
+      // set (`buildWindows` / `WINDOW_NAMES`) but never hashes it, so this string only tells two runs
+      // apart if the caller bumps it whenever that set changes. Task A2a ADDED `trailing90Days`: any
+      // orchestrator carrying a hash minted before that change is now labelling a different window
+      // set with the same value, and must bump it.
       "windowDefinitionsHash",
       "collectionBudgetHash",
       "capabilityManifestHashes",
@@ -8442,7 +8447,11 @@ function priorityFor({
     coverageScope: candidateCoverage.scope,
     severityBand: scope.severityBand,
     mechanismConfidence: confidence,
-    eligibleAffectedVolume: metric.eligible ?? null,
+    // Task A2a: `metric.eligible` is now the population BEFORE subject exclusions and can exceed
+    // the measured denominator (and is a number even on an UNKNOWN metric). The affected volume a
+    // priority tuple may claim is only what was actually measured, which `packetBody` re-derives
+    // from `denominator.value` and byte-compares.
+    eligibleAffectedVolume: metric.denominator ?? null,
     excessObservedLoss: metric.denominator === null || metric.numerator === null ? null : Math.max(0, metric.denominator - metric.numerator),
     commercialValue: value,
     recoverabilityBand: scope.recoverabilityBand,
@@ -8472,6 +8481,10 @@ function limitationCodes({
     codes.push("CAPABILITY_MISSING");
   }
   if (metric.state === "UNKNOWN") codes.push("METRIC_UNKNOWN");
+  if (Number.isInteger(metric.excluded) && metric.excluded > 0) {
+    codes.push("PARTIAL_SUBJECT_COVERAGE");
+  }
+  if (metric.coverageFloor === 0) codes.push("COVERAGE_FLOOR_DISABLED");
   if (!metric.rankEligible) codes.push("RATE_THRESHOLD_NOT_MET");
   if (confidence === "C1") codes.push("CAUSAL_PROOF_INCOMPLETE");
   if (confidence === "C0") codes.push("REQUIRED_EVIDENCE_MISSING");
@@ -8624,7 +8637,8 @@ function nominateMechanisms({
       eligibility: {
         rankEligible: metric.rankEligible,
         threshold: metric.threshold ?? null,
-        eligibleAffectedVolume: metric.eligible ?? null
+        // See `priorityFor`: the measured denominator, not the pre-exclusion eligible population.
+        eligibleAffectedVolume: metric.denominator ?? null
       },
       critical,
       criticalClass: critical ? scope.criticalClass : null,
@@ -26705,7 +26719,7 @@ function loadPublicCatalogSnapshot() {
 function loadPublicReadAllowlist() {
   return PublicReadAllowlistSchema.parse(readProfileFile("public-read-allowlist.v1.json"));
 }
-var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, schemaSourcePath;
+var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, EligibilityRuleSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, schemaSourcePath;
 var init_v1 = __esm({
   "schemas/v1.mjs"() {
     init_zod();
@@ -26931,13 +26945,28 @@ var init_v1 = __esm({
       approvalScope: external_exports.array(external_exports.string().min(1)).min(1),
       executable: external_exports.literal(false)
     }).strict();
+    EligibilityRuleSchema = JsonRecordSchema.check((ctx) => {
+      const rule = ctx.value;
+      if (Object.hasOwn(rule, "minimumSample")) {
+        const sample = rule.minimumSample;
+        if (!Number.isInteger(sample) || sample < 0) {
+          ctx.issues.push({ code: "custom", message: "minimumSample must be a non-negative integer", input: sample });
+        }
+      }
+      if (Object.hasOwn(rule, "minimumCoverage")) {
+        const floor = rule.minimumCoverage;
+        if (typeof floor !== "number" || !Number.isFinite(floor) || floor < 0 || floor > 1) {
+          ctx.issues.push({ code: "custom", message: "minimumCoverage must be a number in [0, 1]", input: floor });
+        }
+      }
+    });
     MetricEdgeSchema = external_exports.object({
       edgeId: external_exports.string().min(1),
       journeyId: external_exports.string().min(1),
       journeyInstanceId: JourneyInstanceIdSchema,
       fromStage: external_exports.string().min(1),
       toStage: external_exports.string().min(1),
-      eligibilityRule: JsonRecordSchema,
+      eligibilityRule: EligibilityRuleSchema,
       fromEventFields: external_exports.array(external_exports.string()),
       toEventFields: external_exports.array(external_exports.string()),
       allowedLag: external_exports.object({
@@ -26954,6 +26983,8 @@ var init_v1 = __esm({
     MetricContractsSchema = external_exports.object({
       profileId: external_exports.enum(["client", "grom_internal"]),
       version: external_exports.literal(SCHEMA_VERSION2),
+      /** Profile-wide coverage floor, used by every edge that declares no `minimumCoverage`. */
+      coverageFloor: external_exports.number().min(0).max(1).optional(),
       edges: external_exports.array(MetricEdgeSchema).min(1)
     }).strict().superRefine((contracts, ctx) => {
       const ids = contracts.edges.map(({ edgeId }) => edgeId);
