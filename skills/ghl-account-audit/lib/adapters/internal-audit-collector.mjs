@@ -54,9 +54,16 @@ export const DEFAULT_BUDGETS = Object.freeze({
   maxDefinitions: 60,
   /** Runtime windows read per run. Expensive; see the module header. */
   maxRuntimeWindows: 5,
-  /** Passed through to the runtime window, well under the server's own ceilings. */
+  /**
+   * Passed through to the runtime window, well under the server's own ceilings.
+   *
+   * OBSERVED: one real Grom UK workflow served 496 retained events and still reported
+   * `LOG_PAGE_BUDGET_EXHAUSTED` at 5 pages. A budget that truncates is honest (the composite says
+   * `complete: false` and names the code) but a truncated window cannot answer "did this step ever
+   * fire", so the default is set where a busy real workflow finishes.
+   */
   logPageSize: 100,
-  maxLogPages: 20,
+  maxLogPages: 50,
   maxLogRetries: 3,
   maxEnrollmentPages: 20,
   maxStepRosterPages: 20,
@@ -73,28 +80,36 @@ function byteOrder(left, right) {
 }
 
 /**
- * Pull the workflow ids out of whatever `list_workflows_complete` returned.
+ * Pull the workflow ids out of what `list_workflows_complete` returned.
  *
- * ITS SUCCESS SHAPE HAS NOT BEEN SEEN. So this reads the several places a roster plausibly lives,
- * accepts the first that yields ids, and reports `ROSTER_SHAPE_UNREADABLE` rather than an empty
- * list if none does. An empty roster and an unread roster are different facts and a detector that
- * confused them would report a healthy account.
+ * OBSERVED 2026-07-27, first live internal read: the real path is `data.workflows[]`, and each row
+ * identifies itself with **`_id`**. Not `id`, not `workflowId`. The first version of this tried both
+ * of those and neither, so it would have found the array, mapped every row to `undefined`, filtered
+ * them all out and reported `ROSTER_SHAPE_UNREADABLE` on a perfect 27-workflow roster. That is
+ * exactly what the tolerant reader was there to survive, and exactly why it was written tolerant
+ * instead of being narrowed from documentation.
  *
- * 🔴 Narrow this to the one real path the moment a live reply is seen.
+ * `_id` is now first. The other paths are kept, because they cost one array check each and a
+ * differently-shaped server is then still understood, but the real one is no longer a guess.
+ *
+ * An empty roster and an unread roster stay different facts: a detector that read one as the other
+ * would report a healthy account with no automation at all.
  */
 export function readRosterIds(data) {
   const candidates = [
+    data?.data?.workflows,
     data?.data?.workflowIds,
     data?.data?.roster,
-    data?.data?.workflows,
+    data?.workflows,
     data?.workflowIds,
     data?.roster,
-    data?.workflows,
   ];
   for (const candidate of candidates) {
     if (!Array.isArray(candidate)) continue;
     const ids = candidate
-      .map((entry) => (typeof entry === 'string' ? entry : entry?.id ?? entry?.workflowId))
+      .map((entry) => (typeof entry === 'string'
+        ? entry
+        : entry?._id ?? entry?.id ?? entry?.workflowId))
       .filter((id) => typeof id === 'string' && id.length > 0);
     if (ids.length > 0) return { ids: [...new Set(ids)].sort(byteOrder), readable: true };
   }
@@ -103,6 +118,31 @@ export function readRosterIds(data) {
     if (Array.isArray(candidate) && candidate.length === 0) return { ids: [], readable: true };
   }
   return { ids: [], readable: false };
+}
+
+/**
+ * The composite's own completeness verdict, which lives at `data.complete` inside the `{ok, data}`
+ * envelope. `undefined` when the reply does not state one, which is NOT the same as `false`.
+ */
+function statedComplete(result) {
+  const inner = result?.data?.data;
+  return isPlainObject(inner) && typeof inner.complete === 'boolean' ? inner.complete : undefined;
+}
+
+/**
+ * The composite's own coded warnings. OBSERVED shape: `[{code, component, detail, occurrences,
+ * detailSamples}]`. Only the CODE and the COMPONENT travel onward -- `detail` and `detailSamples`
+ * echo request context, and this value reaches the publication boundary.
+ */
+function statedWarnings(result) {
+  const inner = result?.data?.data;
+  if (!isPlainObject(inner) || !Array.isArray(inner.warnings)) return [];
+  return inner.warnings
+    .filter(isPlainObject)
+    .map(({ code, component }) => ({
+      code: typeof code === 'string' ? code : 'INTERNAL_AUDIT_WARNING_UNCODED',
+      component: typeof component === 'string' ? component : null,
+    }));
 }
 
 /**
@@ -164,9 +204,10 @@ export function createInternalAuditCollector({
         ? readRosterIds(roster.data)
         : { ids: [], readable: false };
       if (roster.ok && !readable) limitations.add('ROSTER_SHAPE_UNREADABLE');
-      if (roster.ok && readable && roster.data?.complete === false) {
+      if (roster.ok && readable && statedComplete(roster) === false) {
         limitations.add('ROSTER_INCOMPLETE');
       }
+      for (const warning of statedWarnings(roster)) limitations.add(warning.code);
 
       // Content-derived order and a stated cap, so the same account always reads the same
       // workflows and a dropped tail is DISCLOSED rather than looking like a shorter account.
@@ -203,8 +244,18 @@ export function createInternalAuditCollector({
           limitations.add(rail.latchedCode());
           break;
         }
-        const definition = await rail.definition(workflowId);
+        /*
+         * `export_workflow`, NOT `get_workflow`. OBSERVED: `get_workflow` returns a seven-field
+         * SUMMARY (`id, name, status, version, stepCount, updatedAt, note`) with no steps at all,
+         * while `export_workflow` carries `workflow.workflowData.templates[]` -- the real step
+         * graph, 37 steps on the workflow probed, each with `type`, `next` and `attributes` -- plus
+         * `triggers[]`, `stickyNotes[]` and the settings the catalog's rules are about
+         * (`allowMultiple`, `timezone`, `stopOnResponse`). Every configuration defect worth
+         * detecting lives in the export and none of it is in the summary.
+         */
+        const definition = await rail.exported(workflowId);
         if (!definition.ok) limitations.add(definition.code);
+        for (const warning of statedWarnings(definition)) limitations.add(warning.code);
 
         let runtimeWindow = null;
         if (runtimeWanted.has(workflowId) && windowUsable && rail.latchedCode() === null) {
@@ -219,6 +270,11 @@ export function createInternalAuditCollector({
             maxStepRosterPages: budget.maxStepRosterPages,
           });
           if (!runtimeWindow.ok) limitations.add(runtimeWindow.code);
+          // A composite answers `ok: true` with `complete: false` and coded warnings on a surface it
+          // could not finish -- OBSERVED on the live account: `LOG_PAGE_BUDGET_EXHAUSTED` and
+          // `COMPONENT_READ_FAILED` for an enrollment search the platform answered 422. Reading
+          // only `ok` would publish a truncated window as a whole one.
+          for (const warning of statedWarnings(runtimeWindow)) limitations.add(warning.code);
         }
 
         workflows.push({
@@ -244,6 +300,7 @@ export function createInternalAuditCollector({
         const bundle = await rail.aiBundle({ companyId });
         if (bundle.ok) aiConfiguration = bundle.data;
         else limitations.add(bundle.code);
+        for (const warning of statedWarnings(bundle)) limitations.add(warning.code);
       } else if (credential.agencyTokenUsable !== true) {
         limitations.add('AGENCY_TOKEN_UNAVAILABLE');
       }
@@ -264,7 +321,7 @@ export function createInternalAuditCollector({
         // here would forge the one record that says whether anything was ever proven.
         capabilityCoverage: Object.freeze([]),
         roster: Object.freeze({
-          complete: roster.ok && readable && roster.data?.complete !== false,
+          complete: roster.ok && readable && statedComplete(roster) !== false,
           reportedCount: ids.length,
           readCount: definitionIds.length,
           code: roster.ok ? null : roster.code,

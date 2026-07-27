@@ -79,20 +79,38 @@ export const LATCHING_CODES = Object.freeze(new Set([
 ]));
 
 /**
- * Keys whose VALUES are personal and must never be written down, matched case-insensitively on the
- * normalised key name. A DENY list is the wrong shape for a security boundary in general, but the
- * shape here is inverted: the payloads are the platform's own records with dozens of legitimate
- * structural fields, so an allow-list would drop the evidence. The compensating control is that
- * `scrubPersonal` also drops any STRING that looks like an email, a phone number or a URL wherever
- * it appears, whatever its key is called.
+ * ---------------------------------------------------------------------------------------------
+ * WHY THIS IS TWO LISTS AND A CONTEXT TEST, RATHER THAN ONE LIST OF KEY NAMES.
+ *
+ * The first version of this was a single deny list containing `name`, and the first live read
+ * proved it the wrong KIND of check: it redacted all 27 WORKFLOW NAMES. A workflow name is a
+ * business label the detectors have to read -- "this nurture never asks a human to step in" is not
+ * a sentence you can write about `[redacted]` -- while a contact's name is exactly what must never
+ * be written down. The same field name means different things on different records, so no list
+ * keyed on the name alone can be right about both.
+ *
+ * So the decision comes from the RECORD's own shape:
+ *
+ *   ALWAYS_PERSONAL          unambiguous on any record. `email`, `phone`, `firstName`, an address.
+ *   PERSONAL_IN_PERSON_RECORD  ambiguous, and redacted only when the enclosing record carries a
+ *                            person marker. `name`, `title`, `city`, `companyName`.
+ *   PERSON_MARKERS           what makes a record a person: `email`, `phone`, `contactId`,
+ *                            `contactName`, `firstName`, `lastName`, `fullName`, `dateOfBirth`.
+ *
+ * A workflow record carries `locationId`, `status`, `version` and no person marker, so its `name`
+ * survives. An appointment carries `contactId`, so its `title` ("<person> and GROM Digital") does
+ * not. An enrollment row carries `contactId`, so its `name` does not.
+ *
+ * Two compensating controls remain, because a context test can be fooled by a record shape nobody
+ * anticipated: any STRING that looks like an email, an international phone number, a URL or a
+ * bearer credential is redacted wherever it appears whatever its key, and a personal SUBTREE goes
+ * whole rather than leaf by leaf.
+ * ---------------------------------------------------------------------------------------------
  */
-const PERSONAL_KEYS = Object.freeze(new Set([
+const ALWAYS_PERSONAL = Object.freeze(new Set([
   'additionalemails',
   'additionalphones',
   'address',
-  'city',
-  'companyname',
-  'contactname',
   'dateofbirth',
   'email',
   'firstname',
@@ -101,12 +119,28 @@ const PERSONAL_KEYS = Object.freeze(new Set([
   'lastmessagebody',
   'lastname',
   'lastnamelowercase',
-  'name',
   'phone',
   'phonelabel',
   'postalcode',
+]));
+const PERSONAL_IN_PERSON_RECORD = Object.freeze(new Set([
+  'city',
+  'companyname',
+  'contactname',
+  'name',
   'state',
+  'title',
   'website',
+]));
+const PERSON_MARKERS = Object.freeze(new Set([
+  'contactid',
+  'contactname',
+  'dateofbirth',
+  'email',
+  'firstname',
+  'fullname',
+  'lastname',
+  'phone',
 ]));
 
 /** An email, an international phone number, a URL, or a bearer credential, anywhere. */
@@ -130,9 +164,18 @@ function normalizeKey(key) {
  * email" from "we refused to write the email down" would report a data-quality defect that is not
  * there.
  */
-export function scrubPersonal(value, key = '', seen = new WeakSet()) {
+/** Does this record identify a PERSON? Decided from its own field names, not from where it sits. */
+function looksLikePersonRecord(record) {
+  if (!isPlainObject(record)) return false;
+  return Object.keys(record).some((key) => PERSON_MARKERS.has(normalizeKey(key)));
+}
+
+export function scrubPersonal(value, key = '', seen = new WeakSet(), inPersonRecord = false) {
+  const normalized = normalizeKey(key);
+  const personal = ALWAYS_PERSONAL.has(normalized)
+    || (inPersonRecord && PERSONAL_IN_PERSON_RECORD.has(normalized));
   if (typeof value === 'string') {
-    if (PERSONAL_KEYS.has(normalizeKey(key)) || PERSONAL_PATTERN.test(value)) return REDACTED;
+    if (personal || PERSONAL_PATTERN.test(value)) return REDACTED;
     return value;
   }
   if (value === null || ['number', 'boolean'].includes(typeof value)) return value;
@@ -142,13 +185,21 @@ export function scrubPersonal(value, key = '', seen = new WeakSet()) {
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      // The KEY travels into the elements, so `additionalEmails: ["a@b.c"]` is redacted by name
-      // and not only by the pattern below it.
-      return value.map((entry) => scrubPersonal(entry, key, seen));
+      // The KEY and the person context both travel into the elements, so
+      // `additionalEmails: ["a@b.c"]` is redacted by name and not only by the pattern below it,
+      // and a list of contact rows is judged row by row on its own shape.
+      return value.map((entry) => scrubPersonal(entry, key, seen, inPersonRecord));
     }
-    if (PERSONAL_KEYS.has(normalizeKey(key))) return REDACTED;
+    if (personal) return REDACTED;
+    // A record decides for its OWN children, and the flag does not travel back up. A workflow
+    // holding a list of enrollments does not become a person record, and an enrollment inside it
+    // does not stop being one.
+    const childContext = looksLikePersonRecord(value);
     return Object.fromEntries(
-      Object.entries(value).map(([childKey, child]) => [childKey, scrubPersonal(child, childKey, seen)]),
+      Object.entries(value).map(([childKey, child]) => [
+        childKey,
+        scrubPersonal(child, childKey, seen, childContext),
+      ]),
     );
   } finally {
     seen.delete(value);
@@ -199,30 +250,44 @@ function refusal(tool, body) {
 }
 
 /**
- * 🔴 THE ONE PLACE THAT CHANGES WHEN A LIVE SUCCESS REPLY IS FIRST SEEN.
+ * What a SUCCESS reply must satisfy, now written from real replies rather than from documentation.
  *
- * Every field named here has been observed. Nothing else is asserted, on purpose: the success
- * bodies of the three composites have not been seen, and writing their grammar out of the
- * server's README would be the exact mistake that has already shipped a validator failing every
- * honest run on this project. Extra fields pass through; missing ones that nothing reads stay
- * missing rather than failing the run.
+ * OBSERVED 2026-07-27, first live internal read: the envelope is `{ok, data}` and EVERYTHING is
+ * under `data`. `contractVersion` and `boundLocationId` are `data.contractVersion` and
+ * `data.boundLocationId`, not top-level. The first version of this checked the top level only and
+ * threw `INTERNAL_AUDIT_CONTRACT_MISMATCH` on a perfectly good reply -- which is the same failure
+ * mode, in the same place, as the specs written from a producer's source that have already cost
+ * this project a day. Both levels are now read, and the top level is kept because it costs nothing
+ * and a differently-shaped server would still be understood.
+ *
+ * `list_workflows_complete` genuinely carries NO `contractVersion`, which is why its entry in the
+ * table above is `null` rather than a version. Confirmed against the live reply.
+ *
+ * Still deliberately unasserted: the rest of the bodies. Extra fields pass through and fields
+ * nothing reads may be missing, because a shape grammar over 25 keys would fail an honest run the
+ * first time the server added one.
  */
+function contractVersionOf(body) {
+  if (typeof body.contractVersion === 'string') return body.contractVersion;
+  if (isPlainObject(body.data) && typeof body.data.contractVersion === 'string') {
+    return body.data.contractVersion;
+  }
+  return null;
+}
+
 function assertSeenSuccessShape(tool, body, expectedLocationId) {
   const expectedContract = EXPECTED_CONTRACT_VERSIONS[tool];
   if (expectedContract !== null && expectedContract !== undefined) {
-    if (body.contractVersion !== expectedContract) {
+    if (contractVersionOf(body) !== expectedContract) {
       throw codedError('INTERNAL_AUDIT_CONTRACT_MISMATCH');
     }
   }
-  // The one unrecoverable mistake. If the reply names a location at all, it must be OUR location.
-  // An absent binding is not silently accepted for a tool that is supposed to carry one.
-  if (Object.hasOwn(body, 'boundLocationId') && body.boundLocationId !== expectedLocationId) {
-    throw codedError('INTERNAL_AUDIT_LOCATION_MISMATCH');
-  }
-  if (Object.hasOwn(body, 'data') && isPlainObject(body.data)) {
+  // The one unrecoverable mistake. Wherever the reply names a location, it must be OUR location.
+  for (const record of [body, body.data]) {
+    if (!isPlainObject(record)) continue;
     if (
-      Object.hasOwn(body.data, 'boundLocationId')
-      && body.data.boundLocationId !== expectedLocationId
+      Object.hasOwn(record, 'boundLocationId')
+      && record.boundLocationId !== expectedLocationId
     ) throw codedError('INTERNAL_AUDIT_LOCATION_MISMATCH');
   }
 }

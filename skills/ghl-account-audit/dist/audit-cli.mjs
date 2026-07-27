@@ -40573,27 +40573,44 @@ var init_ghl_native_session = __esm({
 });
 
 // lib/adapters/internal-audit-collector.mjs
+function isPlainObject8(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
 function byteOrder(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 function readRosterIds(data) {
   const candidates = [
+    data?.data?.workflows,
     data?.data?.workflowIds,
     data?.data?.roster,
-    data?.data?.workflows,
+    data?.workflows,
     data?.workflowIds,
-    data?.roster,
-    data?.workflows
+    data?.roster
   ];
   for (const candidate of candidates) {
     if (!Array.isArray(candidate)) continue;
-    const ids = candidate.map((entry) => typeof entry === "string" ? entry : entry?.id ?? entry?.workflowId).filter((id) => typeof id === "string" && id.length > 0);
+    const ids = candidate.map((entry) => typeof entry === "string" ? entry : entry?._id ?? entry?.id ?? entry?.workflowId).filter((id) => typeof id === "string" && id.length > 0);
     if (ids.length > 0) return { ids: [...new Set(ids)].sort(byteOrder), readable: true };
   }
   for (const candidate of candidates) {
     if (Array.isArray(candidate) && candidate.length === 0) return { ids: [], readable: true };
   }
   return { ids: [], readable: false };
+}
+function statedComplete(result) {
+  const inner = result?.data?.data;
+  return isPlainObject8(inner) && typeof inner.complete === "boolean" ? inner.complete : void 0;
+}
+function statedWarnings(result) {
+  const inner = result?.data?.data;
+  if (!isPlainObject8(inner) || !Array.isArray(inner.warnings)) return [];
+  return inner.warnings.filter(isPlainObject8).map(({ code, component }) => ({
+    code: typeof code === "string" ? code : "INTERNAL_AUDIT_WARNING_UNCODED",
+    component: typeof component === "string" ? component : null
+  }));
 }
 function createInternalAuditCollector({
   rail,
@@ -40633,9 +40650,10 @@ function createInternalAuditCollector({
       if (!roster.ok) limitations.add(roster.code);
       const { ids, readable } = roster.ok ? readRosterIds(roster.data) : { ids: [], readable: false };
       if (roster.ok && !readable) limitations.add("ROSTER_SHAPE_UNREADABLE");
-      if (roster.ok && readable && roster.data?.complete === false) {
+      if (roster.ok && readable && statedComplete(roster) === false) {
         limitations.add("ROSTER_INCOMPLETE");
       }
+      for (const warning of statedWarnings(roster)) limitations.add(warning.code);
       const definitionIds = ids.slice(0, budget.maxDefinitions);
       if (ids.length > definitionIds.length) limitations.add("DEFINITION_BUDGET_EXHAUSTED");
       const requestedRuntime = [...new Set(runtimeWorkflowIds)].sort(byteOrder);
@@ -40660,8 +40678,9 @@ function createInternalAuditCollector({
           limitations.add(rail.latchedCode());
           break;
         }
-        const definition = await rail.definition(workflowId);
+        const definition = await rail.exported(workflowId);
         if (!definition.ok) limitations.add(definition.code);
+        for (const warning of statedWarnings(definition)) limitations.add(warning.code);
         let runtimeWindow = null;
         if (runtimeWanted.has(workflowId) && windowUsable && rail.latchedCode() === null) {
           runtimeWindow = await rail.runtimeWindow({
@@ -40675,6 +40694,7 @@ function createInternalAuditCollector({
             maxStepRosterPages: budget.maxStepRosterPages
           });
           if (!runtimeWindow.ok) limitations.add(runtimeWindow.code);
+          for (const warning of statedWarnings(runtimeWindow)) limitations.add(warning.code);
         }
         workflows.push({
           workflowId,
@@ -40691,6 +40711,7 @@ function createInternalAuditCollector({
         const bundle = await rail.aiBundle({ companyId });
         if (bundle.ok) aiConfiguration = bundle.data;
         else limitations.add(bundle.code);
+        for (const warning of statedWarnings(bundle)) limitations.add(warning.code);
       } else if (credential.agencyTokenUsable !== true) {
         limitations.add("AGENCY_TOKEN_UNAVAILABLE");
       }
@@ -40709,7 +40730,7 @@ function createInternalAuditCollector({
         // here would forge the one record that says whether anything was ever proven.
         capabilityCoverage: Object.freeze([]),
         roster: Object.freeze({
-          complete: roster.ok && readable && roster.data?.complete !== false,
+          complete: roster.ok && readable && statedComplete(roster) !== false,
           reportedCount: ids.length,
           readCount: definitionIds.length,
           code: roster.ok ? null : roster.code
@@ -40734,9 +40755,16 @@ var init_internal_audit_collector = __esm({
       maxDefinitions: 60,
       /** Runtime windows read per run. Expensive; see the module header. */
       maxRuntimeWindows: 5,
-      /** Passed through to the runtime window, well under the server's own ceilings. */
+      /**
+       * Passed through to the runtime window, well under the server's own ceilings.
+       *
+       * OBSERVED: one real Grom UK workflow served 496 retained events and still reported
+       * `LOG_PAGE_BUDGET_EXHAUSTED` at 5 pages. A budget that truncates is honest (the composite says
+       * `complete: false` and names the code) but a truncated window cannot answer "did this step ever
+       * fire", so the default is set where a busy real workflow finishes.
+       */
       logPageSize: 100,
-      maxLogPages: 20,
+      maxLogPages: 50,
       maxLogRetries: 3,
       maxEnrollmentPages: 20,
       maxStepRosterPages: 20
@@ -40745,7 +40773,7 @@ var init_internal_audit_collector = __esm({
 });
 
 // lib/adapters/internal-audit.mjs
-function isPlainObject8(value) {
+function isPlainObject9(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -40753,9 +40781,15 @@ function isPlainObject8(value) {
 function normalizeKey(key) {
   return String(key).toLowerCase().replaceAll(/[^a-z]/gu, "");
 }
-function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet()) {
+function looksLikePersonRecord(record2) {
+  if (!isPlainObject9(record2)) return false;
+  return Object.keys(record2).some((key) => PERSON_MARKERS.has(normalizeKey(key)));
+}
+function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet(), inPersonRecord = false) {
+  const normalized = normalizeKey(key);
+  const personal = ALWAYS_PERSONAL.has(normalized) || inPersonRecord && PERSONAL_IN_PERSON_RECORD.has(normalized);
   if (typeof value === "string") {
-    if (PERSONAL_KEYS.has(normalizeKey(key)) || PERSONAL_PATTERN.test(value)) return REDACTED;
+    if (personal || PERSONAL_PATTERN.test(value)) return REDACTED;
     return value;
   }
   if (value === null || ["number", "boolean"].includes(typeof value)) return value;
@@ -40765,11 +40799,15 @@ function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet()) {
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      return value.map((entry) => scrubPersonal(entry, key, seen));
+      return value.map((entry) => scrubPersonal(entry, key, seen, inPersonRecord));
     }
-    if (PERSONAL_KEYS.has(normalizeKey(key))) return REDACTED;
+    if (personal) return REDACTED;
+    const childContext = looksLikePersonRecord(value);
     return Object.fromEntries(
-      Object.entries(value).map(([childKey, child]) => [childKey, scrubPersonal(child, childKey, seen)])
+      Object.entries(value).map(([childKey, child]) => [
+        childKey,
+        scrubPersonal(child, childKey, seen, childContext)
+      ])
     );
   } finally {
     seen.delete(value);
@@ -40787,7 +40825,7 @@ function readEnvelope(reply) {
       throw codedError("INTERNAL_AUDIT_RESPONSE_UNREADABLE");
     }
   }
-  if (!isPlainObject8(body) || !Object.hasOwn(body, "ok")) {
+  if (!isPlainObject9(body) || !Object.hasOwn(body, "ok")) {
     throw codedError("INTERNAL_AUDIT_RESPONSE_UNREADABLE");
   }
   return body;
@@ -40801,18 +40839,23 @@ function refusal(tool, body) {
     data: null
   });
 }
+function contractVersionOf(body) {
+  if (typeof body.contractVersion === "string") return body.contractVersion;
+  if (isPlainObject9(body.data) && typeof body.data.contractVersion === "string") {
+    return body.data.contractVersion;
+  }
+  return null;
+}
 function assertSeenSuccessShape(tool, body, expectedLocationId) {
   const expectedContract = EXPECTED_CONTRACT_VERSIONS[tool];
   if (expectedContract !== null && expectedContract !== void 0) {
-    if (body.contractVersion !== expectedContract) {
+    if (contractVersionOf(body) !== expectedContract) {
       throw codedError("INTERNAL_AUDIT_CONTRACT_MISMATCH");
     }
   }
-  if (Object.hasOwn(body, "boundLocationId") && body.boundLocationId !== expectedLocationId) {
-    throw codedError("INTERNAL_AUDIT_LOCATION_MISMATCH");
-  }
-  if (Object.hasOwn(body, "data") && isPlainObject8(body.data)) {
-    if (Object.hasOwn(body.data, "boundLocationId") && body.data.boundLocationId !== expectedLocationId) throw codedError("INTERNAL_AUDIT_LOCATION_MISMATCH");
+  for (const record2 of [body, body.data]) {
+    if (!isPlainObject9(record2)) continue;
+    if (Object.hasOwn(record2, "boundLocationId") && record2.boundLocationId !== expectedLocationId) throw codedError("INTERNAL_AUDIT_LOCATION_MISMATCH");
   }
 }
 function createInternalAuditAdapter({
@@ -40940,7 +40983,7 @@ function createInternalAuditAdapter({
     }
   };
 }
-var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, PERSONAL_KEYS, PERSONAL_PATTERN, REDACTED;
+var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, ALWAYS_PERSONAL, PERSONAL_IN_PERSON_RECORD, PERSON_MARKERS, PERSONAL_PATTERN, REDACTED;
 var init_internal_audit = __esm({
   "lib/adapters/internal-audit.mjs"() {
     init_collection();
@@ -40955,13 +40998,10 @@ var init_internal_audit = __esm({
       "RATE_LIMITED",
       "TRANSPORT_FAILED"
     ]));
-    PERSONAL_KEYS = Object.freeze(/* @__PURE__ */ new Set([
+    ALWAYS_PERSONAL = Object.freeze(/* @__PURE__ */ new Set([
       "additionalemails",
       "additionalphones",
       "address",
-      "city",
-      "companyname",
-      "contactname",
       "dateofbirth",
       "email",
       "firstname",
@@ -40970,12 +41010,28 @@ var init_internal_audit = __esm({
       "lastmessagebody",
       "lastname",
       "lastnamelowercase",
-      "name",
       "phone",
       "phonelabel",
-      "postalcode",
+      "postalcode"
+    ]));
+    PERSONAL_IN_PERSON_RECORD = Object.freeze(/* @__PURE__ */ new Set([
+      "city",
+      "companyname",
+      "contactname",
+      "name",
       "state",
+      "title",
       "website"
+    ]));
+    PERSON_MARKERS = Object.freeze(/* @__PURE__ */ new Set([
+      "contactid",
+      "contactname",
+      "dateofbirth",
+      "email",
+      "firstname",
+      "fullname",
+      "lastname",
+      "phone"
     ]));
     PERSONAL_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+\d[\d\s().-]{7,}\d|https?:\/\/|Bearer\s+\S+)/iu;
     REDACTED = "[redacted]";
@@ -41851,14 +41907,14 @@ var init_trusted_public_policy = __esm({
 });
 
 // lib/adapters/mcp-transport.mjs
-function isPlainObject9(value) {
+function isPlainObject10(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function validateCredentialRef(reference) {
   if (reference === null) return null;
-  if (!isPlainObject9(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject10(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(reference).sort();
   if (reference.kind === "environment" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof reference.name === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(reference.name)) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (reference.kind === "secret-store" && keys.length === 4 && keys[0] === "kind" && keys[1] === "provenance" && keys[2] === "provider" && keys[3] === "reference" && typeof reference.provider === "string" && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider) && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance && typeof reference.reference === "string" && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference) && !RAW_CREDENTIAL_SHAPE.test(reference.reference) && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
@@ -41872,7 +41928,7 @@ function validateCredentialRef(reference) {
   throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
 }
 function validateProviderConfig(config2) {
-  if (!isPlainObject9(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject10(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(config2).sort();
   if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   return Object.freeze({
@@ -41913,7 +41969,7 @@ function collectLocationIndicators2(value, indicators = [], stack = /* @__PURE__
   }
 }
 function validateTransport(transport) {
-  if (!isPlainObject9(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
+  if (!isPlainObject10(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).some((key) => !["connect", "fetch", "kind", "url"].includes(key))) {
       throw codedError("MCP_TRANSPORT_INVALID", TypeError);
@@ -42037,10 +42093,10 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     publicCatalogSnapshotHash: trustedPolicy.snapshotHash,
     publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
-      if (!isPlainObject9(request) || !ALLOWED_TOOLS.has(request.name)) {
+      if (!isPlainObject10(request) || !ALLOWED_TOOLS.has(request.name)) {
         throw codedError("TOOL_NOT_AVAILABLE");
       }
-      if (!isPlainObject9(request.arguments) || containsForbiddenArgument(request.arguments)) {
+      if (!isPlainObject10(request.arguments) || containsForbiddenArgument(request.arguments)) {
         throw codedError("MUTATION_ARGUMENT_NOT_ALLOWED");
       }
       const policy = request.arguments.policy;
@@ -42050,7 +42106,7 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
         throw codedError("ACTION_NOT_ALLOWED");
       }
       if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError("ACTION_NOT_ALLOWED");
-      if (!isPlainObject9(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
+      if (!isPlainObject10(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
         (locationId) => locationId !== config2.expectedLocationId
       )) throw codedError("LOCATION_MISMATCH");
       try {
@@ -42107,16 +42163,16 @@ var init_mcp_transport = __esm({
 });
 
 // lib/adapters/public-ghl.mjs
-function isPlainObject10(value) {
+function isPlainObject11(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function parseToolResult(response) {
   let value = response;
-  if (isPlainObject10(response) && isPlainObject10(response.structuredContent)) {
+  if (isPlainObject11(response) && isPlainObject11(response.structuredContent)) {
     value = response.structuredContent;
-  } else if (isPlainObject10(response) && Array.isArray(response.content)) {
+  } else if (isPlainObject11(response) && Array.isArray(response.content)) {
     const text = response.content.find((entry) => entry?.type === "text")?.text;
     if (typeof text !== "string") throw codedError("PUBLIC_RESPONSE_INVALID");
     try {
@@ -42125,7 +42181,7 @@ function parseToolResult(response) {
       throw codedError("PUBLIC_RESPONSE_INVALID");
     }
   }
-  if (!isPlainObject10(value) || !Array.isArray(value.items) || !isPlainObject10(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
+  if (!isPlainObject11(value) || !Array.isArray(value.items) || !isPlainObject11(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
   return cloneJson(value, "PUBLIC_RESPONSE_INVALID");
 }
 function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalSignal) {
@@ -42179,7 +42235,7 @@ function startTime(runtime) {
   return typeof runtime.now === "function" ? runtime.now() : Date.now();
 }
 function normalizeCapability(capability, allowlist, allowlistHash, client) {
-  if (!isPlainObject10(capability) || typeof capability.actionId !== "string") {
+  if (!isPlainObject11(capability) || typeof capability.actionId !== "string") {
     throw codedError("ACTION_NOT_ALLOWED");
   }
   const listed = allowlist.actions.find(({ actionId }) => actionId === capability.actionId);
@@ -42256,7 +42312,7 @@ function normalizeRawPageSink(rawPageSink) {
   });
 }
 function validateSealedPage(sealed, payloadHash) {
-  if (!isPlainObject10(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
+  if (!isPlainObject11(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
   return Object.freeze({
     opaqueRef: sealed.opaqueRef,
     payloadHash: sealed.payloadHash
@@ -42291,7 +42347,7 @@ function validateCheckpointArtifact(artifact, index, expectedCursor, reportedCou
     "reportedCount",
     "responseBytes"
   ];
-  if (!isPlainObject10(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject11(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   return artifact.nextCursor;
 }
 function validateResumeCheckpoint(checkpoint, {
@@ -42320,7 +42376,7 @@ function validateResumeCheckpoint(checkpoint, {
     "scopeHash",
     "source"
   ];
-  if (!isPlainObject10(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject11(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   let appliedWindow;
   try {
     appliedWindow = validateCollectionWindow(
@@ -44499,7 +44555,7 @@ var init_evidence_graph = __esm({
 function codedError9(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject11(value) {
+function isPlainObject12(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
   );
@@ -44517,7 +44573,7 @@ function byteCompare(left, right) {
 function readPath(record2, path) {
   let current = record2;
   for (const key of path.split(".")) {
-    if (!isPlainObject11(current) || !Object.hasOwn(current, key)) return void 0;
+    if (!isPlainObject12(current) || !Object.hasOwn(current, key)) return void 0;
     current = current[key];
   }
   return current;
@@ -44716,7 +44772,7 @@ function orderingKey(value, seen = /* @__PURE__ */ new WeakSet()) {
   }
 }
 function envelopeOrderingKey(collection) {
-  if (!isPlainObject11(collection)) return orderingKey(collection);
+  if (!isPlainObject12(collection)) return orderingKey(collection);
   const rows = Array.isArray(collection.items) ? collection.items : [];
   const withoutRows = Object.fromEntries(
     Object.entries(collection).filter(([key]) => key !== "items")
@@ -44734,22 +44790,22 @@ function talliedAnnotations(counter) {
   return [...counter.entries()].sort(([left], [right]) => byteCompare(left, right)).map(([code, count]) => ({ code, count }));
 }
 function assertInput({ collections, context, profile, projection }) {
-  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject11(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject11(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject11(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject11(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError9("PROJECTION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject12(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject12(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject12(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject12(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError9("PROJECTION_INPUT_INVALID", TypeError);
 }
 function assertWindowShape(window) {
-  if (!isPlainObject11(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (!isPlainObject12(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
 }
 function copyWindow(window) {
   return { ...window };
 }
 function assertSourceCollection(collection, locationId) {
-  if (!isPlainObject11(collection)) {
+  if (!isPlainObject12(collection)) {
     throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   }
   if (collection.boundLocationId !== locationId) {
     throw codedError9("PROJECTION_LOCATION_MISMATCH");
   }
-  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject11(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject12(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError9("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   assertWindowShape(collection.requestedWindow);
   assertWindowShape(collection.appliedWindow);
   if (Date.parse(collection.appliedWindow.from) < Date.parse(collection.requestedWindow.from) || Date.parse(collection.appliedWindow.to) > Date.parse(collection.requestedWindow.to)) throw codedError9("PROJECTION_WINDOW_MISMATCH");
@@ -44778,7 +44834,7 @@ function resolveJourneyInstances(profile, projection) {
       if (typeof entity?.recordType !== "string" || entity.recordType.length === 0) {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject11(entity.when) || typeof entity.when.kind !== "string") {
+      if (!isPlainObject12(entity.when) || typeof entity.when.kind !== "string") {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
     }
@@ -44790,7 +44846,7 @@ function resolveJourneyInstances(profile, projection) {
       if (!Array.isArray(event.eventTimeField) || event.eventTimeField.length === 0) {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject11(event.when) || typeof event.when.kind !== "string") {
+      if (!isPlainObject12(event.when) || typeof event.when.kind !== "string") {
         throw codedError9("PROJECTION_CONTRACT_INVALID");
       }
       if (Object.hasOwn(event, "revenueFrom") && !Array.isArray(event.revenueFrom)) {
@@ -44831,7 +44887,7 @@ function projectJourneyEvents({ collections, context, profile, projection } = {}
     const entities = plan.spec.entities ?? [];
     const events = plan.spec.events ?? [];
     for (const record2 of plan.collection.items) {
-      if (!isPlainObject11(record2)) {
+      if (!isPlainObject12(record2)) {
         tally(plan.suppressed, REASON_NOT_AN_OBJECT);
         continue;
       }
@@ -45762,7 +45818,7 @@ var init_metrics = __esm({
 function codedError11(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject12(value) {
+function isPlainObject13(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
@@ -45800,10 +45856,10 @@ function assertLocation(value, locationId, seen = /* @__PURE__ */ new WeakSet())
   }
 }
 function assertWindow(window, code) {
-  if (!isPlainObject12(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError11(code, TypeError);
+  if (!isPlainObject13(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError11(code, TypeError);
 }
 function validateCollection(collection, locationId) {
-  if (!isPlainObject12(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject12(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError11(
+  if (!isPlainObject13(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject13(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError11(
     collection?.boundLocationId !== locationId ? "EVIDENCE_LOCATION_MISMATCH" : "EVIDENCE_COLLECTION_INVALID",
     TypeError
   );
@@ -45816,7 +45872,7 @@ function validateCollection(collection, locationId) {
   }
 }
 function normalizeItem(item, provenance, occurrenceOrdinal) {
-  if (!isPlainObject12(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
+  if (!isPlainObject13(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
     throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
   }
   if (Object.hasOwn(item, "eventTime") && !isCanonicalTimestamp2(item.eventTime) || Object.hasOwn(item, "evidenceRef") && (typeof item.evidenceRef !== "string" || !/^ev_[a-f0-9]{16,64}$/u.test(item.evidenceRef)) || Object.hasOwn(item, "definitionHash") && !/^[a-f0-9]{64}$/u.test(item.definitionHash) || Object.hasOwn(item, "effectiveDefinitionHash") && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash) || Object.hasOwn(item, "cohortInstanceRef") && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef) || Object.hasOwn(item, "revenueAmount") && (typeof item.revenueAmount !== "number" || !Number.isFinite(item.revenueAmount) || item.revenueAmount < 0)) throw codedError11("EVIDENCE_RECORD_INVALID", TypeError);
@@ -45872,7 +45928,7 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
   return canonical;
 }
 function normalizeEvidence(records, context) {
-  if (!Array.isArray(records) || records.length === 0 || !isPlainObject12(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError11("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(records) || records.length === 0 || !isPlainObject13(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError11("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
   const pending = [];
   for (const collection of records) {
     validateCollection(collection, context.locationId);
@@ -45936,7 +45992,7 @@ var init_normalize = __esm({
 function codedError12(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject13(value) {
+function isPlainObject14(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -45944,7 +46000,7 @@ function isPlainObject13(value) {
 function readPath2(row, path) {
   let current = row;
   for (const segment of path.split(".")) {
-    if (!isPlainObject13(current)) return void 0;
+    if (!isPlainObject14(current)) return void 0;
     current = current[segment];
   }
   return current;
@@ -45959,7 +46015,7 @@ function isPresent(value, { requirePositiveNumber = false } = {}) {
   }
   if (typeof value === "boolean") return !requirePositiveNumber;
   if (Array.isArray(value)) return value.length > 0;
-  if (isPlainObject13(value)) return Object.keys(value).length > 0;
+  if (isPlainObject14(value)) return Object.keys(value).length > 0;
   return false;
 }
 function bucketFor(value) {
@@ -46884,7 +46940,7 @@ import {
 function codedError16(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject14(value) {
+function isPlainObject15(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -46912,7 +46968,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync5(descriptor, "utf8"));
-    if (!isPlainObject14(parsed)) throw new Error();
+    if (!isPlainObject15(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError16(code);
@@ -46921,7 +46977,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject14(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject14(config2.frozenInputs) || !isPlainObject14(config2.context) || !isPlainObject14(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject15(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject15(config2.frozenInputs) || !isPlainObject15(config2.context) || !isPlainObject15(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -46929,7 +46985,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject14(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject14(rail.capabilityProofIndex) || !isPlainObject14(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject14(transport.responses) || !isPlainObject14(transport.toolsList))) throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject15(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject15(rail.capabilityProofIndex) || !isPlainObject15(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject15(transport.responses) || !isPlainObject15(transport.toolsList))) throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46959,7 +47015,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
     throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject14(frozenInputs)) fail2();
+  if (!isPlainObject15(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -47029,7 +47085,7 @@ function assertSealDocumentShape(document) {
   const fail2 = () => {
     throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject14(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject14(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject15(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject15(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -47075,7 +47131,7 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject14(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  if (!isPlainObject15(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve5(projectRoot);
   const pathname = resolve5(project, declaration.relativePath);
   if (!isWithin3(project, pathname)) fail2();
@@ -47133,7 +47189,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject14(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject15(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve5(projectRoot);
   const pathname = resolve5(project, descriptor.relativePath);
   if (!isWithin3(project, pathname)) {
@@ -47334,7 +47390,7 @@ function publicConfigError() {
   throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject14(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject15(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -47354,7 +47410,7 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 function validatePublicInternalAudit(value) {
-  if (!isPlainObject14(value)) publicConfigError();
+  if (!isPlainObject15(value)) publicConfigError();
   if (Object.keys(value).some((key) => !PUBLIC_INTERNAL_AUDIT_KEYS.includes(key))) {
     publicConfigError();
   }
@@ -47373,7 +47429,7 @@ function validatePublicInternalAudit(value) {
     if (!Array.isArray(value.runtimeWorkflowIds) || value.runtimeWorkflowIds.some((id) => typeof id !== "string" || id.length === 0)) publicConfigError();
   }
   if (Object.hasOwn(value, "budgets")) {
-    if (!isPlainObject14(value.budgets)) publicConfigError();
+    if (!isPlainObject15(value.budgets)) publicConfigError();
     for (const [key, limit] of Object.entries(value.budgets)) {
       if (!Object.hasOwn(DEFAULT_BUDGETS, key)) publicConfigError();
       if (!Number.isSafeInteger(limit) || limit < 1) publicConfigError();
@@ -47381,9 +47437,9 @@ function validatePublicInternalAudit(value) {
   }
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject14(config2)) publicConfigError();
+  if (!isPlainObject15(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject14(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject14(config2.frozenInputs) || !isPlainObject14(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject15(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject15(config2.frozenInputs) || !isPlainObject15(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
   if (Object.hasOwn(config2, "internalAudit")) validatePublicInternalAudit(config2.internalAudit);
   if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
@@ -47391,7 +47447,7 @@ function validatePublicConfig(config2) {
   }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject14(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject15(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -47419,7 +47475,7 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject14(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject15(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError16("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve5(projectRoot);
   const pathname = resolve5(project, descriptor.relativePath);
   if (!isWithin3(project, pathname)) {
@@ -47710,7 +47766,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject14(sealed)) return null;
+    if (!isPlainObject15(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -47726,7 +47782,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
 }
 function buildInternalAuditAdapter({ internalAudit, expectedLocationId, connectOverride, runtime }) {
-  if (!isPlainObject14(internalAudit)) return null;
+  if (!isPlainObject15(internalAudit)) return null;
   const connect = connectOverride ?? createInternalAuditConnect({
     serverPath: internalAudit.transport.serverPath,
     tokenFilePath: internalAudit.transport.tokenFilePath

@@ -6,9 +6,9 @@
  * latching circuit, and per-tool contract versions. So a double here cannot invent a reply the
  * server would never send, which is the failure mode that has hidden three defects on this project.
  *
- * What is deliberately NOT asserted: the composites' success bodies. They have not been seen.
- * `readRosterIds` is tolerant on purpose and says so, and it is marked for narrowing the moment a
- * live reply exists.
+ * As of the first live internal read (2026-07-27) the composites' SUCCESS shapes below are real and
+ * no longer guesses. Getting them wrong was not hypothetical: every one of these tests passed
+ * against the wrong shape, and the account is what corrected them.
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -55,20 +55,75 @@ const okAuth = (seconds = 3600, agencySeconds = 3600) => ({
   },
 });
 
+/*
+ * THE SHAPES BELOW ARE THE REAL ONES, and they were WRONG here until 2026-07-27 when the first
+ * live internal read landed. Three corrections, each of which would have failed on the account:
+ *
+ *   1. Everything is under `data`. `complete`, `boundLocationId` and `contractVersion` are
+ *      `data.*`, not top level. The adapter read the top level only and threw
+ *      INTERNAL_AUDIT_CONTRACT_MISMATCH on a perfectly good reply.
+ *   2. A roster row identifies itself with `_id`. Not `id`, not `workflowId`.
+ *   3. `list_workflows_complete` carries NO `contractVersion` at all.
+ */
+const okAiBundle = {
+  structuredContent: {
+    ok: true,
+    data: { contractVersion: '1.0.0', boundLocationId: LOCATION, complete: true, warnings: [], components: {} },
+  },
+};
+
 const okRoster = (ids, extra = {}) => ({
   structuredContent: {
-    ok: true, boundLocationId: LOCATION, complete: true, data: { workflowIds: ids }, ...extra,
+    ok: true,
+    data: {
+      boundLocationId: LOCATION,
+      complete: true,
+      reportedTotal: ids.length,
+      uniqueCount: ids.length,
+      warnings: [],
+      workflows: ids.map((id) => ({ _id: id, locationId: LOCATION, name: `wf ${id}`, status: 'published' })),
+      ...extra,
+    },
   },
 });
 
+/*
+ * `export_workflow`, because `get_workflow` returns a seven-field summary with NO steps. The step
+ * graph is `data.workflow.workflowData.templates[]` -- 37 steps on the workflow probed live.
+ */
 const okDefinition = (workflowId) => ({
-  structuredContent: { ok: true, boundLocationId: LOCATION, data: { workflowId, steps: [] } },
+  structuredContent: {
+    ok: true,
+    data: {
+      workflow: {
+        _id: workflowId,
+        locationId: LOCATION,
+        name: `wf ${workflowId}`,
+        status: 'published',
+        allowMultiple: true,
+        timezone: 'contact',
+        stopOnResponse: false,
+        workflowData: { templates: [{ id: 's1', type: 'wait', next: [], name: 'Wait' }] },
+      },
+      triggers: [{ id: 't1', type: 'facebook_lead_gen' }],
+      stickyNotes: [],
+    },
+  },
 });
 
 const okRuntime = (workflowId) => ({
   structuredContent: {
-    ok: true, contractVersion: '2.0.0', boundLocationId: LOCATION, workflowId,
-    complete: true, runtimeEvents: [],
+    ok: true,
+    data: {
+      contractVersion: '2.0.0',
+      boundLocationId: LOCATION,
+      workflowId,
+      complete: true,
+      truncated: false,
+      warnings: [],
+      runtimeEvents: [],
+      observedEventTypes: { byType: {}, byStatus: {} },
+    },
   },
 });
 
@@ -111,9 +166,9 @@ test('definitions are read for every workflow and runtime only where asked', asy
   const { rail, calls } = railFor({
     auth_status: okAuth(),
     list_workflows_complete: okRoster(['w1', 'w2', 'w3']),
-    get_workflow: (args) => okDefinition(args.workflowId),
+    export_workflow: (args) => okDefinition(args.workflowId),
     get_workflow_runtime_window: (args) => okRuntime(args.workflowId),
-    get_ai_configuration_bundle: { structuredContent: { ok: true, contractVersion: '1.0.0', data: {} } },
+    get_ai_configuration_bundle: okAiBundle,
   });
   const collector = createInternalAuditCollector({
     rail, boundLocationId: LOCATION, runtimeWorkflowIds: ['w2'],
@@ -122,7 +177,7 @@ test('definitions are read for every workflow and runtime only where asked', asy
 
   assert.deepEqual(evidence.workflows.map(({ workflowId }) => workflowId), ['w1', 'w2', 'w3']);
   // Three cheap definition reads, exactly one expensive runtime read.
-  assert.equal(calls.filter(({ name }) => name === 'get_workflow').length, 3);
+  assert.equal(calls.filter(({ name }) => name === 'export_workflow').length, 3);
   assert.equal(calls.filter(({ name }) => name === 'get_workflow_runtime_window').length, 1);
 
   // "We did not ask" is recorded as such, and is not the same fact as "we asked and got nothing".
@@ -151,7 +206,7 @@ test('a latching code ends the walk instead of burning the rest of the account',
   const { rail, calls } = railFor({
     auth_status: okAuth(),
     list_workflows_complete: okRoster(['w1', 'w2', 'w3', 'w4']),
-    get_workflow: (args) => (args.workflowId === 'w2'
+    export_workflow: (args) => (args.workflowId === 'w2'
       ? { structuredContent: { ok: false, code: 'RATE_LIMITED' } }
       : okDefinition(args.workflowId)),
     get_ai_configuration_bundle: () => { throw new Error('MUST NOT BE CALLED AFTER A LATCH'); },
@@ -161,7 +216,7 @@ test('a latching code ends the walk instead of burning the rest of the account',
 
   // w1 read, w2 refused and latched, w3 and w4 never attempted. Nothing auto-retries after a
   // latch, so continuing would be waste that also destroys the partial.
-  assert.equal(calls.filter(({ name }) => name === 'get_workflow').length, 2);
+  assert.equal(calls.filter(({ name }) => name === 'export_workflow').length, 2);
   assert.equal(evidence.latchedCode, 'RATE_LIMITED');
   assert.ok(evidence.limitations.includes('RATE_LIMITED'));
   assert.equal(evidence.complete, false);
@@ -174,8 +229,8 @@ test('an unreadable roster is never reported as an empty account', async () => {
     auth_status: okAuth(),
     // A success body in a shape this rail does not recognise. An empty account and an unread
     // roster are different facts, and confusing them would report a healthy account.
-    list_workflows_complete: { structuredContent: { ok: true, boundLocationId: LOCATION, data: { somethingElse: 1 } } },
-    get_ai_configuration_bundle: { structuredContent: { ok: true, contractVersion: '1.0.0', data: {} } },
+    list_workflows_complete: { structuredContent: { ok: true, data: { boundLocationId: LOCATION, somethingElse: 1 } } },
+    get_ai_configuration_bundle: okAiBundle,
   });
   const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION });
   const evidence = await collector.collectAuditEvidence({ window: WINDOW });
@@ -187,7 +242,7 @@ test('an unreadable roster is never reported as an empty account', async () => {
   const { rail: emptyRail } = railFor({
     auth_status: okAuth(),
     list_workflows_complete: okRoster([]),
-    get_ai_configuration_bundle: { structuredContent: { ok: true, contractVersion: '1.0.0', data: {} } },
+    get_ai_configuration_bundle: okAiBundle,
   });
   const empty = await createInternalAuditCollector({ rail: emptyRail, boundLocationId: LOCATION })
     .collectAuditEvidence({ window: WINDOW });
@@ -200,7 +255,7 @@ test('the AI surfaces are skipped and SAID SO when the agency token is dead', as
     // The location JWT is healthy; the elevated agency token-id expires independently.
     auth_status: okAuth(3600, -10),
     list_workflows_complete: okRoster(['w1']),
-    get_workflow: (args) => okDefinition(args.workflowId),
+    export_workflow: (args) => okDefinition(args.workflowId),
     get_ai_configuration_bundle: () => { throw new Error('MUST NOT BE CALLED'); },
   });
   const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION })
@@ -216,8 +271,8 @@ test('a dropped tail is disclosed rather than looking like a shorter account', a
   const { rail } = railFor({
     auth_status: okAuth(),
     list_workflows_complete: okRoster(['w1', 'w2', 'w3', 'w4', 'w5']),
-    get_workflow: (args) => okDefinition(args.workflowId),
-    get_ai_configuration_bundle: { structuredContent: { ok: true, contractVersion: '1.0.0', data: {} } },
+    export_workflow: (args) => okDefinition(args.workflowId),
+    get_ai_configuration_bundle: okAiBundle,
   });
   const evidence = await createInternalAuditCollector({
     rail, boundLocationId: LOCATION, budgets: { maxDefinitions: 2 },
@@ -233,9 +288,9 @@ test('a runtime workflow id the roster does not contain is named, not silently i
   const { rail, calls } = railFor({
     auth_status: okAuth(),
     list_workflows_complete: okRoster(['w1']),
-    get_workflow: (args) => okDefinition(args.workflowId),
+    export_workflow: (args) => okDefinition(args.workflowId),
     get_workflow_runtime_window: (args) => okRuntime(args.workflowId),
-    get_ai_configuration_bundle: { structuredContent: { ok: true, contractVersion: '1.0.0', data: {} } },
+    get_ai_configuration_bundle: okAiBundle,
   });
   const evidence = await createInternalAuditCollector({
     rail, boundLocationId: LOCATION, runtimeWorkflowIds: ['w1', 'deleted-workflow'],
@@ -250,8 +305,8 @@ test('capabilityCoverage is EMPTY, on purpose, and that keeps the run honestly p
   const { rail } = railFor({
     auth_status: okAuth(),
     list_workflows_complete: okRoster(['w1']),
-    get_workflow: (args) => okDefinition(args.workflowId),
-    get_ai_configuration_bundle: { structuredContent: { ok: true, contractVersion: '1.0.0', data: {} } },
+    export_workflow: (args) => okDefinition(args.workflowId),
+    get_ai_configuration_bundle: okAiBundle,
   });
   const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION })
     .collectAuditEvidence({ window: WINDOW });

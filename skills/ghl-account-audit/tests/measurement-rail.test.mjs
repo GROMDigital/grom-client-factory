@@ -864,25 +864,51 @@ function internalDouble({ credentialSeconds = 3600, workflowIds = ['wf-1', 'wf-2
           };
         }
         if (name === 'list_workflows_complete') {
-          return {
-            structuredContent: {
-              ok: true, boundLocationId: LOCATION, complete: true, data: { workflowIds },
-            },
-          };
-        }
-        if (name === 'get_workflow') {
+          // A roster row identifies itself with `_id`. Observed live; `id`/`workflowId` are absent.
           return {
             structuredContent: {
               ok: true,
-              boundLocationId: LOCATION,
-              // A real definition would carry contact-shaped content; this proves the scrub runs
-              // at the boundary rather than being remembered by a later caller.
-              data: { workflowId: args.workflowId, ownerEmail: 'owner@example.test' },
+              data: {
+                boundLocationId: LOCATION,
+                complete: true,
+                reportedTotal: workflowIds.length,
+                uniqueCount: workflowIds.length,
+                warnings: [],
+                workflows: workflowIds.map((id) => ({ _id: id, status: 'published', name: `Nurture ${id}` })),
+              },
+            },
+          };
+        }
+        if (name === 'export_workflow') {
+          return {
+            structuredContent: {
+              ok: true,
+              data: {
+                boundLocationId: LOCATION,
+                workflow: {
+                  _id: args.workflowId,
+                  name: `Nurture ${args.workflowId}`,
+                  status: 'published',
+                  allowMultiple: true,
+                  workflowData: { templates: [{ id: 's1', type: 'email', next: [] }] },
+                },
+                triggers: [{ id: 't1', type: 'facebook_lead_gen' }],
+                stickyNotes: [],
+                // A contact-shaped row, to prove the scrub runs at the boundary rather than being
+                // remembered by a later caller -- and to prove it can tell a CONTACT's name from a
+                // WORKFLOW's, which a flat deny list on the key `name` could not.
+                enrollmentSample: [{ contactId: 'k1', name: 'A Person', email: 'owner@example.test' }],
+              },
             },
           };
         }
         if (name === 'get_ai_configuration_bundle') {
-          return { structuredContent: { ok: true, contractVersion: '1.0.0', data: { agents: [] } } };
+          return {
+            structuredContent: {
+              ok: true,
+              data: { contractVersion: '1.0.0', boundLocationId: LOCATION, complete: true, warnings: [], components: {} },
+            },
+          };
         }
         throw new Error(`UNSTUBBED ${name}`);
       },
@@ -941,7 +967,7 @@ test('audit run reads workflows when the config asks, and stays honestly partial
 
     // Definitions for every workflow, no runtime window (none was asked for), and the session was
     // closed even though the kernel has no notion of closing a transport.
-    assert.equal(double.calls.filter(({ name }) => name === 'get_workflow').length, 2);
+    assert.equal(double.calls.filter(({ name }) => name === 'export_workflow').length, 2);
     assert.equal(double.calls.some(({ name }) => name === 'get_workflow_runtime_window'), false);
     assert.equal(double.calls.at(-1).name, '__close', JSON.stringify(double.calls.map(({name}) => name)));
 
@@ -950,8 +976,16 @@ test('audit run reads workflows when the config asks, and stays honestly partial
     // stale token from burning the run and then blaming the transport.
     assert.equal(double.calls[0].name, 'auth_status');
 
-    // Personal values do not survive the boundary, and nobody downstream has to remember to scrub.
-    assert.equal(JSON.stringify(internal.internalEvidence).includes('owner@example.test'), false);
+    /*
+     * The scrub tells a CONTACT's name from a WORKFLOW's, which is the correction the first live
+     * read forced. A flat deny list on the key `name` redacted all 27 real workflow names, and
+     * "this nurture never asks a human to step in" is not a sentence anyone can write about
+     * `[redacted]`.
+     */
+    const serialised = JSON.stringify(internal.internalEvidence);
+    assert.equal(serialised.includes('owner@example.test'), false, 'an email survived');
+    assert.equal(serialised.includes('A Person'), false, 'a contact name survived');
+    assert.ok(serialised.includes('Nurture wf-1'), 'the workflow name was redacted, so no detector can read it');
 
     /*
      * STILL `complete_partial`, and that is the correct answer rather than a shortfall. The
