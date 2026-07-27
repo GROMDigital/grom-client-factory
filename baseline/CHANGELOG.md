@@ -3,6 +3,34 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-28: **guardrail 2 rescoped to what it is actually for.** It read "no em
+  dashes anywhere, in any file, internal or client-visible" and `validate.mjs`
+  enforced it on every scanned file. Xander's correction: the rule exists so
+  customer-facing writing does not read as machine-written, and so the live AI
+  agents never emit one. It was never a house style for internal notes. It now
+  covers anything a lead, caller or client can see, plus the instruction text
+  written for Conversation AI and Voice AI agents. Internal analysis prose is
+  exempt.
+  `validate.mjs` gains `isCustomerFacing()`: everything under `lp/`, plus design
+  docs whose basename matches brand-voice, nurture, longform, conversation-ai,
+  voice-ai, journey-and-workflows, landing-page or system-guide. `build/` and
+  `claims/` are exempt. Copy sits inline with the designer's own reasoning in
+  the copy-bearing docs with no marker separating the two, so those files are
+  checked whole; over-policing inside a copy doc is the safe side to be wrong
+  on. Coverage report now names how many customer-facing files were checked.
+  Evidence this mattered: on the 2026-07-27 measurement run the new conformance
+  pass flagged two em dashes in `business-and-offer-brief.md`, an internal
+  research brief, and a fixer agent was spent rewriting prose no client will
+  ever read. The runtime half of the rule was already sound and is untouched:
+  Francesca's live `11-conversation-ai-primary.md` carries "no em dashes" inside
+  the agent's own personality rules, and the conversation-ai, voice-ai,
+  nurture-copywriter and ica-brand-voice prompts all still require it.
+  Also rescoped the two prompt lines that told agents to self-police internally
+  (`voice-ai.md`, `systems-architect.md`) and the conformance sentence in both
+  workflow bootstraps. Baseline suite 12 tests to 13: the new one asserts an em
+  dash in a research brief is NOT a violation while the same fixture's nurture
+  copy doc still fails.
+
 - 2026-07-27: project 3 part 3A, cost and wall clock, FIRST PASS. Measured before
   changing anything, and the measurement contradicted the spec, so the spec's
   ranked fixes were not the ones implemented. Real baseline, phases 1-2 of the

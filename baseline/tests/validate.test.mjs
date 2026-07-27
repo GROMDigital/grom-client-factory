@@ -25,7 +25,7 @@ test("invalid folder fails and names every violated rule", () => {
   const expected = [
     ["MANIFEST_REQUIRED_FIELD", "client-manifest.json"],
     ["MANIFEST_BAD_CANONICAL_STEP", "client-manifest.json"],
-    ["EM_DASH", path.join("design", "01-brief.md")],
+    ["EM_DASH", path.join("design", "08-nurture-and-longform-copy.md")],
     ["MALFORMED_FILL_TOKEN", path.join("design", "01-brief.md")],
     ["PLATFORM_NAME_IN_LP", path.join("lp", "index.html")],
     ["BAD_LP_EVENT", path.join("lp", "index.html")],
@@ -34,6 +34,19 @@ test("invalid folder fails and names every violated rule", () => {
     const pat = new RegExp("^" + rule + "\\t" + file.replace(/[.\\]/g, "\\$&") + "\\t", "m");
     assert.match(r.out, pat, `expected ${rule} on ${file} in output:\n${r.out}`);
   }
+});
+
+test("guardrail 2 is scoped: an em dash in internal analysis prose is not a violation", () => {
+  // fixtures/invalid/design/01-brief.md contains two em dashes. It is a
+  // research brief, which no lead, caller or client ever sees, so the rule
+  // must not fire on it. The same fixture's nurture copy doc still fails,
+  // which the rule-coverage test above asserts.
+  const r = run(fixture("invalid"));
+  assert.doesNotMatch(
+    r.out,
+    new RegExp("^EM_DASH\\t" + path.join("design", "01-brief.md").replace(/[.\\]/g, "\\$&"), "m"),
+    `internal brief should be exempt from EM_DASH, got:\n${r.out}`,
+  );
 });
 
 test("missing manifest is its own rule", () => {

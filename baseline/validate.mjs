@@ -349,13 +349,32 @@ const rel = (f) => path.relative(root, f);
 const docTokens = new Map();
 const isClaims = (f) => rel(f).split(path.sep).includes("claims");
 
+// Guardrail 2 is scoped to what a lead, caller or client can see, plus the
+// instruction text of the live AI agents so they never emit an em dash. It is
+// NOT a house style for internal analysis prose. Copy sits inline with the
+// designer's own reasoning inside the copy-bearing docs, with no marker
+// separating the two, so those files are checked whole: over-policing inside a
+// copy doc is the safe side to be wrong on. Everything else (research briefs,
+// the architecture registry, pipeline/fields/tracking docs, the fill guide,
+// the go-live checklist) is exempt.
+const COPY_BEARING = /(brand-voice|nurture|longform|conversation-ai|voice-ai|journey-and-workflows|landing-page|system-guide)/i;
+const isCustomerFacing = (f) => {
+  const r = rel(f);
+  if (r.startsWith("lp" + path.sep)) return true;
+  if (isClaims(f)) return false;
+  if (r.split(path.sep)[0] === "build") return false;
+  return COPY_BEARING.test(path.basename(f));
+};
+
 for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp")), ...walk(path.join(root, "build"))]) {
   if (!/\.(md|html|json|txt)$/i.test(f)) continue;
   const text = fs.readFileSync(f, "utf8");
   const lines = text.split("\n");
   saw("scanned files");
+  const customerFacing = isCustomerFacing(f);
+  if (customerFacing) saw("customer-facing files checked for em dashes");
   lines.forEach((line, i) => {
-    if (line.includes("\u2014")) v("EM_DASH", rel(f), `line ${i + 1}`);
+    if (customerFacing && line.includes("\u2014")) v("EM_DASH", rel(f), `line ${i + 1}`);
     const badToken = line.match(/\{\{FILL_(?![A-Z0-9_]+\}\})[^}]*\}\}/);
     if (badToken) v("MALFORMED_FILL_TOKEN", rel(f), `line ${i + 1}: ${badToken[0]}`);
   });

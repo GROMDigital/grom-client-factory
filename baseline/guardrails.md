@@ -7,7 +7,14 @@ You are designing for a real clinic. These rules are absolute:
    docs may name the platform; landing pages, emails, SMS, and AI prompts that
    speak to leads may not. Never expose gohighlevel.com URLs in client-visible
    copy.
-2. No em dashes anywhere, in any file, internal or client-visible.
+2. No em dashes in anything a lead, caller or client can see, and none in the
+   live AI agents' own instruction text so the agents never emit one. That
+   means: SMS and email bodies, landing page copy, the client-facing system
+   guide, brand-voice examples, and every prompt, persona or rule you write
+   for a Conversation AI or Voice AI agent. Internal analysis prose is exempt;
+   an em dash in a research brief or in the architecture registry harms
+   nothing. The rule exists so customer-facing writing does not read as
+   machine-written, not as a house style for your own notes.
 3. NEVER invent business facts: prices, availability, opening hours, addresses,
    policies, booking links, staff names, certificate counts. If you do not have
    a verified source, write a token: `{{FILL_SNAKE_CASE}}` (capitals, digits,
