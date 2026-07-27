@@ -1,0 +1,441 @@
+/**
+ * THE THREE ANALYSIS LANES' INPUT, BUILT BY THE TOOL AND NOT BY A PERSON.
+ *
+ * `PRODUCT-SPEC.md`: the auditor decides what to analyse and is never told. All three lanes run
+ * every time. This module is what makes that possible: it turns the sealed evidence into the three
+ * briefs, deterministically, with no human choosing a lane or a metric.
+ *
+ *   1. lead_journey_kpi        where leads drop out, and which stage is the largest commercial leak
+ *   2. workflow_config_runtime how the automation is designed AND what happened when contacts hit it
+ *   3. conversation_copy_ai    the actual copy, cadence, channels and AI behaviour
+ *
+ * ---------------------------------------------------------------------------------------------
+ * WHY A BRIEF AT ALL, RATHER THAN HANDING OVER THE RAW EVIDENCE.
+ *
+ * Two reasons, and the second one is the important one.
+ *
+ * The evidence set is large and mostly structural. An analyst handed 27 workflow exports spends its
+ * effort re-deriving the step graph instead of judging it.
+ *
+ * And a number cannot be judged without the situation. 21% show is one thing for cold Meta
+ * lead-form traffic into a founder call and another for warm referrals. Worse, Grom's own pipeline
+ * reserves `won` for PAYING clients and leaves trialing clients as `open`, so an analyst reading
+ * that account cold concludes it closes nothing. Every brief therefore carries `situation` from the
+ * coverage profile, including its `knownDataCaveats`, and those caveats are not decoration: they are
+ * the difference between a diagnosis and a confidently wrong one.
+ * ---------------------------------------------------------------------------------------------
+ *
+ * NOTHING HERE JUDGES ANYTHING. It selects, shapes and states limits. Every count comes from the
+ * measurement bundle or the internal evidence unchanged, and the module is pure and deterministic
+ * because the kernel checkpoints and byte-compares whatever it is folded into.
+ */
+import { canonicalJson, sha256 } from './canonical.mjs';
+
+const BRIEF_SCHEMA = '1.0.0';
+
+/** The six questions the product exists to answer. Every lane carries them; none may drop one. */
+export const THE_QUESTIONS = Object.freeze([
+  'Why are leads not responding to nurture messages?',
+  'Why are leads not engaging with the AI agent?',
+  'Why are leads not booking appointments?',
+  'Why are booked leads not showing up?',
+  'Why are cancelled and no-show leads not rebooking?',
+  'Why are leads not progressing through the sales journey?',
+]);
+
+function codedError(code, ErrorType = Error) {
+  return Object.assign(new ErrorType(code), { code });
+}
+
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function byteOrder(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** HTML to readable text. The copy is what lane 3 judges, so it has to arrive readable. */
+export function plainText(html) {
+  return String(html ?? '')
+    .replaceAll(/<br\s*\/?>/giu, '\n')
+    .replaceAll(/<\/(?:p|div|tr|h[1-6])>/giu, '\n')
+    .replaceAll(/<[^>]+>/gu, '')
+    .replaceAll('&nbsp;', ' ')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&#39;', "'")
+    .replaceAll('&quot;', '"')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&lt;', '<')
+    .replaceAll(/\n{3,}/gu, '\n\n')
+    .replaceAll(/[ \t]{2,}/gu, ' ')
+    .trim();
+}
+
+function observation(surfaces, capability, observationId) {
+  const surface = (surfaces ?? []).find((entry) => entry.capability === capability);
+  const found = surface?.observations.find((entry) => entry.observationId === observationId);
+  return found ?? null;
+}
+
+/** Every declared KPI with its state and the reason it has one, not only the ones that computed. */
+function kpiTable(metrics) {
+  return Object.fromEntries(Object.entries(metrics?.metrics ?? {}).map(([window, edges]) => [
+    window,
+    Object.fromEntries(Object.entries(edges).map(([edgeId, cell]) => [edgeId, {
+      state: cell.state,
+      reasonCode: cell.reasonCode ?? null,
+      numerator: cell.numerator ?? null,
+      denominator: cell.denominator ?? null,
+      eligible: cell.eligible ?? null,
+      excluded: cell.excluded ?? null,
+      immature: cell.immature ?? null,
+      rate: cell.rate ?? null,
+      value: cell.value ?? null,
+    }])),
+  ]));
+}
+
+/**
+ * The step graph, from where `export_workflow` really keeps it.
+ *
+ * OBSERVED: `data.workflow.workflowData.templates[]`, each with `type`, `next`, `order`, `name` and
+ * `attributes`. NOT `get_workflow`, which returns a seven-field summary with no steps at all.
+ */
+function stepsOf(workflow) {
+  const templates = workflow?.definition?.data?.workflow?.workflowData?.templates;
+  return Array.isArray(templates)
+    ? [...templates].sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
+    : [];
+}
+
+function definitionOf(workflow) {
+  return workflow?.definition?.data?.workflow ?? null;
+}
+
+function tally(values) {
+  const counts = new Map();
+  for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
+  return Object.fromEntries([...counts.entries()].sort(
+    (left, right) => right[1] - left[1] || byteOrder(left[0], right[0]),
+  ));
+}
+
+/**
+ * WHICH WORKFLOWS CAN BE LIVE ON THE SAME CONTACT AT ONCE.
+ *
+ * The spec names "duplicate or conflicting automation" and "differences between the intended journey
+ * and the actual customer experience" as things lane 2 must examine. Neither is visible one workflow
+ * at a time, and both are computable: two workflows collide when they can be enrolled from the same
+ * trigger, or when one creates the entity the other triggers on, and nothing removes the contact
+ * from the first.
+ *
+ * This states the FACTS of the overlap and does not judge it. A deliberate parallel pair and an
+ * accidental one look identical here, which is the analyst's job to tell apart. What it does supply
+ * is the thing that decides which it is: whether a `remove_from_workflow` covers the pair, and
+ * whether the sequence stops when the lead replies.
+ */
+function collisionMap(workflows) {
+  const rows = workflows.map((workflow) => {
+    const definition = definitionOf(workflow);
+    const steps = stepsOf(workflow);
+    const removes = steps
+      .filter((step) => step.type === 'remove_from_workflow')
+      .map((step) => step.name ?? '')
+      .filter((name) => name.length > 0);
+    return {
+      name: definition?.name ?? workflow.workflowId,
+      triggers: (workflow?.definition?.data?.triggers ?? [])
+        .map((trigger) => trigger.type)
+        .filter((type) => typeof type === 'string')
+        .sort(byteOrder),
+      // What this workflow CREATES that another might trigger on. `internal_create_opportunity`
+      // firing while another workflow triggers on `opportunity_created` is a real chain, and it is
+      // the one that put two email sequences on the same Grom UK lead at once.
+      creates: [...new Set(steps
+        .map((step) => step.type)
+        .filter((type) => /^internal_create_|^add_contact_tag$/u.test(String(type))))].sort(byteOrder),
+      removesFromWorkflows: removes,
+      stopOnResponse: definition?.stopOnResponse ?? null,
+      allowMultiple: definition?.allowMultiple ?? null,
+      messageSteps: steps.filter((step) => ['email', 'sms'].includes(step.type)).length,
+    };
+  });
+
+  const sharedTrigger = new Map();
+  for (const row of rows) {
+    for (const trigger of row.triggers) {
+      if (!sharedTrigger.has(trigger)) sharedTrigger.set(trigger, []);
+      sharedTrigger.get(trigger).push(row.name);
+    }
+  }
+  const creationChains = [];
+  for (const producer of rows) {
+    for (const consumer of rows) {
+      if (producer.name === consumer.name) continue;
+      const chained = producer.creates.includes('internal_create_opportunity')
+        && consumer.triggers.includes('opportunity_created');
+      const tagged = producer.creates.includes('add_contact_tag')
+        && consumer.triggers.includes('contact_tag');
+      if (chained || tagged) {
+        creationChains.push({
+          producer: producer.name,
+          consumer: consumer.name,
+          via: chained ? 'internal_create_opportunity -> opportunity_created' : 'add_contact_tag -> contact_tag',
+          consumerStopsOnResponse: consumer.stopOnResponse,
+          consumerMessageSteps: consumer.messageSteps,
+        });
+      }
+    }
+  }
+  return {
+    perWorkflow: rows.sort((left, right) => byteOrder(left.name, right.name)),
+    workflowsSharingATrigger: Object.fromEntries(
+      [...sharedTrigger.entries()]
+        .filter(([, names]) => names.length > 1)
+        .map(([trigger, names]) => [trigger, names.sort(byteOrder)])
+        .sort((left, right) => byteOrder(left[0], right[0])),
+    ),
+    // One workflow creating what another triggers on. Ordered so the same account always reads the
+    // same way.
+    creationChains: creationChains.sort(
+      (left, right) => byteOrder(left.producer, right.producer) || byteOrder(left.consumer, right.consumer),
+    ),
+  };
+}
+
+/**
+ * Every message a lead can receive, in send order, with the accumulated wait in front of it.
+ *
+ * BRANCH LEGS ARE FLATTENED, and that limitation is stated on the brief rather than hidden: a
+ * sequence listing 16 messages may send 8 down either leg. Counts are therefore CEILINGS. Getting
+ * this wrong in the other direction would be worse, because a lane that under-counted would clear a
+ * sequence that is in fact double-messaging.
+ */
+function messagesOf(workflow) {
+  const messages = [];
+  let waiting = [];
+  for (const step of stepsOf(workflow)) {
+    const attributes = step.attributes ?? {};
+    if (step.type === 'wait') {
+      const after = attributes.startAfter;
+      waiting.push(isPlainObject(after) && after.value !== undefined
+        ? `${after.value} ${after.type}${after.when ? ` ${after.when}` : ''}`
+        : String(step.name ?? 'wait'));
+      continue;
+    }
+    if (step.type === 'email') {
+      messages.push({
+        order: step.order ?? null,
+        channel: 'email',
+        waitBefore: [...waiting],
+        from: `${attributes.from_name ?? ''} <${attributes.from_email ?? ''}>`.trim(),
+        subject: attributes.subject ?? null,
+        preHeader: attributes.preHeader ?? null,
+        // An empty body means the send step points at a LIBRARY TEMPLATE whose HTML lives outside
+        // the workflow. Said out loud, because an analyst must not judge copy it cannot see.
+        body: plainText(attributes.html),
+        bodyIsInline: plainText(attributes.html).length > 0,
+      });
+      waiting = [];
+    } else if (step.type === 'sms') {
+      messages.push({
+        order: step.order ?? null,
+        channel: 'sms',
+        waitBefore: [...waiting],
+        body: String(attributes.message ?? attributes.body ?? attributes.text ?? '').trim(),
+        bodyIsInline: Boolean(attributes.message ?? attributes.body ?? attributes.text),
+      });
+      waiting = [];
+    } else if (['if_else', 'goto', 'remove_from_workflow', 'workflow_goal', 'workflow_ai_intent_detection', 'workflow_split'].includes(step.type)) {
+      // A branch marker, not a delay. It tells the analyst where the flattening happened.
+      waiting.push(`[${step.type}: ${step.name ?? ''}]`);
+    }
+  }
+  return messages;
+}
+
+/**
+ * The runtime half of lane 2. Only what the composite actually reported, and it says which
+ * workflows were never asked about at all -- "we did not look" and "we looked and it was quiet" are
+ * different facts, and an analyst told the second when the first is true will clear a broken step.
+ */
+function runtimeOf(workflow) {
+  const window = workflow?.runtimeWindow?.data;
+  if (!isPlainObject(window)) {
+    return { requested: workflow?.runtimeCode !== 'RUNTIME_NOT_REQUESTED', code: workflow?.runtimeCode ?? null };
+  }
+  return {
+    requested: true,
+    code: null,
+    complete: window.complete ?? null,
+    truncated: window.truncated ?? null,
+    warnings: (window.warnings ?? []).map(({ code, component }) => ({ code, component })),
+    observedEventTypes: window.observedEventTypes ?? null,
+    retainedEvents: Array.isArray(window.runtimeEvents) ? window.runtimeEvents.length : null,
+    // Where contacts are parked right now. The spec's "contacts becoming stuck at particular steps".
+    perStepCounts: Array.isArray(window.perStepCounts) ? window.perStepCounts : null,
+    // The rail's own refusal to let anyone claim this config governed these events.
+    configurationBinding: window.configurationBinding ?? null,
+  };
+}
+
+function aiAgentsOf(internal) {
+  const components = internal?.aiConfiguration?.data?.components ?? internal?.aiConfiguration?.components;
+  if (!isPlainObject(components)) return { available: false, reason: 'AI_BUNDLE_UNAVAILABLE' };
+  return {
+    available: true,
+    surfaces: Object.fromEntries(Object.entries(components).map(([surface, component]) => [surface, {
+      applicable: component?.applicable ?? null,
+      complete: component?.complete ?? null,
+      // The prompts are the COPY of the conversational half and lane 3 judges them as copy.
+      agents: (Array.isArray(component?.items) ? component.items : []).map((item) => item.detail ?? item.row ?? item),
+    }])),
+  };
+}
+
+/**
+ * Build all three lane briefs plus the shared header.
+ *
+ * `measurement` is the bundle `analyzer.normalize` produces. `internal` is the internal evidence
+ * record, or `null` when the rail is off -- in which case lanes 2 and 3 say so explicitly rather
+ * than arriving empty and being read as "nothing wrong with the automation".
+ */
+export function buildAnalysisBriefs({ measurement, internal = null, profile } = {}) {
+  if (!isPlainObject(measurement)) throw codedError('ANALYSIS_BRIEF_MEASUREMENT_INVALID', TypeError);
+  if (!isPlainObject(profile)) throw codedError('ANALYSIS_BRIEF_PROFILE_INVALID', TypeError);
+
+  const situation = profile.situation ?? null;
+  const surfaces = measurement.surfaceObservations ?? [];
+  const workflows = Array.isArray(internal?.workflows) ? internal.workflows : [];
+  const railOff = internal === null;
+
+  const header = {
+    schemaVersion: BRIEF_SCHEMA,
+    profileId: measurement.profileId,
+    window: measurement.collectionWindow,
+    collectionMode: measurement.collectionMode,
+    situation,
+    questionsToAnswer: [...THE_QUESTIONS],
+    provenanceLimits: [
+      ...(situation?.knownDataCaveats ?? []),
+      'Nothing on the internal rail proves the workflow configuration read here was the configuration in force during the window. A configuration may be called CONSISTENT WITH an outcome, or said to produce one going forward. It may not be said to have caused a past outcome.',
+      ...((measurement.unmeasurableEdges ?? []).length > 0
+        ? [`Journey steps with no signal at all in this evidence: ${(measurement.unmeasurableEdges ?? []).join(', ')}.`]
+        : []),
+      ...((railOff) ? ['The internal rail was OFF for this run, so no workflow configuration or runtime evidence exists. Lanes 2 and 3 cannot be answered and must say so rather than reporting nothing wrong.'] : []),
+      ...((internal !== null && internal.complete !== true)
+        ? [`The internal collection was incomplete: ${(internal.limitations ?? []).join(', ') || 'reason not stated'}.`]
+        : []),
+    ],
+  };
+
+  const leadJourneyKpi = {
+    lane: 'lead_journey_kpi',
+    ...header,
+    remit: 'Reconstruct the journey, find where leads drop out, and name which stage is the largest commercial leak. Judge every rate against standard practice for the situation above.',
+    kpis: kpiTable(measurement.metrics),
+    kpiCoverage: {
+      declared: Object.values(kpiTable(measurement.metrics))[0]
+        ? Object.keys(Object.values(kpiTable(measurement.metrics))[0]).length
+        : 0,
+      withNoSignalAtAll: (measurement.unmeasurableEdges ?? []).length,
+    },
+    volumes: measurement.collection,
+    projection: measurement.projection,
+    observations: surfaces,
+    graph: {
+      nodes: measurement.graph?.nodes?.length ?? null,
+      edges: measurement.graph?.edges?.length ?? null,
+      conflicts: measurement.graph?.conflicts?.length ?? null,
+      unresolvedJoins: measurement.graph?.unresolvedJoins?.length ?? null,
+    },
+    windows: measurement.windows,
+  };
+
+  const workflowConfigRuntime = {
+    lane: 'workflow_config_runtime',
+    ...header,
+    remit: 'Examine how the automation is DESIGNED and what HAPPENED when contacts entered it. Triggers and enrollment, message order and timing, wait steps and gaps, branches and handoffs, duplicate or conflicting automation, contacts stuck at a step, steps that did not execute, and any difference between the intended journey and the actual customer experience.',
+    railAvailable: !railOff,
+    workflowCount: workflows.length,
+    roster: internal?.roster ?? null,
+    // Facts about overlap, computed rather than eyeballed. See `collisionMap`.
+    collisions: collisionMap(workflows),
+    workflows: workflows.map((workflow) => {
+      const definition = definitionOf(workflow);
+      const steps = stepsOf(workflow);
+      return {
+        name: definition?.name ?? workflow.workflowId,
+        status: definition?.status ?? null,
+        definitionReadable: definition !== null,
+        definitionCode: workflow.definitionCode ?? null,
+        stepCount: steps.length,
+        stepTypes: tally(steps.map((step) => step.type)),
+        triggers: (workflow?.definition?.data?.triggers ?? []).map((trigger) => trigger.type),
+        allowMultiple: definition?.allowMultiple ?? null,
+        timezone: definition?.timezone ?? null,
+        stopOnResponse: definition?.stopOnResponse ?? null,
+        removeContactFromLastStep: definition?.removeContactFromLastStep ?? null,
+        // A snapshot import has never been re-verified against this account's actual journey.
+        snapshotImported: definition?.workflowNote?.createdBy === 'snapshot',
+        // Configured cadence, so timing can be judged without re-reading the step graph.
+        waits: steps.filter((step) => step.type === 'wait').map((step) => step.name ?? null),
+        runtime: runtimeOf(workflow),
+      };
+    }).sort((left, right) => byteOrder(left.name, right.name)),
+  };
+
+  const conversationCopyAi = {
+    lane: 'conversation_copy_ai',
+    ...header,
+    remit: 'Judge the actual customer-facing communications: copy, opening angles, calls to action, offer clarity, timing and frequency, channel choice, conversation friction, and the AI agents\' instructions as COPY and not only as configuration. Quote what you judge.',
+    railAvailable: !railOff,
+    // What the account observably does on each channel, so copy is judged against behaviour.
+    engagement: {
+      lastMessageDirection: observation(surfaces, 'conversations', 'last_message_direction')?.values ?? null,
+      lastOutboundWasAutomatedOrManual: observation(surfaces, 'conversations', 'last_outbound_action')?.values ?? null,
+      channelOfLastMessage: observation(surfaces, 'conversations', 'last_message_channel')?.values ?? null,
+      conversationsWithAnyManualMessage: observation(surfaces, 'conversations', 'has_manual_message'),
+      appointmentsBookedVia: observation(surfaces, 'appointments', 'booked_via')?.values ?? null,
+    },
+    sequences: workflows
+      .map((workflow) => {
+        const definition = definitionOf(workflow);
+        const messages = messagesOf(workflow);
+        if (messages.length === 0) return null;
+        return {
+          workflow: definition?.name ?? workflow.workflowId,
+          triggers: (workflow?.definition?.data?.triggers ?? []).map((trigger) => trigger.type),
+          stopOnResponse: definition?.stopOnResponse ?? null,
+          timezone: definition?.timezone ?? null,
+          messageCount: messages.length,
+          emails: messages.filter((message) => message.channel === 'email').length,
+          smss: messages.filter((message) => message.channel === 'sms').length,
+          // Emails whose body is a library template, so the analyst knows what it cannot see.
+          messagesWithNoInlineBody: messages.filter((message) => !message.bodyIsInline).length,
+          messages,
+        };
+      })
+      .filter((sequence) => sequence !== null)
+      .sort((left, right) => right.messageCount - left.messageCount || byteOrder(left.workflow, right.workflow)),
+    aiAgents: aiAgentsOf(internal),
+    limits: [
+      'MESSAGE COUNTS PER SEQUENCE ARE CEILINGS. Branch legs are flattened, so a sequence listing 16 messages may send 8 down either leg. `waitBefore` entries in square brackets mark a branch point, not a delay.',
+      'An email with an empty body is a send step pointing at a library template whose HTML is not in this evidence. Judge those on subject, preheader, sender and placement only, and say so.',
+      'No open, click, reply, bounce or complaint statistics exist in this evidence.',
+    ],
+  };
+
+  const lanes = { conversationCopyAi, leadJourneyKpi, workflowConfigRuntime };
+  return {
+    schemaVersion: BRIEF_SCHEMA,
+    // The identity of what the lanes were asked. A finding is only reproducible against the exact
+    // brief that produced it, and `lib/report.mjs` re-derives the mechanism pipeline from sealed
+    // inputs, so the briefs need a stable name.
+    briefsHash: sha256(lanes),
+    lanes,
+  };
+}
