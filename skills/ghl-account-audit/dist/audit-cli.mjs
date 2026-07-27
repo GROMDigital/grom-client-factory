@@ -27050,7 +27050,7 @@ function loadPublicCatalogSnapshot() {
 function loadPublicReadAllowlist() {
   return PublicReadAllowlistSchema.parse(readProfileFile("public-read-allowlist.v1.json"));
 }
-var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, EligibilityRuleSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionObservationSchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, cachedAllowlist, schemaSourcePath;
+var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, SituationSchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, EligibilityRuleSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionObservationSchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, cachedAllowlist, schemaSourcePath;
 var init_v1 = __esm({
   "schemas/v1.mjs"() {
     init_zod();
@@ -27077,12 +27077,21 @@ var init_v1 = __esm({
       denominator: external_exports.string().min(1),
       outcomes: external_exports.array(external_exports.string().min(1)).min(1)
     }).strict();
+    SituationSchema = external_exports.object({
+      whoThisIs: external_exports.string().min(1),
+      howLeadsArrive: external_exports.string().min(1),
+      whatIsSold: external_exports.string().min(1),
+      theFunnel: external_exports.string().min(1),
+      objective: external_exports.string().min(1),
+      knownDataCaveats: external_exports.array(external_exports.string().min(1))
+    }).strict();
     CoverageProfileSchema = external_exports.object({
       profileId: external_exports.enum(["client", "grom_internal"]),
       version: external_exports.literal(SCHEMA_VERSION2),
       targetKind: external_exports.literal("location"),
       excludedCapabilities: external_exports.array(external_exports.string().min(1)),
-      journeys: external_exports.array(JourneySchema).min(1)
+      journeys: external_exports.array(JourneySchema).min(1),
+      situation: SituationSchema.optional()
     }).strict().superRefine((profile, ctx) => {
       const ids = profile.journeys.map(({ journeyId }) => journeyId);
       if (new Set(ids).size !== ids.length) {

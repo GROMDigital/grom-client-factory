@@ -19,14 +19,34 @@
       "journeyInstanceId": "journey_agency_new_business",
       "entryRule": "enquiry_created",
       "denominator": "enquiry_created",
-      "outcomes": ["won", "lost", "collected_revenue"]
+      "outcomes": [
+        "won",
+        "lost",
+        "collected_revenue"
+      ]
     },
     {
       "journeyId": "client_onboarding",
       "journeyInstanceId": "journey_client_onboarding",
       "entryRule": "won_or_paid_handoff",
       "denominator": "won_or_paid_handoff",
-      "outcomes": ["launch", "first_value"]
+      "outcomes": [
+        "launch",
+        "first_value"
+      ]
     }
-  ]
+  ],
+  "situation": {
+    "whoThisIs": "Grom Digital, a UK marketing agency selling done-for-you patient acquisition to aesthetic and cosmetic clinics. Founder-led sales calls.",
+    "howLeadsArrive": "Meta (Facebook and Instagram) lead-form ads. The lead never visits a website first, so the email address is pre-filled from their Facebook profile and is often a secondary or dormant inbox.",
+    "whatIsSold": "The Pilot Program: free for 30 days, the client pays on results. A signed client is TRIALING before any money moves, and there is no upfront fee to object to.",
+    "theFunnel": "enquiry -> conversation -> booked Clinic Growth Strategy Session with a founder -> attended -> signed agreement -> 30-day trial -> paying",
+    "objective": "Engagement, booking, attendance AND conversion, judged on money earned. In the owner's words: we want people to be engaged, but not only engage, convert as well.",
+    "knownDataCaveats": [
+      "This pipeline marks an opportunity `won` ONLY once the client PAYS. There is no stage for closed-and-trialing, so signed clients sit in `open` indefinitely. A zero win count NEVER means nothing closed, and `showed_to_decision` reading zero is the same artefact.",
+      "The 11 KPIs from `won_to_internal_handoff` onward describe the client DELIVERY journey, which happens in a separate onboarding portal and not in this system. They read UNKNOWN forever on this evidence and are not findings.",
+      "Nothing records the moment a lead becomes qualified, so `contacted_to_qualified` and `qualified_to_strategy_call` have no signal at all.",
+      "This system is DESIGNED to handle leads with automation and AI, and its AI books more appointments than any other route. Inserting a human is not a generic fix here and must be argued from the evidence if argued at all."
+    ]
+  }
 }

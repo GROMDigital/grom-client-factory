@@ -19,7 +19,23 @@
       "journeyInstanceId": "journey_client_sales",
       "entryRule": "account_declared_lead_creation",
       "denominator": "lead_created",
-      "outcomes": ["won", "lost", "collected_revenue", "reactivated"]
+      "outcomes": [
+        "won",
+        "lost",
+        "collected_revenue",
+        "reactivated"
+      ]
     }
-  ]
+  ],
+  "situation": {
+    "whoThisIs": "An aesthetic or cosmetic clinic operated as a Grom Digital client account. The clinic treats patients; Grom runs the acquisition system on its behalf.",
+    "howLeadsArrive": "Meta lead-form ads and clinic landing pages, feeding an AI-handled conversation that books consultations.",
+    "whatIsSold": "Aesthetic treatments and consultations, typically with a deposit taken to hold the appointment.",
+    "theFunnel": "enquiry -> conversation -> booked consultation -> attended -> treatment decision -> paid treatment",
+    "objective": "Booked consultations that attend and convert into paid treatment, judged on revenue per enquiry.",
+    "knownDataCaveats": [
+      "Opportunity `monetaryValue` is the revenue basis, never the payments surface. Where it is unset revenue is UNMEASURABLE rather than zero.",
+      "This system is DESIGNED to handle leads with automation and AI. Inserting a human is not a generic fix and must be argued from the evidence."
+    ]
+  }
 }

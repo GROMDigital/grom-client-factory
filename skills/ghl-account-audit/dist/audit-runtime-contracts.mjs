@@ -43,12 +43,21 @@ var JourneySchema = z.object({
   denominator: z.string().min(1),
   outcomes: z.array(z.string().min(1)).min(1)
 }).strict();
+var SituationSchema = z.object({
+  whoThisIs: z.string().min(1),
+  howLeadsArrive: z.string().min(1),
+  whatIsSold: z.string().min(1),
+  theFunnel: z.string().min(1),
+  objective: z.string().min(1),
+  knownDataCaveats: z.array(z.string().min(1))
+}).strict();
 var CoverageProfileSchema = z.object({
   profileId: z.enum(["client", "grom_internal"]),
   version: z.literal(SCHEMA_VERSION),
   targetKind: z.literal("location"),
   excludedCapabilities: z.array(z.string().min(1)),
-  journeys: z.array(JourneySchema).min(1)
+  journeys: z.array(JourneySchema).min(1),
+  situation: SituationSchema.optional()
 }).strict().superRefine((profile, ctx) => {
   const ids = profile.journeys.map(({ journeyId }) => journeyId);
   if (new Set(ids).size !== ids.length) {

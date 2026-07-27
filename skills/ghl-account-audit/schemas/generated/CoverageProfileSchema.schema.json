@@ -64,6 +64,47 @@
         ],
         "additionalProperties": false
       }
+    },
+    "situation": {
+      "type": "object",
+      "properties": {
+        "whoThisIs": {
+          "type": "string",
+          "minLength": 1
+        },
+        "howLeadsArrive": {
+          "type": "string",
+          "minLength": 1
+        },
+        "whatIsSold": {
+          "type": "string",
+          "minLength": 1
+        },
+        "theFunnel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "objective": {
+          "type": "string",
+          "minLength": 1
+        },
+        "knownDataCaveats": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "whoThisIs",
+        "howLeadsArrive",
+        "whatIsSold",
+        "theFunnel",
+        "objective",
+        "knownDataCaveats"
+      ],
+      "additionalProperties": false
     }
   },
   "required": [

@@ -31,12 +31,36 @@ const JourneySchema = z.object({
   outcomes: z.array(z.string().min(1)).min(1),
 }).strict();
 
+/**
+ * WHAT THIS BUSINESS IS, as profile DATA.
+ *
+ * The analysis lanes hand an expert the account's numbers, and numbers alone cannot be judged: a
+ * 21% show rate means one thing for cold Meta lead-form traffic into a founder call and something
+ * else for warm referrals. So the expert must be told the situation, and the situation is a
+ * per-account fact that must never be a literal in code, on the same rule the projection contract
+ * follows.
+ *
+ * `knownDataCaveats` is the load-bearing field. Grom's own pipeline reserves `won` for PAYING
+ * clients and leaves trialing clients as `open`, so an expert reading that account cold concludes it
+ * closes nothing. That is the worst error this product can make, it is not derivable from any
+ * amount of data, and it is only ever knowable by being told. Anything of that kind belongs here.
+ */
+const SituationSchema = z.object({
+  whoThisIs: z.string().min(1),
+  howLeadsArrive: z.string().min(1),
+  whatIsSold: z.string().min(1),
+  theFunnel: z.string().min(1),
+  objective: z.string().min(1),
+  knownDataCaveats: z.array(z.string().min(1)),
+}).strict();
+
 export const CoverageProfileSchema = z.object({
   profileId: z.enum(['client', 'grom_internal']),
   version: z.literal(SCHEMA_VERSION),
   targetKind: z.literal('location'),
   excludedCapabilities: z.array(z.string().min(1)),
   journeys: z.array(JourneySchema).min(1),
+  situation: SituationSchema.optional(),
 }).strict().superRefine((profile, ctx) => {
   const ids = profile.journeys.map(({ journeyId }) => journeyId);
   if (new Set(ids).size !== ids.length) {
