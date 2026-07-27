@@ -102,6 +102,15 @@ Run every one of these explicitly. Do not stop at the first failure.
    - The manifest skeleton (section 10) is `manifest_version: 2`, carries
      `pipelines[]` with per-pipeline `stage_ids`, and does NOT carry a per-client
      stage-to-canonical map.
+   - 🔴 **If `booking.model = external`** (04 and 05 not built), check
+     `base-workflows.md` §4A explicitly, because this path is the least
+     exercised in the whole contract: a named SUBSTITUTE writes the Booked stage
+     and carries 04's stage-origin guard, `allowBackward` on the No-Show-origin
+     branch, AND 04's removal row (01, 03, 06, 10); the day-before confirmation
+     ask is resolved to one of §4A.2's three outcomes rather than dropped in
+     silence; `appt:confirmed-yes` is not declared present unless something
+     writes it; and 20's trigger is named for the Booking Started path this
+     client actually uses, since the LP-widget path has no slot-selection event.
 
 ## Claims
 

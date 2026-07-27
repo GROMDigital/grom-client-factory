@@ -94,7 +94,7 @@ sort-space constraint in §1). They may never rename, reorder, or remove these.
 | 1 | New Lead | `01 - Lead Intake + Chase`; or `03` on LP name+email capture | `lead` |
 | 2 | Engaged | `02 - Reply to Engaged`, on first reply | `engaged` |
 | 3 | Booking Started | `03 - Booking Started + Chase` | `qualified` |
-| 4 | Booked | `04 - Booked + Reminders`, stage-guarded | `booked` |
+| 4 | Booked | `04 - Booked + Reminders`, stage-guarded; when `booking.model = external` and 04 is not built, a named SUBSTITUTE writes it and inherits 04's rules (`base-workflows.md` §4A.1) | `booked` |
 | 5 | No Show | `08 - Outcome Chaser` | `no_show` |
 | 6 | Showed | `08 - Outcome Chaser` | `showed` |
 | 7 | Continuing Treatment | human, chased by `08` | `treatment` |
@@ -145,8 +145,16 @@ exception to the no-mirror rule.
 **Tags** (namespaced, lowercase, colon-separated; extend with the same shape,
 never respell). Always present: `funnel:<slug>`, `nurture:exhausted`, `ai:off`,
 `ai:human-takeover`, `ai:cancel-requested`, `booking:availability-shown`,
-`appt:confirmed-yes`, `needs_disposition`, `missed-call:cooldown`,
-`review:requested`. Conditional: `deposit:link-sent`, `speed:retry-done`.
+`needs_disposition`, `missed-call:cooldown`, `review:requested`.
+
+Conditional, each with the condition that puts it there: `deposit:link-sent`
+(the client takes a deposit), `speed:retry-done` (voice AI),
+`appt:confirmed-yes` (04's day-before ask exists, so NOT present when
+`booking.model = external` removes 04, unless a substitute writes it, see
+`base-workflows.md` §4A.2 and §4A.3).
+
+⚠️ A tag declared always-present that nothing writes is a defect, exactly like a
+tag with no consumer. Check the roster before declaring one.
 
 ⚠️ `ai:human-takeover` and `ai:cancel-requested` are the exact spellings GHL's own
 `humanHandOver` actions write. Do not invent alternatives; the tag IS the trigger.

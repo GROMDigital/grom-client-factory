@@ -369,6 +369,14 @@ chases it via `deposit:link-sent`; 21 handles the paid state; 22 releases or
 guards a held slot that was never paid for. No other workflow may remove a
 contact from the 20-series (see §5).
 
+⚠️ **20's trigger depends on which Booking Started path this client actually
+uses**, and the two paths are not equivalent here. Off the flow-bot path, a slot
+selection is a real event and 20 fires from it. Off the LP-widget path
+(name + email capture), there is no slot selection at all, so a build whose ONLY
+confirmed path is the widget has nothing to trigger 20. Name 20's trigger
+explicitly per build; do not assume a slot event exists. If the client is also
+external-booking, see §4A.
+
 ### 25 - External Booking Status Poll
 
 For `booking.model = external` only. Polls the external diary's attendance state
@@ -386,6 +394,58 @@ somewhere else.
 Voice AI clients only. Outbound call attempt on a new lead, wrapped back into the
 01 ladder on no-answer via `speed:retry-done`.
 
+## 4A. When the diary lives elsewhere (`booking.model = external`)
+
+Removing 04 and 05 removes more than a reminder ladder. 04 owns three jobs that
+do not disappear with it, and this section names where they go. **Added
+2026-07-27 after the first build on this path exposed all three as unstated.**
+
+### 4A.1 Who writes the Booked stage
+
+04 is the default writer. When it is not built, the substitute is **the workflow
+that receives this client's only in-system signal that a booking is real.**
+
+- Deposit-taking client: **`21 - Deposit Paid Handler`**. Deposit receipt is the
+  signal, and 21 is already triggered by it.
+- No deposit: there may be NO in-system signal at all, in which case Booked is a
+  human stage-move and the build must say so out loud rather than leave the
+  stage unreachable.
+
+🔴 **The substitute inherits 04's build rules with the job. State them on the
+substitute, do not leave them behind on the workflow that was not built:**
+
+1. **The stage write is `if_else`-guarded**: write Booked only from New Lead,
+   Engaged, Booking Started or No Show. Unguarded it drags a Continuing Treatment
+   card back to Booked and erases the tail state 13 worked to obtain.
+2. **The No-Show-origin branch carries `allowBackward: true`** (§3.2 rule 3), or
+   that move silently no-ops.
+3. **The substitute also inherits 04's removal-matrix row**: it removes 01, 03,
+   06 and 10. Without this a contact whose booking is real keeps receiving the
+   chase ladders forever, which is the single worst failure on this path.
+
+### 4A.2 The day-before confirmation ask
+
+04 owns it. With 04 absent it has NO owner, and it is a mechanism policy every
+build is required to fix concretely, so it cannot simply be dropped in silence.
+
+Resolve it explicitly per build, in this order of preference:
+
+1. **The external system already sends one.** Confirm it, and record that it is
+   theirs. Duplicating it is worse than not having one: Alevere's GHL ladder was
+   removed for exactly this reason.
+2. **It is not sent at all**, accepted deliberately, recorded as accepted.
+3. **A client-specific workflow at an unused number.** Never a reserved one.
+
+An unanswered day-before ask is a `{{FILL_*}}` token and an open question, never
+an assumption in either direction.
+
+### 4A.3 Tags 04 would have written
+
+`appt:confirmed-yes` is written by 04's day-before ask. With 04 absent nothing
+writes it, so it is NOT present at this client unless 4A.2 resolves to option 3
+and that workflow writes it. A tag declared always-present that nothing writes is
+a defect, the same as a tag with no consumer.
+
 ## 5. Removal matrix
 
 "Kills nurture and chase workflows" is not machine-checkable. This table is, and
@@ -398,6 +458,7 @@ it is contract.
 | 04 - Booked + Reminders | 01, 03, 06, 10 |
 | 05 - Reschedule Handler | 04 |
 | 07 - Cancellation Recovery | 04, 05 |
+| the 04 substitute under `booking.model = external` (§4A.1) | 01, 03, 06, 10 |
 | 08 - Outcome Chaser | 06 (on a Showed correction) |
 | 12 - AI Escalation + Human Takeover | 01, 03, 06, 07, 10 |
 | 13 - Treatment Progress + Completion | 06, 10 |
@@ -458,6 +519,7 @@ Listed here so the architect designs to it. The checks themselves live in
 | appointment-anchored waits have a past-anchor branch | ladder burst |
 | `decay_days > ladder_length` | double-chasing |
 | every Lost write restates the current stage | otherwise drop-off reporting dies |
+| under `booking.model = external`, the 04 substitute carries the stage-origin guard, `allowBackward`, and 04's removal row | §4A.1; without the removal row a booked contact is chased forever |
 | **published AND trigger file non-empty** | the authored-not-deployed gate |
 
 The deployment gate matters most: without it the validator passes a build whose

@@ -3,6 +3,26 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: the Standard Build, part 7. Three holes on the
+  `booking.model = external` path, found by the FIRST build ever run against
+  these contracts (Better By Ati, Treatwell diary, dry run) and confirmed
+  independently by the registry reviewer. All three were the same class:
+  removing 04 removes more than a reminder ladder, and nothing said where its
+  other jobs went. New `base-workflows.md` §4A names them: §4A.1 the Booked
+  stage-write substitute (the workflow receiving the client's only in-system
+  booking signal, so 21 for a deposit-taking client) which INHERITS 04's
+  stage-origin guard, its `allowBackward` on the No-Show-origin branch, and its
+  removal row (01, 03, 06, 10) — without that last one a contact whose booking
+  is real is chased forever; §4A.2 the day-before confirmation ask, resolved to
+  one of three stated outcomes rather than dropped silently; §4A.3 the tags 04
+  would have written. 20's entry now warns that the LP-widget Booking Started
+  path has no slot-selection event to trigger it. `canonical-model.md` moves
+  `appt:confirmed-yes` from always-present to conditional (nothing writes it
+  without 04) and its stage table names the substitute. The removal matrix and
+  the validator check table gain the substitute's row, and `registry-reviewer`
+  check 8 gains an explicit external-booking sub-check. Motivated by the dry
+  run: the external path was written but never exercised, and every gap was in
+  it.
 - 2026-07-27: the Standard Build, part 6 (the last). The `client-design` skill
   now starts FROM the Standard Build instead of designing a build shape.
   `SKILL.md`'s one-line rule rewritten; `guardrails.md` rule 4 gains the Tier-1
