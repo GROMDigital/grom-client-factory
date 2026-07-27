@@ -26705,7 +26705,7 @@ function loadPublicCatalogSnapshot() {
 function loadPublicReadAllowlist() {
   return PublicReadAllowlistSchema.parse(readProfileFile("public-read-allowlist.v1.json"));
 }
-var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, MetricEdgeSchema, MetricContractsSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, schemaSourcePath;
+var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRefSchema, EvidenceRefSchema, ActorRefSchema, JourneyInstanceIdSchema, NonEmptyRecordSchema, JsonRecordSchema, TargetSchema, JourneySchema, CoverageProfileSchema, RunManifestSchema, EvidenceRecordSchema, FindingSchema, ExactStateSchema, CapturedObjectSchema, EvaluationCaseSchema, ChangeSetSchema, ProposalSchema, ConversationSampleSchema, ReceiptSchema, MetricEdgeSchema, MetricContractsSchema, ProjectionFieldPathSchema, ProjectionFieldPathListSchema, ProjectionStageSchema, ProjectionOperationPatternSchema, ProjectionScalarSchema, ProjectionIdentitySchema, ProjectionPredicateSchema, ProjectionEventSchema, ProjectionEntityPredicateSchema, ProjectionEntitySchema, ProjectionSourceSchema, ProjectionRevenueBasisSchema, ProjectionContractSchema, ActionTupleSchema, ReadActionTupleSchema, ApprovalSchema, CatalogCandidateSchema, PublicCatalogSnapshotSchema, PublicReadAllowlistSchema, BudgetSchema, CollectionBudgetsSchema, PROFILE_FILES, METRIC_FILES, ProjectionTargetProfileSchema, schemaSourcePath;
 var init_v1 = __esm({
   "schemas/v1.mjs"() {
     init_zod();
@@ -26961,6 +26961,169 @@ var init_v1 = __esm({
         ctx.addIssue({ code: "custom", message: "edge IDs must be unique" });
       }
     });
+    ProjectionFieldPathSchema = external_exports.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$/);
+    ProjectionFieldPathListSchema = external_exports.array(ProjectionFieldPathSchema).min(1);
+    ProjectionStageSchema = external_exports.string().regex(/^[a-z][a-z0-9_]{0,127}$/);
+    ProjectionOperationPatternSchema = external_exports.string().min(1).regex(/^[A-Za-z0-9_.:*-]+$/);
+    ProjectionScalarSchema = external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()]);
+    ProjectionIdentitySchema = external_exports.object({
+      nativeId: ProjectionFieldPathListSchema.optional(),
+      subjectNativeId: ProjectionFieldPathListSchema.optional(),
+      organizationNativeId: ProjectionFieldPathListSchema.optional(),
+      opportunityNativeId: ProjectionFieldPathListSchema.optional(),
+      projectNativeId: ProjectionFieldPathListSchema.optional(),
+      normalizedEmail: ProjectionFieldPathListSchema.optional(),
+      normalizedPhone: ProjectionFieldPathListSchema.optional()
+    }).strict().superRefine((identity, ctx) => {
+      const usable = Boolean(identity.subjectNativeId) || Boolean(identity.normalizedEmail) || Boolean(identity.normalizedPhone) || Boolean(identity.organizationNativeId) && (Boolean(identity.opportunityNativeId) || Boolean(identity.projectNativeId));
+      if (!usable) {
+        ctx.addIssue({ code: "custom", message: "identity must be able to supply an accepted identity form" });
+      }
+    });
+    ProjectionPredicateSchema = external_exports.discriminatedUnion("kind", [
+      external_exports.object({ kind: external_exports.literal("always") }).strict(),
+      external_exports.object({
+        kind: external_exports.literal("field_equals"),
+        field: ProjectionFieldPathSchema,
+        value: ProjectionScalarSchema
+      }).strict(),
+      external_exports.object({
+        kind: external_exports.literal("field_in"),
+        field: ProjectionFieldPathSchema,
+        values: external_exports.array(ProjectionScalarSchema).min(1)
+      }).strict(),
+      external_exports.object({ kind: external_exports.literal("first_of_kind") }).strict()
+    ]);
+    ProjectionEventSchema = external_exports.object({
+      eventId: external_exports.string().min(1),
+      stage: ProjectionStageSchema,
+      journeyId: external_exports.string().min(1),
+      /** Ordered candidates. The first that resolves to a parseable instant wins. */
+      eventTimeField: ProjectionFieldPathListSchema,
+      when: ProjectionPredicateSchema,
+      /** Ordered candidates, like every other path field here. The first that holds a value decides. */
+      revenueFrom: ProjectionFieldPathListSchema.optional(),
+      cohortFrom: ProjectionFieldPathListSchema.optional()
+    }).strict();
+    ProjectionEntityPredicateSchema = external_exports.discriminatedUnion("kind", [
+      external_exports.object({ kind: external_exports.literal("always") }).strict(),
+      external_exports.object({
+        kind: external_exports.literal("field_equals"),
+        field: ProjectionFieldPathSchema,
+        value: ProjectionScalarSchema
+      }).strict(),
+      external_exports.object({
+        kind: external_exports.literal("field_in"),
+        field: ProjectionFieldPathSchema,
+        values: external_exports.array(ProjectionScalarSchema).min(1)
+      }).strict()
+    ]);
+    ProjectionEntitySchema = external_exports.object({
+      entityId: external_exports.string().min(1),
+      /** The canonical evidence vocabulary, not an account fact: see `normalize.mjs` record types. */
+      recordType: external_exports.enum(["contact"]),
+      when: ProjectionEntityPredicateSchema
+    }).strict();
+    ProjectionSourceSchema = external_exports.object({
+      sourceId: external_exports.string().min(1),
+      capability: external_exports.string().min(1),
+      evidenceSource: external_exports.enum(["context", "public_ghl", "internal_ghl", "onboarding_portal"]),
+      operationIdPattern: ProjectionOperationPatternSchema,
+      identity: ProjectionIdentitySchema,
+      entities: external_exports.array(ProjectionEntitySchema).optional(),
+      events: external_exports.array(ProjectionEventSchema).optional()
+    }).strict().superRefine((source, ctx) => {
+      const eventIds2 = (source.events ?? []).map(({ eventId }) => eventId);
+      if (new Set(eventIds2).size !== eventIds2.length) {
+        ctx.addIssue({ code: "custom", message: "event IDs must be unique within a source" });
+      }
+      const entityIds = (source.entities ?? []).map(({ entityId }) => entityId);
+      if (new Set(entityIds).size !== entityIds.length) {
+        ctx.addIssue({ code: "custom", message: "entity IDs must be unique within a source" });
+      }
+      if (eventIds2.length === 0 && entityIds.length === 0) {
+        ctx.addIssue({ code: "custom", message: "a source must declare at least one event or entity" });
+      }
+      if (entityIds.length > 0 && !source.identity.subjectNativeId) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a source emitting entities must declare identity.subjectNativeId"
+        });
+      }
+      const provableByComposite = Boolean(
+        source.identity.organizationNativeId && (source.identity.opportunityNativeId || source.identity.projectNativeId)
+      );
+      if (eventIds2.length > 0 && entityIds.length === 0 && !provableByComposite) {
+        ctx.addIssue({
+          code: "custom",
+          message: "a source emitting events must declare the entities its payload yields, or an identity a composite join can prove"
+        });
+      }
+    });
+    ProjectionRevenueBasisSchema = external_exports.enum([
+      "opportunity_monetary_value",
+      "payments",
+      "invoices",
+      "orders",
+      "transactions",
+      "subscriptions",
+      "external_ledger",
+      "none"
+    ]);
+    ProjectionContractSchema = external_exports.object({
+      /**
+       * Open, unlike the inherited `CoverageProfileSchema.profileId` enum. Review finding I8: the
+       * module is genuinely account-agnostic and only the schema layer was blocking a third profile.
+       */
+      profileId: external_exports.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+      version: external_exports.literal(SCHEMA_VERSION2),
+      revenueBasis: ProjectionRevenueBasisSchema,
+      /**
+       * Review finding C3: which canonical record type carries a collection-level signal downstream.
+       * `normalize.mjs:271-283` only synthesises one for an EMPTY INCOMPLETE envelope, so the
+       * projector has to raise its own for a COMPLETE envelope whose rows it suppressed.
+       */
+      suppressionSignal: external_exports.object({
+        recordType: external_exports.enum(["collection_status"])
+      }).strict(),
+      /**
+       * Review finding I7: metric edges whose `fromStage`/`toStage` this projection cannot emit. They
+       * are UNMEASURABLE, not zero, and `validateProjectionForProfile` refuses both a silent omission
+       * and any attempt to flip one to MAPPED.
+       */
+      unmeasurableEdges: external_exports.array(external_exports.string().min(1)),
+      /**
+       * Review finding C2: allowlisted reads this projection deliberately does NOT project, each with
+       * its reason. Every allowlisted read must be either routed to exactly one source or named here,
+       * so a payload can neither be silently misrouted nor silently forgotten.
+       */
+      unprojectedActions: external_exports.array(external_exports.object({
+        actionId: external_exports.string().min(1),
+        reason: external_exports.string().min(1)
+      }).strict()),
+      sources: external_exports.array(ProjectionSourceSchema).min(1)
+    }).strict().superRefine((projection, ctx) => {
+      const ids = projection.sources.map(({ sourceId }) => sourceId);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({ code: "custom", message: "source IDs must be unique" });
+      }
+      const patterns = projection.sources.map(({ operationIdPattern }) => operationIdPattern);
+      if (new Set(patterns).size !== patterns.length) {
+        ctx.addIssue({ code: "custom", message: "source operationIdPatterns must be unique" });
+      }
+      const stages = projection.sources.flatMap((source) => (source.events ?? []).map((e2) => e2.stage));
+      if (new Set(stages).size !== stages.length) {
+        ctx.addIssue({ code: "custom", message: "two events must not emit the same stage" });
+      }
+      const edges = projection.unmeasurableEdges;
+      if (new Set(edges).size !== edges.length) {
+        ctx.addIssue({ code: "custom", message: "unmeasurableEdges must be unique" });
+      }
+      const actions = projection.unprojectedActions.map(({ actionId }) => actionId);
+      if (new Set(actions).size !== actions.length) {
+        ctx.addIssue({ code: "custom", message: "unprojectedActions must be unique" });
+      }
+    });
     ActionTupleSchema = external_exports.object({
       actionId: external_exports.string().min(1),
       method: external_exports.string().min(1),
@@ -27038,6 +27201,10 @@ var init_v1 = __esm({
       client: "client-metrics.v1.json",
       grom_internal: "grom-internal-metrics.v1.json"
     });
+    ProjectionTargetProfileSchema = external_exports.object({
+      profileId: external_exports.string().min(1),
+      journeys: external_exports.array(JourneySchema).min(1)
+    }).loose();
     schemaSourcePath = fileURLToPath(import.meta.url);
   }
 });

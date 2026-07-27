@@ -255,6 +255,169 @@ var MetricContractsSchema = z.object({
     ctx.addIssue({ code: "custom", message: "edge IDs must be unique" });
   }
 });
+var ProjectionFieldPathSchema = z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$/);
+var ProjectionFieldPathListSchema = z.array(ProjectionFieldPathSchema).min(1);
+var ProjectionStageSchema = z.string().regex(/^[a-z][a-z0-9_]{0,127}$/);
+var ProjectionOperationPatternSchema = z.string().min(1).regex(/^[A-Za-z0-9_.:*-]+$/);
+var ProjectionScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
+var ProjectionIdentitySchema = z.object({
+  nativeId: ProjectionFieldPathListSchema.optional(),
+  subjectNativeId: ProjectionFieldPathListSchema.optional(),
+  organizationNativeId: ProjectionFieldPathListSchema.optional(),
+  opportunityNativeId: ProjectionFieldPathListSchema.optional(),
+  projectNativeId: ProjectionFieldPathListSchema.optional(),
+  normalizedEmail: ProjectionFieldPathListSchema.optional(),
+  normalizedPhone: ProjectionFieldPathListSchema.optional()
+}).strict().superRefine((identity, ctx) => {
+  const usable = Boolean(identity.subjectNativeId) || Boolean(identity.normalizedEmail) || Boolean(identity.normalizedPhone) || Boolean(identity.organizationNativeId) && (Boolean(identity.opportunityNativeId) || Boolean(identity.projectNativeId));
+  if (!usable) {
+    ctx.addIssue({ code: "custom", message: "identity must be able to supply an accepted identity form" });
+  }
+});
+var ProjectionPredicateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("always") }).strict(),
+  z.object({
+    kind: z.literal("field_equals"),
+    field: ProjectionFieldPathSchema,
+    value: ProjectionScalarSchema
+  }).strict(),
+  z.object({
+    kind: z.literal("field_in"),
+    field: ProjectionFieldPathSchema,
+    values: z.array(ProjectionScalarSchema).min(1)
+  }).strict(),
+  z.object({ kind: z.literal("first_of_kind") }).strict()
+]);
+var ProjectionEventSchema = z.object({
+  eventId: z.string().min(1),
+  stage: ProjectionStageSchema,
+  journeyId: z.string().min(1),
+  /** Ordered candidates. The first that resolves to a parseable instant wins. */
+  eventTimeField: ProjectionFieldPathListSchema,
+  when: ProjectionPredicateSchema,
+  /** Ordered candidates, like every other path field here. The first that holds a value decides. */
+  revenueFrom: ProjectionFieldPathListSchema.optional(),
+  cohortFrom: ProjectionFieldPathListSchema.optional()
+}).strict();
+var ProjectionEntityPredicateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("always") }).strict(),
+  z.object({
+    kind: z.literal("field_equals"),
+    field: ProjectionFieldPathSchema,
+    value: ProjectionScalarSchema
+  }).strict(),
+  z.object({
+    kind: z.literal("field_in"),
+    field: ProjectionFieldPathSchema,
+    values: z.array(ProjectionScalarSchema).min(1)
+  }).strict()
+]);
+var ProjectionEntitySchema = z.object({
+  entityId: z.string().min(1),
+  /** The canonical evidence vocabulary, not an account fact: see `normalize.mjs` record types. */
+  recordType: z.enum(["contact"]),
+  when: ProjectionEntityPredicateSchema
+}).strict();
+var ProjectionSourceSchema = z.object({
+  sourceId: z.string().min(1),
+  capability: z.string().min(1),
+  evidenceSource: z.enum(["context", "public_ghl", "internal_ghl", "onboarding_portal"]),
+  operationIdPattern: ProjectionOperationPatternSchema,
+  identity: ProjectionIdentitySchema,
+  entities: z.array(ProjectionEntitySchema).optional(),
+  events: z.array(ProjectionEventSchema).optional()
+}).strict().superRefine((source, ctx) => {
+  const eventIds = (source.events ?? []).map(({ eventId }) => eventId);
+  if (new Set(eventIds).size !== eventIds.length) {
+    ctx.addIssue({ code: "custom", message: "event IDs must be unique within a source" });
+  }
+  const entityIds = (source.entities ?? []).map(({ entityId }) => entityId);
+  if (new Set(entityIds).size !== entityIds.length) {
+    ctx.addIssue({ code: "custom", message: "entity IDs must be unique within a source" });
+  }
+  if (eventIds.length === 0 && entityIds.length === 0) {
+    ctx.addIssue({ code: "custom", message: "a source must declare at least one event or entity" });
+  }
+  if (entityIds.length > 0 && !source.identity.subjectNativeId) {
+    ctx.addIssue({
+      code: "custom",
+      message: "a source emitting entities must declare identity.subjectNativeId"
+    });
+  }
+  const provableByComposite = Boolean(
+    source.identity.organizationNativeId && (source.identity.opportunityNativeId || source.identity.projectNativeId)
+  );
+  if (eventIds.length > 0 && entityIds.length === 0 && !provableByComposite) {
+    ctx.addIssue({
+      code: "custom",
+      message: "a source emitting events must declare the entities its payload yields, or an identity a composite join can prove"
+    });
+  }
+});
+var ProjectionRevenueBasisSchema = z.enum([
+  "opportunity_monetary_value",
+  "payments",
+  "invoices",
+  "orders",
+  "transactions",
+  "subscriptions",
+  "external_ledger",
+  "none"
+]);
+var ProjectionContractSchema = z.object({
+  /**
+   * Open, unlike the inherited `CoverageProfileSchema.profileId` enum. Review finding I8: the
+   * module is genuinely account-agnostic and only the schema layer was blocking a third profile.
+   */
+  profileId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
+  version: z.literal(SCHEMA_VERSION),
+  revenueBasis: ProjectionRevenueBasisSchema,
+  /**
+   * Review finding C3: which canonical record type carries a collection-level signal downstream.
+   * `normalize.mjs:271-283` only synthesises one for an EMPTY INCOMPLETE envelope, so the
+   * projector has to raise its own for a COMPLETE envelope whose rows it suppressed.
+   */
+  suppressionSignal: z.object({
+    recordType: z.enum(["collection_status"])
+  }).strict(),
+  /**
+   * Review finding I7: metric edges whose `fromStage`/`toStage` this projection cannot emit. They
+   * are UNMEASURABLE, not zero, and `validateProjectionForProfile` refuses both a silent omission
+   * and any attempt to flip one to MAPPED.
+   */
+  unmeasurableEdges: z.array(z.string().min(1)),
+  /**
+   * Review finding C2: allowlisted reads this projection deliberately does NOT project, each with
+   * its reason. Every allowlisted read must be either routed to exactly one source or named here,
+   * so a payload can neither be silently misrouted nor silently forgotten.
+   */
+  unprojectedActions: z.array(z.object({
+    actionId: z.string().min(1),
+    reason: z.string().min(1)
+  }).strict()),
+  sources: z.array(ProjectionSourceSchema).min(1)
+}).strict().superRefine((projection, ctx) => {
+  const ids = projection.sources.map(({ sourceId }) => sourceId);
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: "custom", message: "source IDs must be unique" });
+  }
+  const patterns = projection.sources.map(({ operationIdPattern }) => operationIdPattern);
+  if (new Set(patterns).size !== patterns.length) {
+    ctx.addIssue({ code: "custom", message: "source operationIdPatterns must be unique" });
+  }
+  const stages = projection.sources.flatMap((source) => (source.events ?? []).map((e) => e.stage));
+  if (new Set(stages).size !== stages.length) {
+    ctx.addIssue({ code: "custom", message: "two events must not emit the same stage" });
+  }
+  const edges = projection.unmeasurableEdges;
+  if (new Set(edges).size !== edges.length) {
+    ctx.addIssue({ code: "custom", message: "unmeasurableEdges must be unique" });
+  }
+  const actions = projection.unprojectedActions.map(({ actionId }) => actionId);
+  if (new Set(actions).size !== actions.length) {
+    ctx.addIssue({ code: "custom", message: "unprojectedActions must be unique" });
+  }
+});
 var ActionTupleSchema = z.object({
   actionId: z.string().min(1),
   method: z.string().min(1),
@@ -346,8 +509,19 @@ var METRIC_FILES = Object.freeze({
   client: "client-metrics.v1.json",
   grom_internal: "grom-internal-metrics.v1.json"
 });
+function projectionFilename(profileId) {
+  return `${profileId.replace(/_/gu, "-")}-projection.v1.json`;
+}
 function readProfileFile(filename) {
   return JSON.parse(readFileSync(new URL(`../profiles/${filename}`, import.meta.url), "utf8"));
+}
+function readProfileFileIfPresent(filename) {
+  try {
+    return readProfileFile(filename);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
 }
 function normalizeProfileId(profileId) {
   if (profileId === "grom-internal") return "grom_internal";
@@ -381,6 +555,167 @@ function validateMetricContractsForProfile(profile, contracts) {
     }
   }
   return parsedContracts;
+}
+function loadProjection(profileId) {
+  const normalized = normalizeProfileId(profileId);
+  const raw = readProfileFileIfPresent(projectionFilename(normalized));
+  if (raw === null) throw new Error(`UNKNOWN_PROJECTION_PROFILE:${profileId}`);
+  return validateProjectionForProfile(
+    loadProfile(normalized),
+    raw,
+    loadMetricContracts(normalized)
+  );
+}
+function matchesOperationIdPattern(pattern, text) {
+  if (typeof text !== "string") return false;
+  const literal = pattern.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join(".*");
+  return new RegExp(`^${literal}$`, "u").test(text);
+}
+var ProjectionTargetProfileSchema = z.object({
+  profileId: z.string().min(1),
+  journeys: z.array(JourneySchema).min(1)
+}).loose();
+var cachedAllowlist = null;
+function publicReadAllowlist() {
+  cachedAllowlist ??= loadPublicReadAllowlist();
+  return cachedAllowlist;
+}
+function isCatchAllPattern(pattern) {
+  return pattern.split("*").every((part) => part.length === 0);
+}
+function patternsCanOverlap(left, right) {
+  const memo = /* @__PURE__ */ new Map();
+  const decide = (leftIndex, rightIndex) => {
+    const key = `${leftIndex}:${rightIndex}`;
+    if (memo.has(key)) return memo.get(key);
+    let result;
+    if (leftIndex === left.length && rightIndex === right.length) {
+      result = true;
+    } else if (leftIndex < left.length && left[leftIndex] === "*") {
+      result = decide(leftIndex + 1, rightIndex) || rightIndex < right.length && decide(leftIndex, rightIndex + 1);
+    } else if (rightIndex < right.length && right[rightIndex] === "*") {
+      result = decide(leftIndex, rightIndex + 1) || leftIndex < left.length && decide(leftIndex + 1, rightIndex);
+    } else {
+      result = leftIndex < left.length && rightIndex < right.length && left[leftIndex] === right[rightIndex] && decide(leftIndex + 1, rightIndex + 1);
+    }
+    memo.set(key, result);
+    return result;
+  };
+  return decide(0, 0);
+}
+function assertActionRouting(projection) {
+  const allowlist = publicReadAllowlist();
+  const publicSources = projection.sources.filter(
+    ({ evidenceSource }) => evidenceSource === "public_ghl"
+  );
+  const routed = /* @__PURE__ */ new Map();
+  for (const source of publicSources) {
+    const matched = allowlist.actions.filter(
+      ({ actionId }) => matchesOperationIdPattern(source.operationIdPattern, actionId)
+    );
+    if (matched.length === 0) {
+      throw new Error(
+        `PROJECTION_SOURCE_MATCHES_NO_ACTION:${source.sourceId}:${source.operationIdPattern}`
+      );
+    }
+    const categories = [...new Set(matched.map(({ category }) => category))].sort();
+    if (categories.length > 1) {
+      throw new Error(
+        `PROJECTION_SOURCE_SPANS_CATEGORIES:${source.sourceId}:${categories.join(",")}`
+      );
+    }
+    for (const { actionId } of matched) {
+      if (routed.has(actionId)) {
+        throw new Error(
+          `PROJECTION_ACTION_MULTIPLY_MATCHED:${actionId}:${routed.get(actionId)}:${source.sourceId}`
+        );
+      }
+      routed.set(actionId, source.sourceId);
+    }
+  }
+  const known = new Set(allowlist.actions.map(({ actionId }) => actionId));
+  for (const { actionId } of projection.unprojectedActions) {
+    if (!known.has(actionId)) throw new Error(`PROJECTION_UNPROJECTED_ACTION_UNKNOWN:${actionId}`);
+    if (routed.has(actionId)) throw new Error(`PROJECTION_UNPROJECTED_ACTION_MATCHED:${actionId}`);
+  }
+  const excluded = new Set(projection.unprojectedActions.map(({ actionId }) => actionId));
+  for (const { actionId } of allowlist.actions) {
+    if (!routed.has(actionId) && !excluded.has(actionId)) {
+      throw new Error(`PROJECTION_ACTION_UNCLASSIFIED:${actionId}`);
+    }
+  }
+  for (const source of projection.sources) {
+    if (isCatchAllPattern(source.operationIdPattern)) {
+      throw new Error(`PROJECTION_SOURCE_PATTERN_CATCH_ALL:${source.sourceId}`);
+    }
+  }
+  for (let index = 0; index < projection.sources.length; index += 1) {
+    for (let other = index + 1; other < projection.sources.length; other += 1) {
+      const left = projection.sources[index];
+      const right = projection.sources[other];
+      if (left.evidenceSource !== right.evidenceSource) continue;
+      if (patternsCanOverlap(left.operationIdPattern, right.operationIdPattern)) {
+        throw new Error(
+          `PROJECTION_SOURCE_PATTERNS_OVERLAP:${left.sourceId}:${right.sourceId}`
+        );
+      }
+    }
+  }
+}
+function assertStageCoverage(profile, projection, metricContracts) {
+  const emitted = new Set(projection.sources.flatMap(
+    (source) => (source.events ?? []).map(({ stage }) => stage)
+  ));
+  const declaredUnmeasurable = new Set(projection.unmeasurableEdges);
+  const edgeIds = new Set(metricContracts.edges.map(({ edgeId }) => edgeId));
+  for (const edgeId of declaredUnmeasurable) {
+    if (!edgeIds.has(edgeId)) throw new Error(`PROJECTION_UNMEASURABLE_EDGE_UNKNOWN:${edgeId}`);
+  }
+  for (const edge of metricContracts.edges) {
+    const measurable = emitted.has(edge.fromStage) && emitted.has(edge.toStage);
+    if (!measurable && !declaredUnmeasurable.has(edge.edgeId)) {
+      throw new Error(`PROJECTION_EDGE_UNMEASURABLE_UNDECLARED:${edge.edgeId}`);
+    }
+    if (measurable && declaredUnmeasurable.has(edge.edgeId)) {
+      throw new Error(`PROJECTION_EDGE_MEASURABLE_DECLARED_UNMEASURABLE:${edge.edgeId}`);
+    }
+    if (declaredUnmeasurable.has(edge.edgeId) && edge.nativeMapping === "MAPPED") {
+      throw new Error(`PROJECTION_UNMEASURABLE_EDGE_MAPPED:${edge.edgeId}`);
+    }
+  }
+  void profile;
+}
+function validateProjectionForProfile(profile, projection, metricContracts) {
+  const parsedProfile = ProjectionTargetProfileSchema.parse(profile);
+  const parsedProjection = ProjectionContractSchema.parse(projection);
+  if (parsedProfile.profileId !== parsedProjection.profileId) {
+    throw new Error("PROFILE_PROJECTION_MISMATCH");
+  }
+  const declared = new Set(parsedProfile.journeys.map(({ journeyId }) => journeyId));
+  const outcomesByJourney = new Map(parsedProfile.journeys.map(
+    ({ journeyId, outcomes }) => [journeyId, new Set(outcomes)]
+  ));
+  for (const source of parsedProjection.sources) {
+    for (const event of source.events ?? []) {
+      if (!declared.has(event.journeyId)) {
+        throw new Error(`PROJECTION_JOURNEY_UNDECLARED:${source.sourceId}:${event.eventId}`);
+      }
+      if (Array.isArray(event.revenueFrom) && !outcomesByJourney.get(event.journeyId)?.has(event.stage)) {
+        throw new Error(
+          `PROJECTION_REVENUE_STAGE_NOT_AN_OUTCOME:${source.sourceId}:${event.eventId}`
+        );
+      }
+    }
+  }
+  assertActionRouting(parsedProjection);
+  if (metricContracts === void 0 || metricContracts === null) {
+    throw new Error("PROJECTION_METRIC_CONTRACTS_REQUIRED");
+  }
+  if (!Array.isArray(metricContracts.edges)) {
+    throw new Error("PROJECTION_METRIC_CONTRACTS_INVALID");
+  }
+  assertStageCoverage(parsedProfile, parsedProjection, metricContracts);
+  return parsedProjection;
 }
 function loadCollectionBudgets() {
   return CollectionBudgetsSchema.parse(readProfileFile("collection-budgets.v1.json"));
@@ -417,6 +752,7 @@ export {
   FindingSchema,
   MetricContractsSchema,
   MetricEdgeSchema,
+  ProjectionContractSchema,
   ProposalSchema,
   PublicCatalogSnapshotSchema,
   PublicReadAllowlistSchema,
@@ -429,9 +765,12 @@ export {
   loadCollectionBudgets,
   loadMetricContracts,
   loadProfile,
+  loadProjection,
   loadPublicCatalogSnapshot,
   loadPublicReadAllowlist,
+  matchesOperationIdPattern,
   schemaSourcePath,
   snapshotHash,
-  validateMetricContractsForProfile
+  validateMetricContractsForProfile,
+  validateProjectionForProfile
 };

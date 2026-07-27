@@ -1,0 +1,182 @@
+{
+  "profileId": "client",
+  "version": "1.0.0",
+  "revenueBasis": "opportunity_monetary_value",
+  "suppressionSignal": { "recordType": "collection_status" },
+  "unmeasurableEdges": [
+    "first_engagement_to_qualified",
+    "qualified_to_booked",
+    "cancelled_to_rebooked",
+    "closed_to_reactivated"
+  ],
+  "unprojectedActions": [
+    { "actionId": "calendars-v3__get-appointment", "reason": "single-appointment fetch by id; the weekly rail reads the location-wide event feed instead" },
+    { "actionId": "calendars-v3__get-calendars", "reason": "calendar definitions, not subject events" },
+    { "actionId": "contacts-v3__get-appointments-for-contact", "reason": "per-contact appointment fetch; the weekly rail reads the location-wide event feed instead" },
+    { "actionId": "conversations-v3__export-messages-by-location", "reason": "message bodies; engagement is taken from the conversation index, not from message content" },
+    { "actionId": "conversations-v3__get-messages", "reason": "message bodies; engagement is taken from the conversation index, not from message content" },
+    { "actionId": "opportunities-v3__get-pipelines", "reason": "pipeline definitions, not opportunities; reading these as journey evidence is exactly the misroute this list exists to prevent" },
+    { "actionId": "payments-v3__list-orders", "reason": "revenueBasis is opportunity_monetary_value for this profile" },
+    { "actionId": "payments-v3__list-transactions", "reason": "revenueBasis is opportunity_monetary_value for this profile" }
+  ],
+  "sources": [
+    {
+      "sourceId": "client_contacts",
+      "capability": "contacts",
+      "evidenceSource": "public_ghl",
+      "operationIdPattern": "contacts.search",
+      "identity": {
+        "nativeId": ["id", "_id"],
+        "subjectNativeId": ["id", "_id"],
+        "normalizedEmail": ["email"],
+        "normalizedPhone": ["phone"]
+      },
+      "entities": [
+        {
+          "entityId": "client_contact_entity",
+          "recordType": "contact",
+          "when": { "kind": "always" }
+        }
+      ],
+      "events": [
+        {
+          "eventId": "contact_lead_created",
+          "stage": "lead_created",
+          "journeyId": "client_sales",
+          "eventTimeField": ["dateAdded", "createdAt", "dateCreated"],
+          "when": { "kind": "always" },
+          "cohortFrom": ["id", "_id"]
+        }
+      ]
+    },
+    {
+      "sourceId": "client_conversations",
+      "capability": "conversations",
+      "evidenceSource": "public_ghl",
+      "operationIdPattern": "conversations-v3__search-conversation",
+      "identity": {
+        "nativeId": ["id", "_id"],
+        "subjectNativeId": ["contactId"],
+        "normalizedEmail": ["email"],
+        "normalizedPhone": ["phone"]
+      },
+      "entities": [
+        {
+          "entityId": "client_conversation_subject_entity",
+          "recordType": "contact",
+          "when": { "kind": "always" }
+        }
+      ],
+      "events": [
+        {
+          "eventId": "conversation_first_engagement",
+          "stage": "first_engagement",
+          "journeyId": "client_sales",
+          "eventTimeField": ["dateAdded", "lastMessageDate", "dateUpdated"],
+          "when": { "kind": "first_of_kind" },
+          "cohortFrom": ["contactId"]
+        }
+      ]
+    },
+    {
+      "sourceId": "client_appointments",
+      "capability": "appointments",
+      "evidenceSource": "public_ghl",
+      "operationIdPattern": "calendars-v3__get-calendar-events",
+      "identity": {
+        "nativeId": ["id", "_id"],
+        "subjectNativeId": ["contactId"],
+        "normalizedEmail": ["email"],
+        "normalizedPhone": ["phone"]
+      },
+      "entities": [
+        {
+          "entityId": "client_appointment_subject_entity",
+          "recordType": "contact",
+          "when": { "kind": "always" }
+        }
+      ],
+      "events": [
+        {
+          "eventId": "appointment_booked",
+          "stage": "booked",
+          "journeyId": "client_sales",
+          "eventTimeField": ["dateAdded", "createdAt", "startTime"],
+          "when": { "kind": "always" },
+          "cohortFrom": ["id", "_id"]
+        },
+        {
+          "eventId": "appointment_showed",
+          "stage": "showed",
+          "journeyId": "client_sales",
+          "eventTimeField": ["startTime", "dateUpdated", "updatedAt"],
+          "when": { "kind": "field_equals", "field": "appointmentStatus", "value": "showed" },
+          "cohortFrom": ["id", "_id"]
+        },
+        {
+          "eventId": "appointment_no_show",
+          "stage": "no_show",
+          "journeyId": "client_sales",
+          "eventTimeField": ["startTime", "dateUpdated", "updatedAt"],
+          "when": { "kind": "field_in", "field": "appointmentStatus", "values": ["noshow", "no_show"] },
+          "cohortFrom": ["id", "_id"]
+        },
+        {
+          "eventId": "appointment_cancelled",
+          "stage": "cancelled",
+          "journeyId": "client_sales",
+          "eventTimeField": ["dateUpdated", "updatedAt", "startTime"],
+          "when": { "kind": "field_equals", "field": "appointmentStatus", "value": "cancelled" },
+          "cohortFrom": ["id", "_id"]
+        }
+      ]
+    },
+    {
+      "sourceId": "client_opportunities",
+      "capability": "opportunities",
+      "evidenceSource": "public_ghl",
+      "operationIdPattern": "opportunities.list",
+      "identity": {
+        "nativeId": ["id", "_id"],
+        "subjectNativeId": ["contactId", "contact.id"],
+        "opportunityNativeId": ["id", "_id"],
+        "normalizedEmail": ["contact.email"],
+        "normalizedPhone": ["contact.phone"]
+      },
+      "entities": [
+        {
+          "entityId": "client_opportunity_subject_entity",
+          "recordType": "contact",
+          "when": { "kind": "always" }
+        }
+      ],
+      "events": [
+        {
+          "eventId": "opportunity_outcome",
+          "stage": "opportunity_outcome",
+          "journeyId": "client_sales",
+          "eventTimeField": ["lastStatusChangeAt", "updatedAt", "dateUpdated"],
+          "when": { "kind": "field_in", "field": "status", "values": ["won", "lost", "abandoned"] },
+          "cohortFrom": ["id", "_id"]
+        },
+        {
+          "eventId": "opportunity_won",
+          "stage": "won",
+          "journeyId": "client_sales",
+          "eventTimeField": ["lastStatusChangeAt", "updatedAt", "dateUpdated"],
+          "when": { "kind": "field_equals", "field": "status", "value": "won" },
+          "cohortFrom": ["id", "_id"]
+        },
+        {
+          "eventId": "opportunity_collected_revenue",
+          "stage": "collected_revenue",
+          "journeyId": "client_sales",
+          "eventTimeField": ["lastStatusChangeAt", "updatedAt", "dateUpdated"],
+          "when": { "kind": "field_equals", "field": "status", "value": "won" },
+          "revenueFrom": ["monetaryValue"],
+          "cohortFrom": ["id", "_id"]
+        }
+      ]
+    }
+  ]
+}
