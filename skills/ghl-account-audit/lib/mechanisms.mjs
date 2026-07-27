@@ -1,4 +1,20 @@
 import { canonicalJson, sha256 } from './canonical.mjs';
+import { WINDOW_NAMES } from './window-names.mjs';
+
+/**
+ * WHICH WINDOW A SCOPE IS ABOUT, when it does not say.
+ *
+ * `currentClosedWeek`, which is exactly what this layer read unconditionally before task A2 round
+ * 3, so a scope written before the field existed keeps byte-identical behaviour.
+ *
+ * The field exists because the maturity ladder made the assumption false. `showed_to_decision_60d`
+ * is declared to report ONLY in `trailing90Days` — its whole reason for existing is that a 60-day
+ * lag cannot mature inside a closed week — so `metrics.metrics.currentClosedWeek` has no key for
+ * it at all, and asking for one threw `MECHANISM_INPUT_INVALID`. Every consultation-to-outcome
+ * edge in both shipped profiles is a ladder edge, so the measurement the ladder was built to
+ * deliver could produce no finding whatsoever.
+ */
+const DEFAULT_SCOPE_WINDOW = 'currentClosedWeek';
 
 const FAMILIES = Object.freeze([
   'calendar_capacity_or_timezone',
@@ -75,10 +91,14 @@ function plain(value) {
     && Object.getPrototypeOf(value) === Object.prototype;
 }
 
-function exactKeys(value, keys) {
+/**
+ * Every required key present, and NOTHING outside required plus the named optional ones. The
+ * optional list defaults to empty, so every existing call keeps its exact-match meaning.
+ */
+function exactKeys(value, keys, optionalKeys = []) {
   return plain(value)
-    && Object.keys(value).length === keys.length
-    && keys.every((key) => Object.hasOwn(value, key));
+    && keys.every((key) => Object.hasOwn(value, key))
+    && Object.keys(value).every((key) => keys.includes(key) || optionalKeys.includes(key));
 }
 
 function iso(value) {
@@ -206,8 +226,17 @@ function validateScope(scope, coverage) {
     'reversibilityBand', 'effortBand', 'dependencyBurden', 'operationalRiskBand',
     'supplementalReadAllowlist', 'sealedPath',
   ];
+  // The ONLY optional key. Absent means `currentClosedWeek`, which is what this layer always read,
+  // so the sealed scope shape is unchanged for every scope written before it existed. Kept out of
+  // `keys` deliberately: `exactKeys` is what stops a scope smuggling an unread field past review,
+  // and widening it to "these keys plus anything" would give that up to buy one optional field.
+  const optionalKeys = ['metricWindow'];
   if (
-    !exactKeys(scope, keys)
+    !exactKeys(scope, keys, optionalKeys)
+    || (
+      Object.hasOwn(scope, 'metricWindow')
+      && !WINDOW_NAMES.includes(scope.metricWindow)
+    )
     || typeof scope.metricId !== 'string'
     || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(scope.metricId)
     || !OPAQUE.test(scope.journeyId)
@@ -700,7 +729,14 @@ export function nominateMechanisms({
     validateScope(scope, coverage);
     if (seenMetricIds.has(scope.metricId)) throw codedError('MECHANISM_INPUT_INVALID');
     seenMetricIds.add(scope.metricId);
-    const metric = metrics.metrics.currentClosedWeek[scope.metricId];
+    // The window the scope is ABOUT, which is not always the closed week: see
+    // `DEFAULT_SCOPE_WINDOW`. A window this run never built is refused rather than quietly
+    // replaced by the default, because "answer about a different period than the one asked for"
+    // is the failure mode a default is supposed to prevent, not cause.
+    const scopeWindow = scope.metricWindow ?? DEFAULT_SCOPE_WINDOW;
+    const windowMetrics = metrics.metrics[scopeWindow];
+    if (!plain(windowMetrics)) throw codedError('MECHANISM_INPUT_INVALID', TypeError);
+    const metric = windowMetrics[scope.metricId];
     if (
       !plain(metric)
       || !['OBSERVED', 'UNKNOWN', 'NOT_APPLICABLE'].includes(metric.state)

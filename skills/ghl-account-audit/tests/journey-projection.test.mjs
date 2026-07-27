@@ -168,8 +168,81 @@ test('a finite revenue value produces an OBSERVED revenue event carrying the exa
   assert.equal(normalized.revenueAmount, 1200.5);
 });
 
-test('a revenue value of exactly zero is OBSERVED, because zero collected is a real answer', () => {
+/**
+ * TASK A2 ROUND 2 — THIS ASSERTION WAS INVERTED, DELIBERATELY, AND THE ORIGINAL IS QUOTED BELOW.
+ *
+ * It read:
+ *
+ *   test('a revenue value of exactly zero is OBSERVED, because zero collected is a real answer', () => {
+ *     const projected = project([opportunityCollection(rawOpportunity({ monetaryValue: 0 }))]);
+ *     const revenue = allItems(projected).find(({ stage }) => stage === REVENUE_STAGE);
+ *     assert.equal(revenue.revenueAmount, 0);
+ *     assert.equal(Object.hasOwn(revenue, 'classification'), false);
+ *     const normalized = normalizeEvidence(projected, CONTEXT).find(({ stage }) => stage === REVENUE_STAGE);
+ *     assert.equal(normalized.classification, 'OBSERVED');
+ *   });
+ *
+ * "Zero collected is a real answer" is defensible in the abstract and wrong for a closed commercial
+ * record on this platform, where the amount field is routinely left unfilled. Executed against the
+ * shipped profile: five closed records, one priced at 12000 and four left at zero, published as
+ * `OBSERVED 5/5, value 12000, excluded 0, coverage COMPLETE`. Four of the five contributed nothing
+ * and NOTHING WAS DISCLOSED, because a never-filled amount and a genuine zero were indistinguishable.
+ *
+ * The reading is now PROFILE-DECLARED (`zeroAmountPolicy`) rather than hardcoded either way. Both
+ * readings are proved: the default below, and the opt-in one in the test after it.
+ *
+ * ==========================================================================================
+ * TASK A2 ROUND 3 — THE SAME TEST CHANGED A SECOND TIME, IN THE SAME SESSION. FLAGGED LOUDLY.
+ *
+ * The round-2 version, which stood for the length of one review round, read:
+ *
+ *   test('by default a revenue value of exactly zero is UNUSABLE, and is disclosed as such', () => {
+ *     const projected = project([opportunityCollection(rawOpportunity({ monetaryValue: 0 }))]);
+ *     const revenue = allItems(projected).find(({ stage }) => stage === REVENUE_STAGE);
+ *     assert.equal(Object.hasOwn(revenue, 'revenueAmount'), false, 'never a fabricated zero amount');
+ *     assert.equal(revenue.classification, 'UNKNOWN');
+ *     assert.deepEqual(revenue.projectionReasons, ['REVENUE_ZERO_ON_OUTCOME_STAGE']);
+ *     assert.equal(annotationCount(projected[0], 'REVENUE_ZERO_ON_OUTCOME_STAGE'), 1);
+ *     const normalized = normalizeEvidence(projected, CONTEXT).find(({ stage }) => stage === REVENUE_STAGE);
+ *     assert.equal(normalized.classification, 'UNKNOWN');
+ *   });
+ *
+ * WHAT IS UNCHANGED, and is the whole point of both versions: a zero is not read as an amount, and
+ * no fabricated zero collection reaches the output.
+ *
+ * WHAT CHANGED: WHERE the unusability lands. Emitting an UNKNOWN-classified event puts the
+ * uncertainty on the SUBJECT — `metrics.mjs` taints every event of a subject that carries a
+ * non-observed row — so a single unfilled amount field removed that subject from every appointment
+ * metric as well. Measured A/B at one unpriced record in three: the appointment attendance edge
+ * went `OBSERVED 7/14 coverage 1.000` -> `UNKNOWN COVERAGE_BELOW_FLOOR coverage 0.688`, and 6 of 10
+ * OBSERVED cells in the run vanished, none of them about money. The unknown AMOUNT now suppresses
+ * the AMOUNT-BEARING EVENT and nothing else.
+ * ==========================================================================================
+ */
+test('by default a revenue value of exactly zero suppresses the AMOUNT and nothing else', () => {
   const projected = project([opportunityCollection(rawOpportunity({ monetaryValue: 0 }))]);
+  const revenue = allItems(projected).find(({ stage }) => stage === REVENUE_STAGE);
+  assert.equal(revenue, undefined, 'no fabricated zero amount, and no tainting UNKNOWN event');
+  // Counted, never silent, and at emission unit: the row's other events are untouched.
+  assert.equal(suppressionCount(projected[0], 'REVENUE_ZERO_ON_OUTCOME_STAGE'), 1);
+  assert.equal(annotationCount(projected[0], 'REVENUE_ZERO_ON_OUTCOME_STAGE'), 0);
+  const normalized = normalizeEvidence(projected, CONTEXT);
+  assert.equal(normalized.some(({ stage }) => stage === REVENUE_STAGE), false);
+  assert.equal(
+    normalized.some(({ classification }) => classification === 'UNKNOWN'),
+    false,
+    'the subject stays fully trusted for every other edge',
+  );
+});
+
+test('an account where zero IS a real answer declares it, and then zero is OBSERVED', () => {
+  const permissive = structuredClone(clientProjection);
+  permissive.zeroAmountPolicy = 'OBSERVED';
+  const projected = project(
+    [opportunityCollection(rawOpportunity({ monetaryValue: 0 }))],
+    clientProfile,
+    permissive,
+  );
   const revenue = allItems(projected).find(({ stage }) => stage === REVENUE_STAGE);
   assert.equal(revenue.revenueAmount, 0);
   assert.equal(Object.hasOwn(revenue, 'classification'), false);

@@ -1,4 +1,7 @@
 import { Temporal } from '@js-temporal/polyfill';
+import { DEFAULT_REPORTING_WINDOWS, WINDOW_NAMES } from './window-names.mjs';
+
+export { DEFAULT_REPORTING_WINDOWS, WINDOW_NAMES };
 
 const UNKNOWN = Object.freeze({
   state: 'UNKNOWN',
@@ -65,7 +68,9 @@ export function buildWindows({ cutoff, timezone, maturityDays }) {
   const currentStart = currentEnd.subtract({ weeks: 1 });
   const previousStart = currentStart.subtract({ weeks: 1 });
   const trailingStart = currentEnd.subtract({ days: 28 });
+  const midTrailingStart = currentEnd.subtract({ days: 60 });
   const longTrailingStart = currentEnd.subtract({ days: 90 });
+  const settledTrailingStart = currentEnd.subtract({ days: 180 });
   const matureAsOf = currentEnd.subtract({ days: maturityDays });
   return deepFreeze({
     timezone,
@@ -73,15 +78,36 @@ export function buildWindows({ cutoff, timezone, maturityDays }) {
     currentClosedWeek: windowOf(currentStart, currentEnd),
     previousClosedWeek: windowOf(previousStart, currentStart),
     trailing28Days: windowOf(trailingStart, currentEnd),
-    /**
-     * Anchored to the SAME closed-week Monday boundary as every other window, then counted back
-     * 90 calendar days in account-local time. `durationHours` is therefore real elapsed hours
-     * (2159 or 2161 across a DST transition), never a constant 2160.
+    /*
+     * THE MATURITY LADDER — 60 / 90 / 180, decided by Xander on 2026-07-27.
      *
-     * It exists because two shipped edges allow more lag (90 days for `showed_to_decision`,
-     * 60 for `won_to_collected_revenue`) than the longest window could ever mature.
+     * A window no longer than an edge's `allowedLag` can almost never mature anybody: only a
+     * subject entering on the window's very first instant has had the whole lag elapse by the
+     * cutoff. `showed_to_opportunity_outcome` allows 90 days and the longest window was 90 days, so
+     * over 52 simulated weekly runs it reported nothing at all in the weeks the cutoff landed on
+     * the closed-week Monday, and where it did fire it averaged a denominator of 1 to 2 against the
+     * ~23 subjects that actually qualified for the window.
+     *
+     * The fix is not to shorten the lag, which would silently drop slow-closing deals — a real
+     * share of a clinic's revenue. It is to report the SAME measurement at three maturities, each
+     * over a lookback roughly DOUBLE its lag, so roughly half of every window can mature:
+     *
+     *   allowed lag 30 days -> trailing 60 days   reacts fast; says whether a recent change works
+     *   allowed lag 60 days -> trailing 90 days   the middle read
+     *   allowed lag 90 days -> trailing 180 days  the true settled number, too slow to attribute
+     *
+     * All three are needed. The 90/180 number is the honest one but it moves too slowly to credit
+     * or blame anything done this month; the 30/60 number moves within weeks but under-counts deals
+     * that close late. A single long window would hide recent movement entirely, which is the
+     * failure this ladder exists to prevent.
+     *
+     * Every one of them is anchored to the SAME closed-week Monday boundary as every other window
+     * and then counted back in account-local calendar days, so `durationHours` is real elapsed
+     * hours (e.g. 2159 or 2161 for the 90-day window across a DST transition), never a constant.
      */
+    trailing60Days: windowOf(midTrailingStart, currentEnd),
     trailing90Days: windowOf(longTrailingStart, currentEnd),
+    trailing180Days: windowOf(settledTrailingStart, currentEnd),
     matureAsOf: matureAsOf.toString(),
     maturityDays,
   });
@@ -257,13 +283,33 @@ function carriesIdentity(type) {
   return EDGE_IDENTITY_POLICY[type] !== 'SHARED_ORIGIN';
 }
 
-/** Every window `computeJourneyMetrics` will report on, in report order. */
-const WINDOW_NAMES = Object.freeze([
-  'currentClosedWeek',
-  'previousClosedWeek',
-  'trailing28Days',
-  'trailing90Days',
-]);
+/**
+ * WHICH WINDOWS DOES THIS EDGE REPORT ON?
+ *
+ * Declared as profile DATA (`MetricEdgeSchema.reportingWindows`), because the answer is a property
+ * of the edge's lag and not of the engine. Before the maturity ladder every edge was computed over
+ * every window, which is why a 90-day-lag edge was published over a 90-day window it could never
+ * mature and a 2-day-lag edge was published over the same one it had long since saturated.
+ *
+ * ABSENT means `DEFAULT_REPORTING_WINDOWS` — the exact window set that existed before this change,
+ * so an edge written before it keeps byte-identical behaviour and the two new windows are opt-in.
+ *
+ * Validated HERE as well as in `MetricEdgeSchema`, on the same principle as `minimumSample` and
+ * `minimumCoverage`: a contract that reached the engine with a broken declaration bypassed the
+ * schema, and degrading it to "report everywhere" would turn "this contract is wrong" into a set of
+ * numbers nobody asked for.
+ */
+function reportingWindowsFor(contract) {
+  const declared = contract.reportingWindows;
+  if (declared === undefined) return DEFAULT_REPORTING_WINDOWS;
+  if (
+    !Array.isArray(declared)
+    || declared.length === 0
+    || new Set(declared).size !== declared.length
+    || declared.some((name) => !WINDOW_NAMES.includes(name))
+  ) throw codedError('METRICS_CONTRACT_INVALID', TypeError);
+  return declared;
+}
 
 function coverageFloorFor(contract, profileFloor) {
   const rule = contract.eligibilityRule;
@@ -281,7 +327,12 @@ function coverageFloorFor(contract, profileFloor) {
 
 function emptyCounts() {
   return {
-    eligible: null, excluded: null, exclusions: {}, coverageRatio: null,
+    eligible: null,
+    excluded: null,
+    immature: null,
+    exclusions: {},
+    coverageRatio: null,
+    maturityRatio: null,
   };
 }
 
@@ -297,15 +348,40 @@ function unknownMetric(
     reasonCode,
     eligible: counts.eligible,
     excluded: counts.excluded,
+    immature: counts.immature,
     exclusions: counts.exclusions,
     threshold,
     rankEligible: false,
     window,
     coverage: 'INCOMPLETE',
     coverageRatio: counts.coverageRatio,
+    maturityRatio: counts.maturityRatio,
     coverageFloor,
     ...floorDisclosure(coverageFloor),
   };
+}
+
+/**
+ * COMPLETE means NOTHING WAS DROPPED, and it has to mean that for BOTH reasons a subject can be
+ * dropped. Before task A2 round 2 it only saw `excluded`, so a cell that measured 17 of 28 in-window
+ * entrants — 39% of its window silently absent because their lag had not elapsed — still declared
+ * complete coverage over an `eligible` of 17.
+ */
+function coverageLabel(excluded, immature) {
+  return excluded === 0 && immature === 0 ? 'COMPLETE' : 'INCOMPLETE';
+}
+
+/**
+ * WHY A VALUE CELL CARRIES NO RATE, named by cause. `RATE_NOT_DERIVABLE` is a statement about the
+ * QUESTION and presumes there were subjects to ask it of; when there were none, or when trust
+ * refused all of them, the honest cause is the population and not the question. Task A2 round 3:
+ * a VALUE cell whose every subject was excluded reported `RATE_NOT_DERIVABLE`, which reads as a
+ * design choice rather than as the account problem it actually is.
+ */
+function emptyValueReason(eligible, excluded) {
+  if (eligible === 0) return 'NO_ELIGIBLE_POPULATION';
+  if (excluded === eligible) return 'ALL_SUBJECTS_EXCLUDED';
+  return 'RATE_NOT_DERIVABLE';
 }
 
 /**
@@ -510,38 +586,86 @@ function metricPopulation(graph) {
 }
 
 /**
- * The eligible/measurable split for one keyed set of entrants, plus the keys nothing could place
- * in any window. Shared by the normal path and by the immaturity early return, so a window that
- * measured nothing still reports the population it could not measure.
+ * THE POPULATION SPLIT, over the WHOLE in-window entrant set.
+ *
+ * Task A2 round 2. This used to be handed only the entrants that had already MATURED, so `eligible`
+ * described the maturable rump of the window rather than the window. Measured on 28 appointments
+ * booked one per day across `trailing28Days` with a 14-day lag: the cell reported
+ * `eligible 17, excluded 0, coverage COMPLETE` while 11 of the 28 entrants had been dropped without
+ * a word — and the 0.8 floor, whose whole rationale is that a fifth of the population is the most
+ * that can be lost, never engaged because it could not see the loss.
+ *
+ * THE THREE-WAY PARTITION, `eligible = excluded + immature + denominator`, which holds exactly ON
+ * AN OBSERVED CELL. It is a statement about `countsFor`'s own three buckets and stays true of them
+ * always; what it cannot claim is that the PUBLISHED cell exhibits it, because `denominator` is
+ * published as `null` on an UNKNOWN cell and on a VALUE cell, both of which publish `eligible`,
+ * `excluded` and `immature` as real numbers. On those cells the readable partition is
+ * `eligible = excluded + immature + (subjects that were measurable)`, and the last term is simply
+ * not surfaced under that name.
+ *
+ * - EXCLUDED — the evidence for this subject cannot be trusted. Decided FIRST, ahead of maturity,
+ *   because it is a property of the evidence and not of time: waiting for a conflicted subject to
+ *   mature would not produce an answer.
+ * - IMMATURE — trustworthy, but the edge's allowed lag has not elapsed, so no method could answer
+ *   for it yet. Not lost, merely not yet answerable.
+ * - DENOMINATOR — trustworthy and answerable, the only rows a rate is computed over.
+ *
+ * TWO RATIOS, because the two ignorances are not the same thing and one number cannot carry both:
+ *
+ * - `coverageRatio = denominator / (eligible - immature)` — the TRUST ratio, over the answerable
+ *   population. This is the one THE FLOOR GOVERNS, and that is a deliberate decision. The floor's
+ *   stated rationale is that a rate stops being an honest description of the account once too much
+ *   of the population is lost; an immature entrant is not lost, it is a row for which no answer
+ *   exists yet by any means, and folding it in would make the floor fire on the CALENDAR rather
+ *   than on the data. Concretely: `trailing28Days` can mature only 50% of its window for a 14-day
+ *   lag, so a combined ratio would put every appointment edge of every account permanently under
+ *   the floor — the all-UNKNOWN failure task A2a exists to have removed.
+ * - `maturityRatio = (eligible - immature) / eligible` — the ANSWERABLE share of the window,
+ *   published beside it. This is the number that says "half of this window cannot be spoken for
+ *   yet", and `coverage` goes INCOMPLETE whenever it is below 1, so no cell can ever again declare
+ *   complete coverage while dropping a large share of its window.
  */
-function countsFor(keyed, exclusionByKey, unplaceable, placed) {
+function countsFor(keyed, matureKeys, exclusionByKey, unplaceable, placed) {
   const tally = {};
   const bump = (reason) => { tally[reason] = (tally[reason] ?? 0) + 1; };
   const measurable = [];
+  let immature = 0;
   for (const [key, node] of keyed) {
     const reason = exclusionByKey.get(key);
-    if (reason) bump(reason);
-    else measurable.push([key, node]);
+    if (reason) {
+      bump(reason);
+      continue;
+    }
+    if (!matureKeys.has(key)) {
+      immature += 1;
+      continue;
+    }
+    measurable.push([key, node]);
   }
   let eligible = keyed.length;
   for (const key of [...unplaceable].sort()) {
     // No usable event time anywhere, so this key cannot be ruled INTO or OUT OF any window.
     // Omitting it would overstate coverage, so it is counted — once per window, because nothing
-    // in the evidence places it in one window rather than another.
+    // in the evidence places it in one window rather than another. It is EXCLUDED, never immature:
+    // an event time that cannot be read will not become readable by waiting.
     if (placed.has(key)) continue;
     eligible += 1;
     bump('UNPLACEABLE_EVENT_TIME');
   }
   const denominator = measurable.length;
+  const answerable = eligible - immature;
   return {
     measurable,
     counts: {
       eligible,
-      excluded: eligible - denominator,
+      excluded: answerable - denominator,
+      immature,
+      answerable,
       exclusions: Object.fromEntries(EXCLUSION_REASONS
         .filter((reason) => tally[reason])
         .map((reason) => [reason, tally[reason]])),
-      coverageRatio: eligible === 0 ? null : denominator / eligible,
+      coverageRatio: answerable === 0 ? null : denominator / answerable,
+      maturityRatio: eligible === 0 ? null : answerable / eligible,
     },
   };
 }
@@ -642,56 +766,93 @@ function computeEdge(
     if (!prior || sortEvents(node, prior) < 0) fromByKey.set(key, node);
   }
   const entrants = [...fromByKey.entries()].sort(([, left], [, right]) => sortEvents(left, right));
-  const mature = [];
+  const isRevenueMetric = contract.toStage === 'collected_revenue'
+    || contract.edgeId.toLowerCase().includes('revenue');
+  const isValueMeasure = contract.measure === 'VALUE';
+
+  /*
+   * MATURITY IS NOW A LABEL ON THE POPULATION, NOT A FILTER IN FRONT OF IT.
+   *
+   * `countsFor` is handed EVERY in-window entrant together with the set that matured, so `eligible`
+   * describes the window and `immature` says how much of it cannot be spoken for yet. Before this
+   * round the mature subset was passed in as though it were the population, which is how a cell
+   * could drop 39% of its window and still print `coverage: COMPLETE`.
+   *
+   * A VALUE MEASURE HAS NOTHING TO WAIT FOR, so every one of its entrants is mature at its own
+   * instant. This is the SAME premise `measure: "VALUE"` and `tautologicalStagePairs` are built on,
+   * stated once more where it decides something: a VALUE edge is declared only where both stages
+   * come off the same record under the same predicate and the same event-time reading, so the
+   * amount is known at the moment the entrant exists. Nothing about it can become truer by waiting,
+   * and no later evidence can revise it, because there is no later evidence — there is one row.
+   *
+   * Task A2 round 3. Left as an ordinary lag-driven split, `won_to_collected_revenue`'s leftover
+   * 60-day `allowedLag` — correct while it was a rate, meaningless once it was not — deleted the
+   * account's money: a window no longer than 60 days matured NOBODY, so the weekly and 28-day
+   * revenue figures were structurally `null`, and the 90-day figure carried only the wins closed
+   * more than 60 days before the cutoff. Measured on a hand-summed three-win account:
+   * `null / null / 8000` against a true `450 / 2450 / 10450`.
+   *
+   * `allowedLag` is deliberately NOT set to zero to achieve this. It still governs the conversion
+   * deadline below, where it is a genuine statement about the contract; forcing it to zero would
+   * bury the exemption in a magic number in a profile file, where the next reader would have to
+   * rediscover the reason. If a VALUE edge ever DOES have a genuine waiting period — an amount
+   * settled by a later record, from a source the entrant's row does not contain — then it is not
+   * this kind of edge at all: the two stages would no longer be the same record under the same
+   * predicate, so `tautologicalStagePairs` would stop calling it a tautology and it would have to
+   * be justified as a RATE, with maturity restored, rather than declared VALUE.
+   */
+  const matureKeys = new Set();
   for (const [key, node] of entrants) {
+    if (isValueMeasure) {
+      matureKeys.add(key);
+      continue;
+    }
     const maturity = addLag(node.eventTime, contract.allowedLag, window);
     if (
       Temporal.Instant.compare(instant(node.eventTime), instant(matureAsOf)) < 0
       && Temporal.Instant.compare(maturity, instant(analysisCutoff)) <= 0
-    ) mature.push([key, node]);
-  }
-  if (entrants.length > 0 && mature.length === 0) {
-    /*
-     * NOTHING MATURED, BUT THE POPULATION IS STILL KNOWN.
-     *
-     * This return used to discard the counts it had already established, leaving `eligible`,
-     * `excluded` and `exclusions` empty. No unearned number could hide in an UNKNOWN, but three
-     * things followed: the reasonCode blamed missing evidence for what was really an exclusion,
-     * `PARTIAL_SUBJECT_COVERAGE` could not fire downstream, and the report's coverage disclosure —
-     * which keys off `excluded` — announced full coverage for a window in which every subject was
-     * conflicted. The counts are carried through instead, over the ENTRANTS, since maturity is
-     * what stopped them being measured and not trust.
-     */
-    const { counts: earlyCounts } = countsFor(entrants, exclusionByKey, unplaceable, placed);
-    const globallyImmature = entrants.every(([, node]) => (
-      Temporal.Instant.compare(instant(node.eventTime), instant(matureAsOf)) >= 0
-    ));
-    // When trust refused EVERY entrant, the cohort's age is beside the point: waiting for it to
-    // mature would not have produced a rate. The exclusion is the honest cause.
-    const allExcluded = earlyCounts.eligible > 0
-      && earlyCounts.excluded === earlyCounts.eligible;
-    let reasonCode = 'MISSING_REQUIRED_EVIDENCE';
-    if (allExcluded) reasonCode = 'ALL_SUBJECTS_EXCLUDED';
-    else if (globallyImmature) reasonCode = 'IMMATURE_COHORT';
-    return unknownMetric(window, threshold, coverageFloor, reasonCode, earlyCounts);
+    ) matureKeys.add(key);
   }
 
-  const { measurable, counts } = countsFor(mature, exclusionByKey, unplaceable, placed);
+  const { measurable, counts } = countsFor(
+    entrants,
+    matureKeys,
+    exclusionByKey,
+    unplaceable,
+    placed,
+  );
   const {
-    eligible, excluded, exclusions, coverageRatio,
+    eligible, excluded, immature, answerable, exclusions, coverageRatio, maturityRatio,
   } = counts;
   const denominator = measurable.length;
-  if (eligible > 0 && denominator === 0) {
-    return unknownMetric(window, threshold, coverageFloor, 'ALL_SUBJECTS_EXCLUDED', counts);
-  }
-  if (eligible > 0 && coverageRatio < coverageFloor) {
-    return unknownMetric(window, threshold, coverageFloor, 'COVERAGE_BELOW_FLOOR', counts);
+
+  /*
+   * WHY NOTHING WAS MEASURED, named by cause rather than by shrug.
+   *
+   * An edge blocked purely by its allowed lag used to report `MISSING_REQUIRED_EVIDENCE`, the same
+   * code an entirely unmapped edge reports, because `IMMATURE_COHORT` demanded that EVERY entrant be
+   * newer than `matureAsOf` — a condition the lag-blocked case never satisfies. The population split
+   * above answers the question directly: if trust refused everybody the cause is exclusion, and
+   * otherwise the only thing left standing between the entrants and an answer is time.
+   */
+  const emptyReason = () => {
+    if (eligible === 0) return 'NO_ELIGIBLE_POPULATION';
+    if (excluded === eligible) return 'ALL_SUBJECTS_EXCLUDED';
+    return 'IMMATURE_COHORT';
+  };
+
+  if (!isValueMeasure) {
+    if (eligible > 0 && denominator === 0) {
+      return unknownMetric(window, threshold, coverageFloor, emptyReason(), counts);
+    }
+    if (answerable > 0 && coverageRatio < coverageFloor) {
+      return unknownMetric(window, threshold, coverageFloor, 'COVERAGE_BELOW_FLOOR', counts);
+    }
   }
 
   let numerator = 0;
   let value = 0;
-  const isRevenueMetric = contract.toStage === 'collected_revenue'
-    || contract.edgeId.toLowerCase().includes('revenue');
+  let valueSubjects = 0;
   for (const [key, from] of measurable) {
     const fromTime = instant(from.eventTime);
     const deadline = addLag(from.eventTime, contract.allowedLag, window);
@@ -719,9 +880,65 @@ function computeEdge(
         );
       }
       numerator += 1;
-      if (Number.isFinite(to.revenueAmount)) value += to.revenueAmount;
+      if (Number.isFinite(to.revenueAmount)) {
+        value += to.revenueAmount;
+        valueSubjects += 1;
+      }
     }
   }
+
+  /*
+   * A VALUE MEASURE PUBLISHES MONEY, AND NEVER A RATE.
+   *
+   * `won` and `collected_revenue` are projected from the SAME opportunity record under the SAME
+   * predicate off the SAME event-time field, so the conversion exists at the entrant's own instant
+   * for every entrant that exists at all: `numerator === denominator` in every probe, including an
+   * exhaustive sweep over priced / zero / string / null / missing / negative / float amounts. The
+   * rate is the constant 1 and the only informative things in the cell are the AMOUNT and the
+   * POPULATION BEHIND IT.
+   *
+   * `numerator`, `denominator` and `rate` are therefore all null and `state` is UNKNOWN — the
+   * CONVERSION genuinely is unknown, and a collection rate is not derivable from opportunity data
+   * alone. That is also exactly the shape `mechanisms.mjs:939-942` requires of a non-OBSERVED
+   * metric, so nothing downstream can pick the constant up and re-publish it as a measurement.
+   *
+   * What IS published: `value`, the amount, on the revenue basis the profile declares
+   * (`opportunity_monetary_value` for both shipped profiles — the standing owner decision); and
+   * `valueSubjects`, how many subjects it was summed over, so the amount is never read as covering
+   * a population it does not. The coverage floor deliberately does NOT suppress this: the floor
+   * guards a RATE against being computed over a rump, and there is no rate here. Suppressing the
+   * amount would delete the account's money over a rule aimed at something else, while `excluded`,
+   * `immature` and `coverageRatio` already say exactly how much of the window it covers.
+   *
+   * THE REASON CODE NAMES THE CAUSE, on the same rule as the rate path. `RATE_NOT_DERIVABLE` says
+   * "there were subjects, and a rate is simply not the right question for them". It is the wrong
+   * answer when there were no subjects (`NO_ELIGIBLE_POPULATION`) and equally wrong when trust
+   * refused every one of them (`ALL_SUBJECTS_EXCLUDED`) — in that case the cell reports no money
+   * for a reason a reader can act on, rather than one that sounds like a design choice.
+   */
+  if (isValueMeasure) {
+    return {
+      ...UNKNOWN,
+      reasonCode: emptyValueReason(eligible, excluded),
+      value: valueSubjects === 0 ? null : value,
+      valueSubjects,
+      eligible,
+      excluded,
+      immature,
+      exclusions,
+      threshold,
+      // A value can never satisfy a RATE sample threshold, and claiming it could would let a
+      // constant back into the ranking by the side door.
+      rankEligible: false,
+      window,
+      coverage: coverageLabel(excluded, immature),
+      coverageRatio,
+      maturityRatio,
+      coverageFloor,
+      ...floorDisclosure(coverageFloor),
+    };
+  }
+
   const result = {
     state: 'OBSERVED',
     numerator,
@@ -729,14 +946,16 @@ function computeEdge(
     rate: denominator === 0 ? null : numerator / denominator,
     eligible,
     excluded,
+    immature,
     exclusions,
     threshold,
     rankEligible: denominator >= threshold,
     window,
     // `denominator === 0` here can only mean `eligible === 0`: a collapsed denominator was
     // returned as UNKNOWN above, so this zero is a measured zero and never a false one.
-    coverage: excluded === 0 ? 'COMPLETE' : 'INCOMPLETE',
+    coverage: coverageLabel(excluded, immature),
     coverageRatio,
+    maturityRatio,
     coverageFloor,
     ...floorDisclosure(coverageFloor),
     reasonCode: denominator === 0 ? 'NO_ELIGIBLE_POPULATION' : null,
@@ -836,19 +1055,44 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
     || !windows?.currentClosedWeek
   ) throw codedError('METRICS_INPUT_INVALID', TypeError);
   assertDeepFrozen(graph);
-  // Reported in this fixed order, and only for the windows the caller actually built, so a sealed
-  // window set from an earlier run replays to the same keys.
+  /*
+   * WHICH WINDOWS THIS RUN REPORTS ON, and which edges appear in each. Resolved once, in a fixed
+   * order, so a sealed run replays to exactly the same keys.
+   *
+   * THE WINDOW SET is the DEFAULT set plus every window some edge declares, intersected with the
+   * windows the caller actually built.
+   *
+   * - The default set is the report's SPINE and is present whenever it is built, even if it ends up
+   *   empty. `report.mjs` reads `metrics.cohorts.currentClosedWeek` directly, and "this week
+   *   reported nothing" is a fact worth publishing rather than a key worth deleting. It is also the
+   *   behaviour every contract had before this change, including one with no edges at all.
+   * - A window OUTSIDE the default set appears only because an edge asked for it. That is what
+   *   keeps a run whose contracts never mention the 180-day lookback from publishing a
+   *   `trailing180Days` key nobody can interpret.
+   *
+   * `reportingWindowsFor` is called before the loop, so a broken declaration throws whatever
+   * windows this particular run happens to have built.
+   */
+  const windowsByEdge = metricContracts.edges.map(
+    (contract) => [contract, new Set(reportingWindowsFor(contract))],
+  );
+  const reported = new Set(DEFAULT_REPORTING_WINDOWS);
+  for (const [, declared] of windowsByEdge) for (const name of declared) reported.add(name);
   const namedWindows = WINDOW_NAMES
-    .filter((name) => windows[name])
-    .map((name) => [name, windows[name]]);
+    .filter((name) => windows[name] && reported.has(name))
+    .map((name) => [
+      name,
+      windows[name],
+      windowsByEdge.filter(([, declared]) => declared.has(name)).map(([contract]) => contract),
+    ]);
   // Decided ONCE, here, and handed to every surface below. Nothing downstream sees the raw node
   // list, so no surface can answer "may I count this row?" differently from any other.
   const population = metricPopulation(graph);
   const metrics = {};
   const cohorts = {};
-  for (const [name, window] of namedWindows) {
+  for (const [name, window, edges] of namedWindows) {
     metrics[name] = {};
-    for (const contract of metricContracts.edges) {
+    for (const contract of edges) {
       metrics[name][contract.edgeId] = computeEdge(
         population,
         contract,
@@ -858,9 +1102,13 @@ export function computeJourneyMetrics({ graph, metricContracts, windows }) {
         metricContracts.coverageFloor,
       );
     }
+    // The entry cohort printed beside a window's rates must describe THAT window's rates, so it is
+    // derived from the edges reporting in it and not from every edge in the contract. A window
+    // reporting only the settled outcome edge would otherwise advertise a cohort built from root
+    // stages no cell in it consumes.
     cohorts[name] = cohortCounts(
       population,
-      metricContracts.edges,
+      edges,
       window,
       windows.cutoff,
     );

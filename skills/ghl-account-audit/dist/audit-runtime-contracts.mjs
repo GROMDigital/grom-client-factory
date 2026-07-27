@@ -3,6 +3,24 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+// lib/window-names.mjs
+var WINDOW_NAMES = Object.freeze([
+  "currentClosedWeek",
+  "previousClosedWeek",
+  "trailing28Days",
+  "trailing60Days",
+  "trailing90Days",
+  "trailing180Days"
+]);
+var DEFAULT_REPORTING_WINDOWS = Object.freeze([
+  "currentClosedWeek",
+  "previousClosedWeek",
+  "trailing28Days",
+  "trailing90Days"
+]);
+
+// schemas/v1.mjs
 var SCHEMA_VERSION = "1.0.0";
 var Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 var PseudonymousSubjectRefSchema = z.string().regex(/^psn_[a-f0-9]{16,64}$/);
@@ -258,7 +276,46 @@ var MetricEdgeSchema = z.object({
   reentryRule: z.enum(["new_journey_instance", "same_journey_instance"]),
   outcomeRule: JsonRecordSchema,
   required: z.boolean(),
-  nativeMapping: z.enum(["MAPPED", "UNKNOWN"])
+  nativeMapping: z.enum(["MAPPED", "UNKNOWN"]),
+  /**
+   * WHAT THIS EDGE MEASURES. `RATE` (the default, and the only reading before task A2 round 2) is a
+   * conversion: how many entrants reached the far stage. `VALUE` is an AMOUNT accumulated at the far
+   * stage, with NO rate published at all.
+   *
+   * `VALUE` exists because a declared transition is not always an observable conversion. When both
+   * stages are projected from the SAME record under the SAME predicate off the SAME event-time
+   * field — which is exactly how `won_to_collected_revenue` is projected out of a GHL opportunity —
+   * the conversion exists at the entrant's own instant for every entrant that exists at all, so
+   * `numerator === denominator` in every possible account and the "rate" is the constant 1. A
+   * collection RATE is not derivable from opportunity data alone; the collected VALUE is.
+   * `assertMetricStageCoverage` refuses to let such an edge be MAPPED as a `RATE`.
+   */
+  measure: z.enum(["RATE", "VALUE"]).optional(),
+  /**
+   * WHICH WINDOWS THIS EDGE IS REPORTED IN, declared as DATA rather than assumed by the engine.
+   *
+   * A window no LONGER than the edge's `allowedLag` can mature almost nobody — only a subject
+   * entering on the window's first instant has had the whole lag elapse by the cutoff — so an edge
+   * published over such a window reports either nothing or a rate computed over one or two
+   * subjects out of dozens. The rule of thumb the shipped profiles follow is a lookback of roughly
+   * DOUBLE the lag, which lets about half of each window mature.
+   *
+   * That is also why the same measurement may be declared several times at different maturities
+   * (30 days over a trailing 60, 60 over a trailing 90, 90 over a trailing 180): the fast variant
+   * moves in weeks and shows whether a recent change is working, the slow one is the true settled
+   * number but is far too late to attribute anything to. Each maturity is its own edge with its own
+   * `edgeId`, because `edgeId` is the result key under `metrics.metrics[window]`.
+   *
+   * OMITTING it does not mean "no windows" and does not mean "all windows": it means
+   * `DEFAULT_REPORTING_WINDOWS`, the window set that existed before the maturity ladder was added,
+   * so an edge written before this field keeps exactly the behaviour it had. `metrics.mjs`
+   * validates the same values again and throws `METRICS_CONTRACT_INVALID` on a declaration that
+   * bypassed this schema.
+   */
+  reportingWindows: z.array(z.enum(WINDOW_NAMES)).min(1).refine(
+    (names) => new Set(names).size === names.length,
+    "reportingWindows must not repeat a window"
+  ).optional()
 }).strict();
 var MetricContractsSchema = z.object({
   profileId: z.enum(["client", "grom_internal"]),
@@ -389,6 +446,20 @@ var ProjectionContractSchema = z.object({
   profileId: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
   version: z.literal(SCHEMA_VERSION),
   revenueBasis: ProjectionRevenueBasisSchema,
+  /**
+   * HOW AN AMOUNT OF EXACTLY ZERO ON AN OUTCOME STAGE IS READ. Declared, never assumed, because the
+   * honest answer differs per account and cannot be decided in code.
+   *
+   * `UNUSABLE` (the default) treats a zero as an amount the account never supplied: the event is
+   * still emitted, as UNKNOWN with `REVENUE_ZERO_ON_OUTCOME_STAGE`, and the subject is disclosed as
+   * excluded. On a GHL pipeline an unpriced won opportunity is the NORMAL state — the field is
+   * simply never filled in — so reading it as "£0 collected" silently understates the account's
+   * money and is indistinguishable from a genuine zero collection.
+   *
+   * `OBSERVED` is for an account where the amount field is genuinely always maintained and a zero
+   * therefore is a real answer. It is a deliberate declaration and never a default.
+   */
+  zeroAmountPolicy: z.enum(["UNUSABLE", "OBSERVED"]).optional(),
   /**
    * Review finding C3: which canonical record type carries a collection-level signal downstream.
    * `normalize.mjs:271-283` only synthesises one for an EMPTY INCOMPLETE envelope, so the
@@ -554,7 +625,17 @@ function loadMetricContracts(profileId) {
   const normalized = normalizeProfileId(profileId);
   const filename = METRIC_FILES[normalized];
   if (!filename) throw new Error(`UNKNOWN_METRIC_PROFILE:${profileId}`);
-  return validateMetricContractsForProfile(loadProfile(normalized), readProfileFile(filename));
+  const profile = loadProfile(normalized);
+  const contracts = validateMetricContractsForProfile(profile, readProfileFile(filename));
+  const rawProjection = readProfileFileIfPresent(projectionFilename(normalized));
+  if (rawProjection === null) {
+    if (contracts.edges.some(({ nativeMapping }) => nativeMapping === "MAPPED")) {
+      throw new Error(`METRIC_CONTRACTS_UNGATED:${profileId}`);
+    }
+    return contracts;
+  }
+  assertMetricStageCoverage(profile, ProjectionContractSchema.parse(rawProjection), contracts);
+  return contracts;
 }
 function validateMetricContractsForProfile(profile, contracts) {
   const parsedProfile = CoverageProfileSchema.parse(profile);
@@ -679,10 +760,60 @@ function assertActionRouting(projection) {
     }
   }
 }
-function assertStageCoverage(profile, projection, metricContracts) {
+function comparableScalar(value) {
+  if (typeof value === "string") return `t:${value.trim().toLowerCase()}`;
+  if (typeof value === "number") return Number.isFinite(value) ? `n:${value === 0 ? 0 : value}` : "x";
+  if (typeof value === "boolean") return `b:${value}`;
+  if (value === null) return "empty";
+  return "x";
+}
+function canonicalPredicate(when) {
+  if (when.kind === "field_equals") {
+    return canonicalJson({ kind: "field_in", field: when.field, values: [comparableScalar(when.value)] });
+  }
+  if (when.kind === "field_in") {
+    return canonicalJson({
+      kind: "field_in",
+      field: when.field,
+      values: [...new Set(when.values.map(comparableScalar))].sort()
+    });
+  }
+  return canonicalJson(when);
+}
+function sameTimeReading(left, right) {
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  return shorter.every((path, index) => path === longer[index]);
+}
+function tautologicalStagePairs(projection) {
+  const byRecordFamily = /* @__PURE__ */ new Map();
+  for (const source of projection.sources) {
+    const family = canonicalJson([source.evidenceSource, source.capability]);
+    const events = byRecordFamily.get(family) ?? [];
+    events.push(...source.events ?? []);
+    byRecordFamily.set(family, events);
+  }
+  const pairs = /* @__PURE__ */ new Set();
+  for (const events of byRecordFamily.values()) {
+    for (let index = 0; index < events.length; index += 1) {
+      for (let other = index + 1; other < events.length; other += 1) {
+        const left = events[index];
+        const right = events[other];
+        if (left.stage === right.stage) continue;
+        if (canonicalPredicate(left.when) !== canonicalPredicate(right.when)) continue;
+        if (!sameTimeReading(left.eventTimeField, right.eventTimeField)) continue;
+        pairs.add(`${left.stage}>${right.stage}`);
+        pairs.add(`${right.stage}>${left.stage}`);
+      }
+    }
+  }
+  return pairs;
+}
+function assertMetricStageCoverage(profile, projection, metricContracts) {
   const emitted = new Set(projection.sources.flatMap(
     (source) => (source.events ?? []).map(({ stage }) => stage)
   ));
+  const tautological = tautologicalStagePairs(projection);
   const declaredUnmeasurable = new Set(projection.unmeasurableEdges);
   const edgeIds = new Set(metricContracts.edges.map(({ edgeId }) => edgeId));
   for (const edgeId of declaredUnmeasurable) {
@@ -698,6 +829,9 @@ function assertStageCoverage(profile, projection, metricContracts) {
     }
     if (declaredUnmeasurable.has(edge.edgeId) && edge.nativeMapping === "MAPPED") {
       throw new Error(`PROJECTION_UNMEASURABLE_EDGE_MAPPED:${edge.edgeId}`);
+    }
+    if (edge.nativeMapping === "MAPPED" && tautological.has(`${edge.fromStage}>${edge.toStage}`) && edge.measure !== "VALUE") {
+      throw new Error(`PROJECTION_EDGE_TAUTOLOGICAL:${edge.edgeId}`);
     }
   }
   void profile;
@@ -731,7 +865,7 @@ function validateProjectionForProfile(profile, projection, metricContracts) {
   if (!Array.isArray(metricContracts.edges)) {
     throw new Error("PROJECTION_METRIC_CONTRACTS_INVALID");
   }
-  assertStageCoverage(parsedProfile, parsedProjection, metricContracts);
+  assertMetricStageCoverage(parsedProfile, parsedProjection, metricContracts);
   return parsedProjection;
 }
 function loadCollectionBudgets() {
@@ -765,6 +899,7 @@ export {
   CollectionBudgetsSchema,
   ConversationSampleSchema,
   CoverageProfileSchema,
+  DEFAULT_REPORTING_WINDOWS,
   EvidenceRecordSchema,
   FindingSchema,
   MetricContractsSchema,
@@ -777,7 +912,9 @@ export {
   RunManifestSchema,
   SCHEMA_VERSION,
   TargetSchema,
+  WINDOW_NAMES,
   assertAllowedPublicAction,
+  assertMetricStageCoverage,
   canonicalJson,
   loadCollectionBudgets,
   loadMetricContracts,

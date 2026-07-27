@@ -1501,25 +1501,80 @@ test('RECORD_NOT_AN_OBJECT — a row that is not an object is counted once, per 
   assert.equal(envelope.projection.recordsWithEmissions, 0);
 });
 
+/**
+ * TASK A2 ROUND 2 — EDITED, AND THE ORIGINAL IS QUOTED IN FULL BELOW.
+ *
+ * It read:
+ *
+ *   test('M15 — a negative zero amount is folded, so canonicalisation cannot kill the run', () => {
+ *     const projected = project([...one raw row with monetaryValue: -0...]);
+ *     const revenue = allItems(projected).find(({ stage }) => stage === 'collected_revenue');
+ *     assert.equal(revenue.revenueAmount, 0);
+ *     assert.equal(Object.is(revenue.revenueAmount, -0), false, 'a negative zero must never reach the output');
+ *     assert.equal(Object.hasOwn(revenue, 'classification'), false, 'zero collected is a real answer');
+ *     const records = normalizeEvidence(projected, CONTEXT);
+ *     const normalized = records.find(({ stage }) => stage === 'collected_revenue');
+ *     assert.equal(normalized.classification, 'OBSERVED');
+ *     assert.equal(normalized.revenueAmount, 0);
+ *   });
+ *
+ * WHY IT HAD TO CHANGE. Its last three assertions are the SAME claim, in the same words
+ * ('zero collected is a real answer'), as the A1 assertion task A2 round 2 was told to invert. Once
+ * a zero amount on an outcome stage is unusable by default, a `-0` is unusable too — there is no
+ * reading of the policy under which `-0` and `0` differ.
+ *
+ * WHAT IT STILL PROVES, which is what M15 exists for and is unchanged: `-0` never reaches the
+ * output, and the folding that stops `canonicalJson` refusing the record still happens. The second
+ * half asserts it in the ONE configuration where a zero can reach the output at all — a profile
+ * that has declared zero to be a real answer — so the folding is exercised rather than assumed.
+ *
+ * TASK A2 ROUND 3 — EDITED AGAIN, SAME SESSION, and the round-2 first half is quoted here:
+ *
+ *   const revenue = allItems(projected).find(({ stage }) => stage === 'collected_revenue');
+ *   assert.equal(Object.hasOwn(revenue, 'revenueAmount'), false);
+ *   assert.equal(Object.is(revenue.revenueAmount, -0), false, ...);
+ *   assert.equal(revenue.classification, 'UNKNOWN');
+ *   assert.deepEqual(revenue.projectionReasons, ['REVENUE_ZERO_ON_OUTCOME_STAGE']);
+ *   assert.equal(normalizeEvidence(projected, CONTEXT).filter(({ stage }) => stage === 'collected_revenue').length, 1);
+ *
+ * An UNKNOWN amount-bearing event taints its whole SUBJECT out of every metric, money or not, so
+ * under the default policy the event is now SUPPRESSED rather than downgraded. Nothing M15 exists
+ * for moves: `-0` still never reaches the output, and the folding is still exercised — in the
+ * second half, under the declared policy, which is the only configuration in which a zero amount
+ * reaches the output at all and therefore the only one where the folding can matter.
+ */
 test('M15 — a negative zero amount is folded, so canonicalisation cannot kill the run', () => {
-  const projected = project([sourceCollection({
+  const rawRow = {
+    id: 'o-negative-zero',
+    contactId: 'c1',
+    status: 'won',
+    monetaryValue: -0,
+    lastStatusChangeAt: '2026-07-15T09:00:00.000Z',
+  };
+  const collection = () => sourceCollection({
     operationId: OPPORTUNITIES_ACTION,
-    items: [{
-      id: 'o-negative-zero',
-      contactId: 'c1',
-      status: 'won',
-      monetaryValue: -0,
-      lastStatusChangeAt: '2026-07-15T09:00:00.000Z',
-    }],
+    items: [{ ...rawRow }],
     collectedCount: 1,
     reportedCount: 1,
-  })]);
+  });
+
+  // Default policy: a zero of either sign is an amount the account never supplied, so the
+  // amount-bearing event does not exist and `-0` reaches nothing at all.
+  const projected = project([collection()]);
   const revenue = allItems(projected).find(({ stage }) => stage === 'collected_revenue');
-  assert.equal(revenue.revenueAmount, 0);
-  assert.equal(Object.is(revenue.revenueAmount, -0), false, 'a negative zero must never reach the output');
-  assert.equal(Object.hasOwn(revenue, 'classification'), false, 'zero collected is a real answer');
-  const records = normalizeEvidence(projected, CONTEXT);
-  const normalized = records.find(({ stage }) => stage === 'collected_revenue');
+  assert.equal(revenue, undefined, 'a negative zero must never reach the output');
+  // The run survives: a refused canonicalisation downstream would discard the whole record.
+  assert.equal(normalizeEvidence(projected, CONTEXT).length > 0, true);
+
+  // Declared policy: the amount reaches the output, and it is `0` and never `-0`.
+  const permissive = structuredClone(clientProjection);
+  permissive.zeroAmountPolicy = 'OBSERVED';
+  const declared = project([collection()], clientProfile, permissive);
+  const observedRevenue = allItems(declared).find(({ stage }) => stage === 'collected_revenue');
+  assert.equal(observedRevenue.revenueAmount, 0);
+  assert.equal(Object.is(observedRevenue.revenueAmount, -0), false);
+  assert.equal(Object.hasOwn(observedRevenue, 'classification'), false);
+  const normalized = normalizeEvidence(declared, CONTEXT).find(({ stage }) => stage === 'collected_revenue');
   assert.equal(normalized.classification, 'OBSERVED');
   assert.equal(normalized.revenueAmount, 0);
 });

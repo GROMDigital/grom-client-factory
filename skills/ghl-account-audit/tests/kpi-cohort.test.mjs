@@ -122,24 +122,52 @@ test('adjacent-stage metrics use mature flow cohorts, deduplicate re-entry and l
     windows,
   });
   const metric = result.metrics.currentClosedWeek.first_engagement;
-  // Task A2a: the shape now carries the eligible/measured split as well. Both subjects were
-  // measurable, so `eligible` still equals `denominator` and coverage is still COMPLETE.
+  /*
+   * TASK A2 ROUND 2 — EDITED. The original expectation, quoted verbatim, was:
+   *
+   *   // Task A2a: the shape now carries the eligible/measured split as well. Both subjects were
+   *   // measurable, so `eligible` still equals `denominator` and coverage is still COMPLETE.
+   *   assert.deepEqual(metric, {
+   *     state: 'OBSERVED', numerator: 1, denominator: 2, rate: 0.5,
+   *     eligible: 2, excluded: 0, exclusions: {}, threshold: 2, rankEligible: true,
+   *     window: windows.currentClosedWeek,
+   *     coverage: 'COMPLETE', coverageRatio: 1, coverageFloor: 0.8, reasonCode: null,
+   *   });
+   *
+   * It encoded the defect being corrected. THREE subjects entered this window — the assertion two
+   * lines below has always said so, `cohorts.currentClosedWeek === 3` — and the third, `f`, is
+   * inside its own 2-day lag at this cutoff. `eligible` was computed AFTER the maturity filter, so
+   * it reported 2, and the cell then declared COMPLETE coverage of a window a third of which it had
+   * silently dropped. `eligible` is now the whole in-window population and `immature` carries the
+   * part of it that is not yet answerable, so `eligible === excluded + immature + denominator` and
+   * `cohorts` and `eligible` finally agree.
+   *
+   * The rate itself is unchanged, and so is `coverageRatio`: the floor still governs TRUST over the
+   * answerable population, and nothing here was untrustworthy.
+   */
   assert.deepEqual(metric, {
     state: 'OBSERVED',
     numerator: 1,
     denominator: 2,
     rate: 0.5,
-    eligible: 2,
+    eligible: 3,
     excluded: 0,
+    immature: 1,
     exclusions: {},
     threshold: 2,
     rankEligible: true,
     window: windows.currentClosedWeek,
-    coverage: 'COMPLETE',
+    coverage: 'INCOMPLETE',
     coverageRatio: 1,
+    maturityRatio: 2 / 3,
     coverageFloor: 0.8,
     reasonCode: null,
   });
+  assert.equal(
+    metric.eligible,
+    metric.excluded + metric.immature + metric.denominator,
+    'the population must partition exactly',
+  );
   assert.equal(result.currentStock.journey_client_sales.first_engagement, 2);
   assert.equal(result.cohorts.currentClosedWeek.journey_client_sales, 3);
 });
@@ -524,7 +552,18 @@ test('right-censored, incomplete, unresolved, ambiguous, inferred, and unmapped 
   const shortLag = { allowedLag: { amount: 1, unit: 'days' } };
   const cases = [
     {
-      reasonCode: 'MISSING_REQUIRED_EVIDENCE',
+      /*
+       * TASK A2 ROUND 2 — EDITED. This expectation read `reasonCode: 'MISSING_REQUIRED_EVIDENCE'`.
+       *
+       * That is the SAME code the `unmapped` case at the bottom of this list expects, so an edge
+       * blocked purely by its allowed lag was indistinguishable from an edge nothing had ever
+       * mapped — two completely different problems with two completely different fixes, reported
+       * identically. `IMMATURE_COHORT` existed for this case and could never fire, because it
+       * demanded that EVERY entrant be newer than `matureAsOf`, which a lag-blocked cohort does not
+       * satisfy. Changing this assertion is what makes the two codes tell them apart; the
+       * `unmapped` case below still expects `MISSING_REQUIRED_EVIDENCE` and is what proves it.
+       */
+      reasonCode: 'IMMATURE_COHORT',
       graph: graph([base]),
       contract: contract('right_censored', 'lead_created', 'first_engagement', { allowedLag: { amount: 2, unit: 'days' } }),
     },

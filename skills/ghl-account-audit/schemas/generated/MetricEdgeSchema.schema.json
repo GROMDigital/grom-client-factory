@@ -97,6 +97,28 @@
         "MAPPED",
         "UNKNOWN"
       ]
+    },
+    "measure": {
+      "type": "string",
+      "enum": [
+        "RATE",
+        "VALUE"
+      ]
+    },
+    "reportingWindows": {
+      "minItems": 1,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "currentClosedWeek",
+          "previousClosedWeek",
+          "trailing28Days",
+          "trailing60Days",
+          "trailing90Days",
+          "trailing180Days"
+        ]
+      }
     }
   },
   "required": [

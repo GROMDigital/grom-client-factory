@@ -23,6 +23,13 @@
         "none"
       ]
     },
+    "zeroAmountPolicy": {
+      "type": "string",
+      "enum": [
+        "UNUSABLE",
+        "OBSERVED"
+      ]
+    },
     "suppressionSignal": {
       "type": "object",
       "properties": {

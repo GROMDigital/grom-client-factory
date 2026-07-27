@@ -146,6 +146,7 @@ const REASON_NOT_FIRST = 'NOT_FIRST_OF_KIND';
 const REASON_NO_ENTITY_KEY = 'ENTITY_NATIVE_ID_UNRESOLVED';
 const REASON_OUTSIDE_WINDOW = 'EVENT_TIME_OUTSIDE_APPLIED_WINDOW';
 const NOTE_AMOUNT_UNUSABLE = 'REVENUE_NOT_FINITE';
+const NOTE_AMOUNT_ZERO = 'REVENUE_ZERO_ON_OUTCOME_STAGE';
 const NOTE_SUBJECT_UNPROVABLE = 'SUBJECT_ENTITY_UNRESOLVED';
 
 const SIGNAL_REASON_PREFIX = 'PROJECTION_SUPPRESSED';
@@ -169,6 +170,9 @@ const SUPPRESSION_UNITS = Object.freeze({
   [REASON_NOT_FIRST]: UNIT_EMISSION,
   [REASON_NO_ENTITY_KEY]: UNIT_EMISSION,
   [REASON_OUTSIDE_WINDOW]: UNIT_EMISSION,
+  // Rule 1b, round 3. An unfilled amount suppresses the AMOUNT-BEARING EVENT and nothing else, so
+  // it is an emission-unit reason: one row can carry several events and only this one is dropped.
+  [NOTE_AMOUNT_ZERO]: UNIT_EMISSION,
 });
 
 const KIND_RECORDS = 'projected_records';
@@ -469,13 +473,76 @@ function matchSource(sources, collection) {
  * ORDERED CANDIDATE PATHS, like every other path field on a contract: the first path that holds a
  * value decides, and a later path is not consulted to rescue an unusable earlier one, because
  * silently reading the amount from somewhere else is how an amount stops meaning what it says.
+ *
+ * RULE 1b, added by task A2 round 2. A value of EXACTLY ZERO is not self-evidently an amount. On a
+ * real pipeline the amount field on a closed commercial record is very often simply never filled
+ * in, so a zero is indistinguishable from a genuine zero amount and reading it as one silently
+ * understates the account's money — a probe reached 98% understatement while every cell still read
+ * as fully covered. Which reading applies is therefore DECLARED by the profile
+ * (`zeroAmountPolicy`) and defaults to `UNUSABLE`.
+ *
+ * ROUND 3 CORRECTED WHAT "UNUSABLE" DOES. Round 2 emitted the event anyway, classified UNKNOWN.
+ * That reads as caution and behaves as demolition: `metrics.mjs` taints the whole SUBJECT off a
+ * non-observed row, so one unfilled amount field removed that subject from EVERY edge, including
+ * every edge that has nothing to do with money. Measured A/B on one account with a third of its
+ * closed commercial records unpriced, the appointment attendance edge went from
+ * `OBSERVED 7/14, coverage 1.000` to `UNKNOWN COVERAGE_BELOW_FLOOR, coverage 0.688`, and 6 of 10
+ * OBSERVED cells in the run disappeared — none of them about money.
+ *
+ * The direction was right and the blast radius was wrong. An unknown AMOUNT must suppress the
+ * AMOUNT. So the AMOUNT-BEARING EVENT is suppressed, counted under its own reason like every other
+ * suppression, and nothing else about the subject is touched: the other events emitted from the
+ * same row stand, the subject stays trustworthy for every edge, and the revenue edge simply has
+ * one fewer contributing subject — which its own `valueSubjects` against `eligible` states
+ * outright.
+ *
+ * `suppress` is returned rather than inferred from the note, because the OTHER note
+ * (`REVENUE_NOT_FINITE`) still downgrades the event in place. That difference is deliberate and is
+ * NOT an oversight: an amount field holding a string or a negative number is a data-quality fact
+ * about the row that the graph should keep raising, whereas an unfilled field is the normal state
+ * of a GHL pipeline. The two are only tied together if this returns one flag for both.
  */
-function readAmount(record, paths) {
+function readAmount(record, paths, zeroPolicy) {
   const value = readFirstPath(record, paths);
   if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-    return { amount: value === 0 ? 0 : value, note: null };
+    if (value === 0 && zeroPolicy !== 'OBSERVED') {
+      return { amount: null, note: NOTE_AMOUNT_ZERO, suppress: true };
+    }
+    return { amount: value === 0 ? 0 : value, note: null, suppress: false };
   }
-  return { amount: null, note: NOTE_AMOUNT_UNUSABLE };
+  return { amount: null, note: NOTE_AMOUNT_UNUSABLE, suppress: false };
+}
+
+/**
+ * THE IDENTITY AN ENTITY RECORD MAY CARRY, which is strictly less than the identity an EVENT may.
+ *
+ * Task A2 round 2. An entity record IS the subject, so it may carry only identity that is stable
+ * FOR THAT SUBJECT. `opportunityNativeId` and `projectNativeId` are scoped to one commercial
+ * record by construction — `metrics.mjs` `subjectKey` treats organization + one of them as a
+ * DIFFERENT subject from the contact — so copying the row's own commercial id onto the contact
+ * entity derived from it makes a contact with two opportunities contradict itself: two entity
+ * claims on one native id disagreeing on `opportunityNativeId` raise
+ * `contradictory_native_identity_claim` (`evidence-graph.mjs:242-263`), which taints that subject
+ * out of the lead edge, every appointment edge and the revenue edge at once.
+ *
+ * Repeat treatment is the business model of the clinic accounts this profile targets, and the
+ * disclosure was in SUBJECTS while the headline figure is MONEY, so one excluded repeat customer
+ * with a large basket was nearly invisible.
+ *
+ * `normalizedEmail`, `normalizedPhone` and `organizationNativeId` STAY: those are attributes of the
+ * subject itself, and two rows disagreeing about them is a genuine identity contradiction that the
+ * graph should keep raising. The events emitted from the same row keep the FULL identity, so every
+ * composite proving join and all provenance survives this narrowing intact.
+ */
+const ENTITY_SCOPED_IDENTITY_FIELDS = Object.freeze(['opportunityNativeId', 'projectNativeId']);
+
+function entityIdentity(identity) {
+  const stable = {};
+  for (const field of IDENTITY_FIELDS) {
+    if (ENTITY_SCOPED_IDENTITY_FIELDS.includes(field)) continue;
+    if (Object.hasOwn(identity, field)) stable[field] = identity[field];
+  }
+  return stable;
 }
 
 function cohortReference(journeyId, journeyInstanceId, value) {
@@ -715,6 +782,9 @@ function resolveJourneyInstances(profile, projection) {
 export function projectJourneyEvents({ collections, context, profile, projection } = {}) {
   assertInput({ collections, context, profile, projection });
   const instanceByJourney = resolveJourneyInstances(profile, projection);
+  // Rule 1b. A contract that declares nothing gets the conservative reading, never the permissive
+  // one: an undeclared policy must not be able to turn an unpriced win into a £0 collection.
+  const zeroAmountPolicy = projection.zeroAmountPolicy === 'OBSERVED' ? 'OBSERVED' : 'UNUSABLE';
 
   // Content-derived processing order. Input order can therefore never reach the output, which is
   // what makes the kernel's byte-comparison on resume meaningful rather than accidental.
@@ -782,7 +852,13 @@ export function projectJourneyEvents({ collections, context, profile, projection
         produced += 1;
         emissions.push(emission({
           plan,
-          item: { recordType: entity.recordType, ...identity, nativeId: identity.subjectNativeId },
+          // `entityIdentity`, never the raw identity: see its doc comment. A commercial-record id
+          // on a derived CONTACT entity is what made a repeat customer contradict itself.
+          item: {
+            recordType: entity.recordType,
+            ...entityIdentity(identity),
+            nativeId: identity.subjectNativeId,
+          },
           eventTime: '',
           isEvent: false,
           entityKey: identity.subjectNativeId,
@@ -821,7 +897,17 @@ export function projectJourneyEvents({ collections, context, profile, projection
           if (reference !== null) item.cohortInstanceRef = reference;
         }
         if (Array.isArray(event.revenueFrom)) {
-          const { amount, note } = readAmount(record, event.revenueFrom);
+          const { amount, note, suppress } = readAmount(
+            record,
+            event.revenueFrom,
+            zeroAmountPolicy,
+          );
+          if (suppress) {
+            // Rule 1b, round 3. The AMOUNT is unknown, so the AMOUNT-bearing event does not exist.
+            // Counted, never silent — and the subject and its other events are left alone.
+            tally(plan.suppressed, note);
+            continue;
+          }
           if (note === null) {
             item.revenueAmount = amount;
           } else {

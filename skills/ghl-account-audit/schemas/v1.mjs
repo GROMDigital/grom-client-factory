@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import { DEFAULT_REPORTING_WINDOWS, WINDOW_NAMES } from '../lib/window-names.mjs';
 
 export const SCHEMA_VERSION = '1.0.0';
 
@@ -294,7 +295,51 @@ export const MetricEdgeSchema = z.object({
   outcomeRule: JsonRecordSchema,
   required: z.boolean(),
   nativeMapping: z.enum(['MAPPED', 'UNKNOWN']),
+  /**
+   * WHAT THIS EDGE MEASURES. `RATE` (the default, and the only reading before task A2 round 2) is a
+   * conversion: how many entrants reached the far stage. `VALUE` is an AMOUNT accumulated at the far
+   * stage, with NO rate published at all.
+   *
+   * `VALUE` exists because a declared transition is not always an observable conversion. When both
+   * stages are projected from the SAME record under the SAME predicate off the SAME event-time
+   * field — which is exactly how `won_to_collected_revenue` is projected out of a GHL opportunity —
+   * the conversion exists at the entrant's own instant for every entrant that exists at all, so
+   * `numerator === denominator` in every possible account and the "rate" is the constant 1. A
+   * collection RATE is not derivable from opportunity data alone; the collected VALUE is.
+   * `assertMetricStageCoverage` refuses to let such an edge be MAPPED as a `RATE`.
+   */
+  measure: z.enum(['RATE', 'VALUE']).optional(),
+  /**
+   * WHICH WINDOWS THIS EDGE IS REPORTED IN, declared as DATA rather than assumed by the engine.
+   *
+   * A window no LONGER than the edge's `allowedLag` can mature almost nobody — only a subject
+   * entering on the window's first instant has had the whole lag elapse by the cutoff — so an edge
+   * published over such a window reports either nothing or a rate computed over one or two
+   * subjects out of dozens. The rule of thumb the shipped profiles follow is a lookback of roughly
+   * DOUBLE the lag, which lets about half of each window mature.
+   *
+   * That is also why the same measurement may be declared several times at different maturities
+   * (30 days over a trailing 60, 60 over a trailing 90, 90 over a trailing 180): the fast variant
+   * moves in weeks and shows whether a recent change is working, the slow one is the true settled
+   * number but is far too late to attribute anything to. Each maturity is its own edge with its own
+   * `edgeId`, because `edgeId` is the result key under `metrics.metrics[window]`.
+   *
+   * OMITTING it does not mean "no windows" and does not mean "all windows": it means
+   * `DEFAULT_REPORTING_WINDOWS`, the window set that existed before the maturity ladder was added,
+   * so an edge written before this field keeps exactly the behaviour it had. `metrics.mjs`
+   * validates the same values again and throws `METRICS_CONTRACT_INVALID` on a declaration that
+   * bypassed this schema.
+   */
+  reportingWindows: z.array(z.enum(WINDOW_NAMES)).min(1)
+    .refine(
+      (names) => new Set(names).size === names.length,
+      'reportingWindows must not repeat a window',
+    )
+    .optional(),
 }).strict();
+
+/** Re-exported so a profile author and the metric engine read the default from ONE place. */
+export { DEFAULT_REPORTING_WINDOWS, WINDOW_NAMES };
 
 export const MetricContractsSchema = z.object({
   profileId: z.enum(['client', 'grom_internal']),
@@ -489,6 +534,20 @@ export const ProjectionContractSchema = z.object({
   version: z.literal(SCHEMA_VERSION),
   revenueBasis: ProjectionRevenueBasisSchema,
   /**
+   * HOW AN AMOUNT OF EXACTLY ZERO ON AN OUTCOME STAGE IS READ. Declared, never assumed, because the
+   * honest answer differs per account and cannot be decided in code.
+   *
+   * `UNUSABLE` (the default) treats a zero as an amount the account never supplied: the event is
+   * still emitted, as UNKNOWN with `REVENUE_ZERO_ON_OUTCOME_STAGE`, and the subject is disclosed as
+   * excluded. On a GHL pipeline an unpriced won opportunity is the NORMAL state — the field is
+   * simply never filled in — so reading it as "£0 collected" silently understates the account's
+   * money and is indistinguishable from a genuine zero collection.
+   *
+   * `OBSERVED` is for an account where the amount field is genuinely always maintained and a zero
+   * therefore is a real answer. It is a deliberate declaration and never a default.
+   */
+  zeroAmountPolicy: z.enum(['UNUSABLE', 'OBSERVED']).optional(),
+  /**
    * Review finding C3: which canonical record type carries a collection-level signal downstream.
    * `normalize.mjs:271-283` only synthesises one for an EMPTY INCOMPLETE envelope, so the
    * projector has to raise its own for a COMPLETE envelope whose rows it suppressed.
@@ -667,11 +726,35 @@ export function loadProfile(profileId) {
   return CoverageProfileSchema.parse(readProfileFile(filename));
 }
 
+/**
+ * THE LOADER THE PUBLISHING PATH USES (`lib/report.mjs:404`).
+ *
+ * Task A2 round 2: it used to run `validateMetricContractsForProfile` alone and hand back MAPPED
+ * edges UNGATED, so a contract declaring `cancelled_to_rebooked: MAPPED` computed without a word of
+ * complaint on precisely the call that publishes. `loadProjection` ran the gate and nothing on the
+ * report path went through `loadProjection`. An optional gate is not a gate.
+ *
+ * The projection is read and PARSED here rather than routed through `validateProjectionForProfile`,
+ * because that function calls this one and the two would recurse.
+ */
 export function loadMetricContracts(profileId) {
   const normalized = normalizeProfileId(profileId);
   const filename = METRIC_FILES[normalized];
   if (!filename) throw new Error(`UNKNOWN_METRIC_PROFILE:${profileId}`);
-  return validateMetricContractsForProfile(loadProfile(normalized), readProfileFile(filename));
+  const profile = loadProfile(normalized);
+  const contracts = validateMetricContractsForProfile(profile, readProfileFile(filename));
+  const rawProjection = readProfileFileIfPresent(projectionFilename(normalized));
+  if (rawProjection === null) {
+    // No projection exists to gate against. An all-UNKNOWN contract publishes nothing and is
+    // therefore harmless; a MAPPED edge is a claim that a projector proves it, and there is no
+    // projector, so the claim cannot be checked and must not be honoured.
+    if (contracts.edges.some(({ nativeMapping }) => nativeMapping === 'MAPPED')) {
+      throw new Error(`METRIC_CONTRACTS_UNGATED:${profileId}`);
+    }
+    return contracts;
+  }
+  assertMetricStageCoverage(profile, ProjectionContractSchema.parse(rawProjection), contracts);
+  return contracts;
 }
 
 export function validateMetricContractsForProfile(profile, contracts) {
@@ -868,15 +951,141 @@ function assertActionRouting(projection) {
 }
 
 /**
+ * THE COMPARABLE FORM OF A PREDICATE SCALAR, mirroring `journey-projection.mjs` `comparableKey`.
+ * The projector compares a record's field to a declared value through that function, so two
+ * declarations are the SAME predicate exactly when their comparable forms agree — `"Won"`,
+ * `" won "` and `"won"` are one predicate however differently they are written down.
+ */
+function comparableScalar(value) {
+  if (typeof value === 'string') return `t:${value.trim().toLowerCase()}`;
+  if (typeof value === 'number') return Number.isFinite(value) ? `n:${value === 0 ? 0 : value}` : 'x';
+  if (typeof value === 'boolean') return `b:${value}`;
+  if (value === null) return 'empty';
+  return 'x';
+}
+
+/**
+ * ONE CANONICAL FORM FOR EVERY WAY OF WRITING THE SAME PREDICATE.
+ *
+ * `field_equals(status, "won")` and `field_in(status, ["won"])` are the same test — `predicateHolds`
+ * evaluates them identically — so a byte comparison of the declarations calls them different and
+ * the gate is bypassed by rewriting one of them. Both are folded into the single-value `field_in`
+ * form, and the value list is de-duplicated and sorted because `field_in` is a SET test in which
+ * order and repetition carry no meaning.
+ */
+function canonicalPredicate(when) {
+  if (when.kind === 'field_equals') {
+    return canonicalJson({ kind: 'field_in', field: when.field, values: [comparableScalar(when.value)] });
+  }
+  if (when.kind === 'field_in') {
+    return canonicalJson({
+      kind: 'field_in',
+      field: when.field,
+      values: [...new Set(when.values.map(comparableScalar))].sort(),
+    });
+  }
+  return canonicalJson(when);
+}
+
+/**
+ * DO TWO EVENTS READ THE SAME INSTANT? `eventTimeField` is an ORDERED candidate list in which the
+ * first path that resolves wins, so any tail beyond a shared prefix is only ever consulted for a
+ * record on which every path in that prefix is absent — and on such a record the shorter list
+ * produces NO event at all, so there is no entrant for the pair to be measured over. A padded list
+ * therefore cannot create a record on which the two events disagree about the instant while both
+ * exist, which is the only thing this comparison is for.
+ *
+ * Treating prefix-equivalence as "the same reading" is deliberately the CONSERVATIVE direction. The
+ * cost of being wrong here is refusing to let an edge be MAPPED as a RATE, which the author can
+ * answer by declaring `measure: "VALUE"` or by making the two readings genuinely different; the
+ * cost of the opposite error is publishing a constant as a measurement.
+ */
+function sameTimeReading(left, right) {
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  return shorter.every((path, index) => path === longer[index]);
+}
+
+/**
+ * WHICH TRANSITIONS ARE TAUTOLOGIES, derived from the projection rather than hand-listed.
+ *
+ * A stage pair is tautological when two events that can read THE SAME RECORDS emit both stages
+ * under an EQUIVALENT predicate off an EQUIVALENT event-time reading. All three have to hold: the
+ * same records means the same row, the same predicate means the second event exists exactly when
+ * the first does, and the same time reading means it exists at the first one's own instant, inside
+ * any non-negative lag. Such a transition happens for every entrant that exists at all —
+ * `numerator === denominator`, always — and any rate computed from it is the constant 1 dressed as
+ * a measurement.
+ *
+ * TASK A2 ROUND 3 REPLACED A BYTE COMPARISON WITH A SEMANTIC ONE. As written, the gate compared
+ * `canonicalJson(when)` and `canonicalJson(eventTimeField)` within ONE source, and was bypassed
+ * three ways, each of which published the exact constant the gate exists to stop
+ * (`OBSERVED n=6 d=6 rate=1.000 COMPLETE`):
+ *
+ *   1. Writing one side as `field_in(status,[won])` and the other as `field_equals(status,won)`.
+ *      CLOSED by `canonicalPredicate`.
+ *   2. Padding one `eventTimeField` with an extra, dead path. CLOSED by `sameTimeReading`.
+ *   3. Splitting the two stages across two SOURCES fed the same rows under two action ids.
+ *      CLOSED by comparing across sources that read the same object family (below).
+ *
+ * WHICH SOURCES COUNT AS READING THE SAME RECORDS: same `evidenceSource` and same `capability`.
+ * `capability` is the declared statement of WHICH KIND OF OBJECT a source reads — two sources both
+ * declaring `opportunities` are reading opportunities, whatever endpoint each happens to call, and
+ * the split-source bypass is exactly a second such source. It is deliberately not "every source",
+ * because a contact and an appointment genuinely are different rows and an `always` predicate on
+ * each is not a tautology; and deliberately not "same operationIdPattern", because `matchSource`
+ * already refuses two sources claiming one envelope, so an identical pattern is the ONE case that
+ * cannot occur.
+ *
+ * Returned as `"from>to"` keys. Deliberately DIRECTIONLESS in construction (both orders are added),
+ * because the tautology is a property of the two events, not of which one a contract calls the
+ * entrant.
+ */
+function tautologicalStagePairs(projection) {
+  const byRecordFamily = new Map();
+  for (const source of projection.sources) {
+    const family = canonicalJson([source.evidenceSource, source.capability]);
+    const events = byRecordFamily.get(family) ?? [];
+    events.push(...(source.events ?? []));
+    byRecordFamily.set(family, events);
+  }
+  const pairs = new Set();
+  for (const events of byRecordFamily.values()) {
+    for (let index = 0; index < events.length; index += 1) {
+      for (let other = index + 1; other < events.length; other += 1) {
+        const left = events[index];
+        const right = events[other];
+        if (left.stage === right.stage) continue;
+        if (canonicalPredicate(left.when) !== canonicalPredicate(right.when)) continue;
+        if (!sameTimeReading(left.eventTimeField, right.eventTimeField)) continue;
+        pairs.add(`${left.stage}>${right.stage}`);
+        pairs.add(`${right.stage}>${left.stage}`);
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
  * Review finding I7. A metric edge whose `fromStage` or `toStage` nothing ever emits does not read
  * UNKNOWN — `metrics.mjs` publishes it as a confident zero over a real denominator. The honest
  * outcome is that the edge is declared UNMEASURABLE, and an unmeasurable edge may never be flipped
  * to MAPPED, because there is nothing for it to be mapped to.
+ *
+ * Task A2 round 2 added the second half. Emitting both stages is necessary for an edge to be
+ * measurable and NOT sufficient: an edge whose two stages are the same record seen twice
+ * (`tautologicalStagePairs`) can be MAPPED only as a `VALUE` measure, never as a `RATE`. "OBSERVED
+ * but WRONG" is worse than UNKNOWN, and a published constant is the purest form of it.
+ *
+ * EXPORTED, and not only because a test wants it: `loadMetricContracts` is the loader the
+ * PUBLISHING path uses (`lib/report.mjs:404`), and until this round the gate ran only inside
+ * `loadProjection`, so the one call that publishes was the one call that never checked.
  */
-function assertStageCoverage(profile, projection, metricContracts) {
+export function assertMetricStageCoverage(profile, projection, metricContracts) {
   const emitted = new Set(projection.sources.flatMap(
     (source) => (source.events ?? []).map(({ stage }) => stage),
   ));
+  const tautological = tautologicalStagePairs(projection);
   const declaredUnmeasurable = new Set(projection.unmeasurableEdges);
   const edgeIds = new Set(metricContracts.edges.map(({ edgeId }) => edgeId));
   for (const edgeId of declaredUnmeasurable) {
@@ -892,6 +1101,15 @@ function assertStageCoverage(profile, projection, metricContracts) {
     }
     if (declaredUnmeasurable.has(edge.edgeId) && edge.nativeMapping === 'MAPPED') {
       throw new Error(`PROJECTION_UNMEASURABLE_EDGE_MAPPED:${edge.edgeId}`);
+    }
+    // Only the direction that can LIE is forbidden, as everywhere else in this gate: an UNKNOWN
+    // edge publishes nothing, so a tautology left unmapped is an under-claim and stays legal.
+    if (
+      edge.nativeMapping === 'MAPPED'
+      && tautological.has(`${edge.fromStage}>${edge.toStage}`)
+      && edge.measure !== 'VALUE'
+    ) {
+      throw new Error(`PROJECTION_EDGE_TAUTOLOGICAL:${edge.edgeId}`);
     }
   }
   void profile;
@@ -944,7 +1162,7 @@ export function validateProjectionForProfile(profile, projection, metricContract
   if (!Array.isArray(metricContracts.edges)) {
     throw new Error('PROJECTION_METRIC_CONTRACTS_INVALID');
   }
-  assertStageCoverage(parsedProfile, parsedProjection, metricContracts);
+  assertMetricStageCoverage(parsedProfile, parsedProjection, metricContracts);
   return parsedProjection;
 }
 

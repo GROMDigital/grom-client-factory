@@ -119,9 +119,10 @@ const FROZEN_INPUT_FIELDS = Object.freeze([
   'auditProfileHash',
   'providerToolProfileHash',
   // SUPPLIED BY THE ORCHESTRATOR, DERIVED BY NOTHING IN THIS REPO. `metrics.mjs` owns the window
-  // set (`buildWindows` / `WINDOW_NAMES`) but never hashes it, so this string only tells two runs
-  // apart if the caller bumps it whenever that set changes. Task A2a ADDED `trailing90Days`: any
-  // orchestrator carrying a hash minted before that change is now labelling a different window
+  // set (`buildWindows` / `lib/window-names.mjs`) but never hashes it, so this string only tells
+  // two runs apart if the caller bumps it whenever that set changes. Task A2a ADDED
+  // `trailing90Days` and the maturity ladder ADDED `trailing60Days` and `trailing180Days`: any
+  // orchestrator carrying a hash minted before those changes is now labelling a different window
   // set with the same value, and must bump it.
   'windowDefinitionsHash',
   'collectionBudgetHash',

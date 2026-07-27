@@ -9,6 +9,7 @@ import {
   replayMechanismReview,
 } from './mechanisms.mjs';
 import { loadMetricContracts, loadProfile } from '../schemas/v1.mjs';
+import { WINDOW_NAMES } from './window-names.mjs';
 
 const VERDICTS = new Set(['PASS', 'WATCH', 'FAIL', 'UNKNOWN']);
 const PRIVATE_OR_EXECUTION = /(?:https?:\/\/|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|Bearer\s+\S+|raw_[a-f0-9]{16,64}|\b(?:GET|POST|PUT|PATCH|DELETE)\s+(?:\/|https?:\/\/)|raw[_ -]?request|tools?\/call|authorization|credential|cookie)/iu;
@@ -472,16 +473,86 @@ function metricCoverageDisclosure(metrics) {
     for (const metricId of Object.keys(window).sort(compareText)) {
       const metric = window[metricId];
       if (metric?.state === 'OBSERVED' && Number.isInteger(metric.denominator)) reportedRates += 1;
-      if (!Number.isInteger(metric?.excluded) || metric.excluded <= 0) continue;
+      // Task A2 round 2: a subject can be dropped for TWO reasons, and until now this saw only one
+      // of them. A cell with nothing untrustworthy but a third of its window still inside the
+      // edge's lag printed no line at all, and the run then claimed every rate covered its whole
+      // eligible population — a false claim about a real number, on the path that publishes.
+      const excludedSubjects = Number.isInteger(metric?.excluded) && metric.excluded > 0;
+      const unanswerable = Number.isInteger(metric?.immature) && metric.immature > 0;
+      if (!excludedSubjects && !unanswerable) continue;
+      const pending = unanswerable ? `, ${metric.immature} not yet answerable` : '';
       lines.push(Number.isInteger(metric.denominator)
-        ? `${metricId} (${windowName}) measured ${metric.denominator} of ${metric.eligible} eligible`
-        : `${metricId} (${windowName}) not measurable, ${metric.excluded} of ${metric.eligible} eligible subjects excluded`);
+        ? `${metricId} (${windowName}) measured ${metric.denominator} of ${metric.eligible} eligible${pending}`
+        : `${metricId} (${windowName}) not measurable, ${metric.excluded} of ${metric.eligible} eligible subjects excluded${pending}`);
     }
   }
   if (lines.length > 0) return lines.join('; ');
   return reportedRates === 0
     ? 'no rate was measurable this run, so no coverage is claimed'
     : 'every reported rate covered its whole eligible population';
+}
+
+/**
+ * THE MONEY, IN THE REPORT A HUMAN READS.
+ *
+ * Task A2 round 3. A `measure: "VALUE"` cell publishes no rate on purpose, so every renderer here —
+ * all of which asked for `numerator/denominator` — printed the account's revenue as
+ * `won_to_collected_revenue: unknown/unknown`. The figure was computed correctly, sealed correctly,
+ * and then never shown to anybody, which for an audit whose stated point is revenue is the same as
+ * not computing it.
+ *
+ * Runs for EVERY operating profile, like the coverage disclosure beside it: a client's revenue is
+ * at least as much theirs as Grom's is Grom's, and the client branch has no scorecard to hang it
+ * off. Every window is scanned, because the revenue edge does not report only in the closed week.
+ *
+ * The SUBJECT COUNT is printed with the amount and never without it. `valueSubjects` of `eligible`
+ * is what stops "10450" being read as the whole window's money when it is the money of three wins
+ * out of five, the other two having simply never had an amount filled in.
+ */
+function metricValueDisclosure(metrics) {
+  const lines = [];
+  const byWindow = metrics?.metrics ?? {};
+  for (const windowName of Object.keys(byWindow).sort(compareText)) {
+    const window = byWindow[windowName] ?? {};
+    for (const metricId of Object.keys(window).sort(compareText)) {
+      const metric = window[metricId];
+      if (!Number.isInteger(metric?.valueSubjects)) continue;
+      const amount = Number.isFinite(metric.value) ? String(metric.value) : 'no usable amount';
+      const eligible = Number.isInteger(metric.eligible) ? metric.eligible : 'unknown';
+      lines.push(
+        `${metricId} (${windowName}) ${amount} over ${metric.valueSubjects} of ${eligible} subjects`,
+      );
+    }
+  }
+  return lines.length > 0
+    ? lines.join('; ')
+    : 'no value measure was reported this run';
+}
+
+/**
+ * WHERE A METRIC ACTUALLY LIVES, now that not every edge reports in every window.
+ *
+ * The closed week first, because that is the report's spine and the behaviour every caller had
+ * before the maturity ladder; then the remaining windows in lookback order. A ladder edge such as
+ * `showed_to_decision_60d` exists ONLY in `trailing90Days`, and reading `currentClosedWeek` alone
+ * did not render it as unknown — it dropped the whole KPI off the scorecard without a word.
+ *
+ * The window is named in the output whenever it is not the closed week, because a 90-day number
+ * printed beside weekly ones without a label is worse than no number.
+ */
+function locateMetric(metrics, metricId) {
+  const byWindow = metrics?.metrics ?? {};
+  const ordered = [
+    'currentClosedWeek',
+    ...WINDOW_NAMES.filter((name) => name !== 'currentClosedWeek'),
+  ];
+  for (const windowName of ordered) {
+    const window = byWindow[windowName];
+    if (window && typeof window === 'object' && Object.hasOwn(window, metricId)) {
+      return { windowName, metric: window[metricId] };
+    }
+  }
+  return null;
 }
 
 function gromJourneyFindings(findings, journey) {
@@ -547,6 +618,7 @@ function renderReport({
     `- Cutoff: ${run.cutoff}`,
     `- Material limitations: ${(coverage.limitations ?? []).join(', ') || 'none recorded'}`,
     `- Metric coverage: ${metricCoverageDisclosure(metrics)}`,
+    `- Measured value: ${metricValueDisclosure(metrics)}`,
     '',
     '## System overview and current operation',
     '',
@@ -566,18 +638,34 @@ function renderReport({
     grom
       ? splitGrom('commercial movement', findings, gromJourneys, (_items, journey) => {
         const cohort = metrics.cohorts?.currentClosedWeek?.[journey.journeyInstanceId] ?? 0;
-        const kpis = Object.entries(metrics.metrics?.currentClosedWeek ?? {})
-          .filter(([metricId]) => journey.metricIds.includes(metricId))
-          .map(([id, metric]) => {
+        // Task A2 round 3: the journey's metric ids, each looked up in the window it actually
+        // reports in. Reading `currentClosedWeek` and nothing else silently deleted every ladder
+        // edge from this scorecard — which is to say, the whole consultation-to-outcome
+        // measurement the ladder exists to publish.
+        const kpis = [...journey.metricIds]
+          .sort(compareText)
+          .map((metricId) => [metricId, locateMetric(metrics, metricId)])
+          .filter(([, located]) => located !== null && located.metric)
+          .map(([id, { windowName, metric }]) => {
+            const at = windowName === 'currentClosedWeek' ? '' : ` [${windowName}]`;
+            // A VALUE measure has no rate to print and never will: printing it as
+            // `unknown/unknown` is how the account's revenue reached the report as nothing at all.
+            if (Number.isInteger(metric.valueSubjects)) {
+              const amount = Number.isFinite(metric.value) ? metric.value : 'no usable amount';
+              return `${id}${at}: ${amount} over ${metric.valueSubjects} of ${metric.eligible} subjects`;
+            }
             // Task A2a: a rate measured over PART of the eligible population must say so here,
             // not only in the machine metric. An audit that measured 12% of the account must
             // never read like one that measured all of it.
-            const partial = Number.isInteger(metric.excluded)
-              && metric.excluded > 0
-              && Number.isInteger(metric.denominator)
+            // Task A2 round 2: immaturity counts as partial coverage here too. A KPI printed as
+            // "9/17" beside an entry cohort of 28 is the same lie by omission this annotation was
+            // added to stop.
+            const dropped = (Number.isInteger(metric.excluded) && metric.excluded > 0)
+              || (Number.isInteger(metric.immature) && metric.immature > 0);
+            const partial = dropped && Number.isInteger(metric.denominator)
               ? ` (measured ${metric.denominator} of ${metric.eligible} eligible)`
               : '';
-            return `${id}: ${metric.numerator ?? 'unknown'}/${metric.denominator ?? 'unknown'}${partial}`;
+            return `${id}${at}: ${metric.numerator ?? 'unknown'}/${metric.denominator ?? 'unknown'}${partial}`;
           })
           .join(', ') || 'No complete KPI';
         return `Entry cohort: ${cohort} (${COHORT_BASIS})\n\nKPIs: ${kpis}`;

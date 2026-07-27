@@ -56,13 +56,19 @@ test('journey instance identifiers are required, unique, and bound to their jour
   assert.throws(() => validateMetricContractsForProfile(grom, crossJourney), /JOURNEY_INSTANCE_MISMATCH/);
 });
 
-test('every versioned metric edge conforms and unmapped required edges are UNKNOWN', () => {
+test('every versioned metric edge conforms', () => {
   for (const profileId of ['client', 'grom_internal']) {
     const metrics = loadMetricContracts(profileId);
     assert.equal(MetricContractsSchema.parse(metrics).version, '1.0.0');
     assert.ok(metrics.edges.length > 0);
     for (const edge of metrics.edges) {
-      assert.equal(edge.nativeMapping, 'UNKNOWN');
+      // The blanket `nativeMapping === 'UNKNOWN'` assertion that stood here was invalidated by
+      // Task A2, which mapped the edges the shipped projection genuinely proves. The MAPPED /
+      // UNKNOWN partition is now pinned edge by edge, hand-stated, in
+      // `tests/metrics-native-mapping.test.mjs`, together with the rule that an edge declared in
+      // the projection's `unmeasurableEdges[]` may never be mapped. That is a strictly stronger
+      // guard than the blanket assertion, which only held while nothing was mapped at all.
+      assert.ok(['MAPPED', 'UNKNOWN'].includes(edge.nativeMapping));
       assert.ok(edge.edgeId.length > 0);
       assert.ok(edge.journeyId.length > 0);
       assert.ok(edge.journeyInstanceId.length > 0);

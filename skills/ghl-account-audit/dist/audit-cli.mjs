@@ -7019,9 +7019,10 @@ CREATE TABLE IF NOT EXISTS publication_intents (
       "auditProfileHash",
       "providerToolProfileHash",
       // SUPPLIED BY THE ORCHESTRATOR, DERIVED BY NOTHING IN THIS REPO. `metrics.mjs` owns the window
-      // set (`buildWindows` / `WINDOW_NAMES`) but never hashes it, so this string only tells two runs
-      // apart if the caller bumps it whenever that set changes. Task A2a ADDED `trailing90Days`: any
-      // orchestrator carrying a hash minted before that change is now labelling a different window
+      // set (`buildWindows` / `lib/window-names.mjs`) but never hashes it, so this string only tells
+      // two runs apart if the caller bumps it whenever that set changes. Task A2a ADDED
+      // `trailing90Days` and the maturity ladder ADDED `trailing60Days` and `trailing180Days`: any
+      // orchestrator carrying a hash minted before those changes is now labelling a different window
       // set with the same value, and must bump it.
       "windowDefinitionsHash",
       "collectionBudgetHash",
@@ -8095,6 +8096,27 @@ var init_review_bridge = __esm({
   }
 });
 
+// lib/window-names.mjs
+var WINDOW_NAMES, DEFAULT_REPORTING_WINDOWS;
+var init_window_names = __esm({
+  "lib/window-names.mjs"() {
+    WINDOW_NAMES = Object.freeze([
+      "currentClosedWeek",
+      "previousClosedWeek",
+      "trailing28Days",
+      "trailing60Days",
+      "trailing90Days",
+      "trailing180Days"
+    ]);
+    DEFAULT_REPORTING_WINDOWS = Object.freeze([
+      "currentClosedWeek",
+      "previousClosedWeek",
+      "trailing28Days",
+      "trailing90Days"
+    ]);
+  }
+});
+
 // lib/mechanisms.mjs
 var mechanisms_exports = {};
 __export(mechanisms_exports, {
@@ -8114,8 +8136,8 @@ function codedError5(code, ErrorType = Error) {
 function plain2(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 }
-function exactKeys2(value, keys) {
-  return plain2(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+function exactKeys2(value, keys, optionalKeys2 = []) {
+  return plain2(value) && keys.every((key) => Object.hasOwn(value, key)) && Object.keys(value).every((key) => keys.includes(key) || optionalKeys2.includes(key));
 }
 function iso3(value) {
   return typeof value === "string" && Number.isFinite(Date.parse(value)) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value);
@@ -8221,7 +8243,8 @@ function validateScope(scope, coverage) {
     "supplementalReadAllowlist",
     "sealedPath"
   ];
-  if (!exactKeys2(scope, keys) || typeof scope.metricId !== "string" || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(scope.metricId) || !OPAQUE.test(scope.journeyId) || !OPAQUE.test(scope.journeyInstanceId) || !safeCode(scope.symptomCode) || !safeCode(scope.predictionCode) || !safeCode(scope.mechanismClass.toUpperCase()) || typeof scope.critical !== "boolean" || scope.critical && !CRITICAL_CLASSES.has(scope.criticalClass) || !scope.critical && scope.criticalClass !== null || !["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"].includes(scope.severityBand) || !plain2(scope.commercialValue) || !exactKeys2(scope.commercialValue, ["kind", "lower", "upper"]) || !["MEASURED", "BOUNDED", "UNKNOWN"].includes(scope.commercialValue.kind) || !Array.isArray(scope.competingExplanations) || !Array.isArray(scope.repeatSegmentIds) || !Array.isArray(scope.supplementalReadAllowlist) || !exactKeys2(scope.sealedPath, ["pathRef", "relativePath"]) || !OPAQUE.test(scope.sealedPath.pathRef) || typeof scope.sealedPath.relativePath !== "string" || scope.sealedPath.relativePath.startsWith("/") || scope.sealedPath.relativePath.includes("..")) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+  const optionalKeys2 = ["metricWindow"];
+  if (!exactKeys2(scope, keys, optionalKeys2) || Object.hasOwn(scope, "metricWindow") && !WINDOW_NAMES.includes(scope.metricWindow) || typeof scope.metricId !== "string" || !/^[a-z][a-z0-9_.:-]{1,127}$/u.test(scope.metricId) || !OPAQUE.test(scope.journeyId) || !OPAQUE.test(scope.journeyInstanceId) || !safeCode(scope.symptomCode) || !safeCode(scope.predictionCode) || !safeCode(scope.mechanismClass.toUpperCase()) || typeof scope.critical !== "boolean" || scope.critical && !CRITICAL_CLASSES.has(scope.criticalClass) || !scope.critical && scope.criticalClass !== null || !["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"].includes(scope.severityBand) || !plain2(scope.commercialValue) || !exactKeys2(scope.commercialValue, ["kind", "lower", "upper"]) || !["MEASURED", "BOUNDED", "UNKNOWN"].includes(scope.commercialValue.kind) || !Array.isArray(scope.competingExplanations) || !Array.isArray(scope.repeatSegmentIds) || !Array.isArray(scope.supplementalReadAllowlist) || !exactKeys2(scope.sealedPath, ["pathRef", "relativePath"]) || !OPAQUE.test(scope.sealedPath.pathRef) || typeof scope.sealedPath.relativePath !== "string" || scope.sealedPath.relativePath.startsWith("/") || scope.sealedPath.relativePath.includes("..")) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
   if (scope.commercialValue.kind === "UNKNOWN" ? scope.commercialValue.lower !== null || scope.commercialValue.upper !== null : !Number.isFinite(scope.commercialValue.lower) || !Number.isFinite(scope.commercialValue.upper) || scope.commercialValue.lower < 0 || scope.commercialValue.upper < scope.commercialValue.lower) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
   const bandKeys = [
     "recoverabilityBand",
@@ -8522,7 +8545,10 @@ function nominateMechanisms({
     validateScope(scope, coverage);
     if (seenMetricIds.has(scope.metricId)) throw codedError5("MECHANISM_INPUT_INVALID");
     seenMetricIds.add(scope.metricId);
-    const metric = metrics.metrics.currentClosedWeek[scope.metricId];
+    const scopeWindow = scope.metricWindow ?? DEFAULT_SCOPE_WINDOW;
+    const windowMetrics = metrics.metrics[scopeWindow];
+    if (!plain2(windowMetrics)) throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
+    const metric = windowMetrics[scope.metricId];
     if (!plain2(metric) || !["OBSERVED", "UNKNOWN", "NOT_APPLICABLE"].includes(metric.state) || typeof metric.rankEligible !== "boolean") throw codedError5("MECHANISM_INPUT_INVALID", TypeError);
     const eligibleEvidenceRefs = eligibleEvidence(graph);
     let rejectedEvidence = false;
@@ -9219,10 +9245,12 @@ function reconcileExpertReviews({
     backlog: backlog.sort(compareCandidates)
   });
 }
-var FAMILIES, CONFIDENCE, FALSIFICATION_STATES, CRITICAL_CLASSES, VERDICTS, UNCERTAINTY, SAFETY_FLAGS, HASH2, OPAQUE, EVIDENCE, REQUEST_KEYS2, RESPONSE_KEYS2, REVIEW_KEYS, REQUEST_STATES, NONCE_STATES, VALIDATED_REVIEWS, VALIDATOR_STATE_KEYS2, descendingBand;
+var DEFAULT_SCOPE_WINDOW, FAMILIES, CONFIDENCE, FALSIFICATION_STATES, CRITICAL_CLASSES, VERDICTS, UNCERTAINTY, SAFETY_FLAGS, HASH2, OPAQUE, EVIDENCE, REQUEST_KEYS2, RESPONSE_KEYS2, REVIEW_KEYS, REQUEST_STATES, NONCE_STATES, VALIDATED_REVIEWS, VALIDATOR_STATE_KEYS2, descendingBand;
 var init_mechanisms = __esm({
   "lib/mechanisms.mjs"() {
     init_canonical();
+    init_window_names();
+    DEFAULT_SCOPE_WINDOW = "currentClosedWeek";
     FAMILIES = Object.freeze([
       "calendar_capacity_or_timezone",
       "delivery_failure",
@@ -26723,6 +26751,7 @@ var SCHEMA_VERSION2, Sha256Schema, PseudonymousSubjectRefSchema, OpaqueObjectRef
 var init_v1 = __esm({
   "schemas/v1.mjs"() {
     init_zod();
+    init_window_names();
     SCHEMA_VERSION2 = "1.0.0";
     Sha256Schema = external_exports.string().regex(/^[a-f0-9]{64}$/);
     PseudonymousSubjectRefSchema = external_exports.string().regex(/^psn_[a-f0-9]{16,64}$/);
@@ -26978,7 +27007,46 @@ var init_v1 = __esm({
       reentryRule: external_exports.enum(["new_journey_instance", "same_journey_instance"]),
       outcomeRule: JsonRecordSchema,
       required: external_exports.boolean(),
-      nativeMapping: external_exports.enum(["MAPPED", "UNKNOWN"])
+      nativeMapping: external_exports.enum(["MAPPED", "UNKNOWN"]),
+      /**
+       * WHAT THIS EDGE MEASURES. `RATE` (the default, and the only reading before task A2 round 2) is a
+       * conversion: how many entrants reached the far stage. `VALUE` is an AMOUNT accumulated at the far
+       * stage, with NO rate published at all.
+       *
+       * `VALUE` exists because a declared transition is not always an observable conversion. When both
+       * stages are projected from the SAME record under the SAME predicate off the SAME event-time
+       * field — which is exactly how `won_to_collected_revenue` is projected out of a GHL opportunity —
+       * the conversion exists at the entrant's own instant for every entrant that exists at all, so
+       * `numerator === denominator` in every possible account and the "rate" is the constant 1. A
+       * collection RATE is not derivable from opportunity data alone; the collected VALUE is.
+       * `assertMetricStageCoverage` refuses to let such an edge be MAPPED as a `RATE`.
+       */
+      measure: external_exports.enum(["RATE", "VALUE"]).optional(),
+      /**
+       * WHICH WINDOWS THIS EDGE IS REPORTED IN, declared as DATA rather than assumed by the engine.
+       *
+       * A window no LONGER than the edge's `allowedLag` can mature almost nobody — only a subject
+       * entering on the window's first instant has had the whole lag elapse by the cutoff — so an edge
+       * published over such a window reports either nothing or a rate computed over one or two
+       * subjects out of dozens. The rule of thumb the shipped profiles follow is a lookback of roughly
+       * DOUBLE the lag, which lets about half of each window mature.
+       *
+       * That is also why the same measurement may be declared several times at different maturities
+       * (30 days over a trailing 60, 60 over a trailing 90, 90 over a trailing 180): the fast variant
+       * moves in weeks and shows whether a recent change is working, the slow one is the true settled
+       * number but is far too late to attribute anything to. Each maturity is its own edge with its own
+       * `edgeId`, because `edgeId` is the result key under `metrics.metrics[window]`.
+       *
+       * OMITTING it does not mean "no windows" and does not mean "all windows": it means
+       * `DEFAULT_REPORTING_WINDOWS`, the window set that existed before the maturity ladder was added,
+       * so an edge written before this field keeps exactly the behaviour it had. `metrics.mjs`
+       * validates the same values again and throws `METRICS_CONTRACT_INVALID` on a declaration that
+       * bypassed this schema.
+       */
+      reportingWindows: external_exports.array(external_exports.enum(WINDOW_NAMES)).min(1).refine(
+        (names) => new Set(names).size === names.length,
+        "reportingWindows must not repeat a window"
+      ).optional()
     }).strict();
     MetricContractsSchema = external_exports.object({
       profileId: external_exports.enum(["client", "grom_internal"]),
@@ -27109,6 +27177,20 @@ var init_v1 = __esm({
       profileId: external_exports.string().regex(/^[a-z][a-z0-9_]{0,63}$/),
       version: external_exports.literal(SCHEMA_VERSION2),
       revenueBasis: ProjectionRevenueBasisSchema,
+      /**
+       * HOW AN AMOUNT OF EXACTLY ZERO ON AN OUTCOME STAGE IS READ. Declared, never assumed, because the
+       * honest answer differs per account and cannot be decided in code.
+       *
+       * `UNUSABLE` (the default) treats a zero as an amount the account never supplied: the event is
+       * still emitted, as UNKNOWN with `REVENUE_ZERO_ON_OUTCOME_STAGE`, and the subject is disclosed as
+       * excluded. On a GHL pipeline an unpriced won opportunity is the NORMAL state — the field is
+       * simply never filled in — so reading it as "£0 collected" silently understates the account's
+       * money and is indistinguishable from a genuine zero collection.
+       *
+       * `OBSERVED` is for an account where the amount field is genuinely always maintained and a zero
+       * therefore is a real answer. It is a deliberate declaration and never a default.
+       */
+      zeroAmountPolicy: external_exports.enum(["UNUSABLE", "OBSERVED"]).optional(),
       /**
        * Review finding C3: which canonical record type carries a collection-level signal downstream.
        * `normalize.mjs:271-283` only synthesises one for an EMPTY INCOMPLETE envelope, so the

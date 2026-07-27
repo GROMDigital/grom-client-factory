@@ -201,3 +201,31 @@ test('a rate that was reported over its whole population still says so', () => {
   });
   assert.match(report, /whole eligible population/u);
 });
+
+/**
+ * TASK A2 ROUND 2 — ADDED, nothing above is edited.
+ *
+ * `eligible` is now the whole in-window entrant population and `immature` carries the part of it
+ * that is not yet answerable. So a metric can drop a large share of its window with `excluded: 0`,
+ * and this disclosure — which keyed off `excluded` alone — printed nothing and let the run claim
+ * every rate covered its whole eligible population. Measured before the fix: 28 appointments across
+ * `trailing28Days` at a 14-day lag published `9/17` with 11 entrants silently absent.
+ */
+test('a rate that dropped part of its window to immaturity is disclosed, not called complete', () => {
+  const report = clientReport({
+    booked_to_showed: metric({
+      numerator: 7,
+      denominator: 14,
+      rate: 0.5,
+      eligible: 28,
+      excluded: 0,
+      immature: 14,
+      coverage: 'INCOMPLETE',
+      coverageRatio: 1,
+      maturityRatio: 0.5,
+    }),
+  });
+  assert.match(report, /booked_to_showed/u);
+  assert.match(report, /measured 14 of 28 eligible, 14 not yet answerable/u);
+  assert.doesNotMatch(report, /whole eligible population/u);
+});

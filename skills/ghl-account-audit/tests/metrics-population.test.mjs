@@ -391,27 +391,41 @@ test('a window whose entrants were all excluded says so even when none of them m
   assert.equal(conflicted.coverageRatio, 0);
   assert.equal(conflicted.reasonCode, 'ALL_SUBJECTS_EXCLUDED');
 
-  // The same window with nothing untrustworthy keeps the right-censoring diagnosis, and now
-  // states the population it could not yet measure.
+  /*
+   * TASK A2 ROUND 2 — TWO EDITED EXPECTATIONS, quoted verbatim:
+   *
+   *   assert.equal(trusted.reasonCode, 'MISSING_REQUIRED_EVIDENCE');
+   *   assert.equal(partial.reasonCode, 'MISSING_REQUIRED_EVIDENCE');
+   *
+   * The comment above the first one already claimed the window "keeps the right-censoring
+   * diagnosis" — but `MISSING_REQUIRED_EVIDENCE` is the same code an edge nothing has ever mapped
+   * reports, so the diagnosis was not actually being kept, it was being erased. `IMMATURE_COHORT`
+   * was the intended code and could never fire, because it required EVERY entrant to be newer than
+   * `matureAsOf`, which a cohort blocked by its LAG does not satisfy. The cause is now decided from
+   * the population split: exclusion when trust refused everybody, and otherwise time.
+   */
   const trusted = run(
     graph(nodes),
     contract({ allowedLag: { amount: 2, unit: 'days' } }),
   ).metrics.currentClosedWeek.engagement;
   assert.equal(trusted.state, 'UNKNOWN');
-  assert.equal(trusted.reasonCode, 'MISSING_REQUIRED_EVIDENCE');
+  assert.equal(trusted.reasonCode, 'IMMATURE_COHORT');
   assert.equal(trusted.eligible, 3);
   assert.equal(trusted.excluded, 0);
+  assert.equal(trusted.immature, 3);
   assert.deepEqual(trusted.exclusions, {});
 
-  // One of three excluded: still not measurable, still not a full-coverage window.
+  // One of three excluded: still not measurable, still not a full-coverage window. The remaining
+  // two are immature rather than untrustworthy, so time is still the operative cause.
   const partial = run(
     graph(nodes, { conflicts: [{ conflictId: 'conflict_one', nodeIds: [entityId(2)] }] }),
     contract({ allowedLag: { amount: 2, unit: 'days' } }),
   ).metrics.currentClosedWeek.engagement;
   assert.equal(partial.state, 'UNKNOWN');
-  assert.equal(partial.reasonCode, 'MISSING_REQUIRED_EVIDENCE');
+  assert.equal(partial.reasonCode, 'IMMATURE_COHORT');
   assert.equal(partial.eligible, 3);
   assert.equal(partial.excluded, 1);
+  assert.equal(partial.immature, 2);
   assert.deepEqual(partial.exclusions, { IDENTITY_CONFLICT: 1 });
 });
 
