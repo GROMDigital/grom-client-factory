@@ -3,6 +3,22 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: the Standard Build, part 4. `client-manifest.schema.json` gains
+  `manifest_version: 2`: `pipelines[]` (per campaign, each with its own
+  `stage_ids` map of the eight fixed stage NAMES to GHL stage UUIDs) replacing
+  the scalar `pipeline_id` and the flat `stage_map`, plus `base_workflows`
+  (reserved numbers only, absent key = not built), `lost_reason_ids`,
+  `per_cycle_fields` (with the AI staging-slot pointer), `knobs`
+  (touch_ceiling, decay_days, ladder_length_days, absence_close_days,
+  treatment_payment_in_system, send_window), and
+  `ai_agents.chat_booking_flow_workflow_id`. v1 stays valid via `if`/`then` on
+  the version; existing clients do not migrate. The name-to-canonical-step
+  mapping moves OUT of the per-client manifest into the schema itself
+  (`x-standard-stage-canonical`), because fixed stage names make it knowable in
+  advance; the mart seeder derives `ghl_stage_map` by joining, which removes the
+  hand-written per-client SQL migration. Motivated by two Standard Build
+  pipelines sharing all eight stage names and collapsing into one
+  indistinguishable flat map.
 - 2026-07-27: the Standard Build, part 3. `baseline/ai-agent-contract.md` added
   (Tier-1): the two-chat-agent set, the flow-builder booking-bot requirement and
   the four conditions that make it run at all, the hard requirement table, the
