@@ -3,6 +3,75 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: project 3 part 3A, cost and wall clock, FIRST PASS. Measured before
+  changing anything, and the measurement contradicted the spec, so the spec's
+  ranked fixes were not the ones implemented. Real baseline, phases 1-2 of the
+  Better By Ati dry run: **64 model calls, 5,772,782 cache-read, 655,630
+  cache-write, 83,852 output tokens, $3.68 at Sonnet intro rates, 15m 33s**,
+  now recorded in that run's manifest under `cost`.
+  🔴 **The spec's numbers were transcript BYTES and they were roughly 2.4x too
+  high.** The transcript writes one record per content block and repeats the
+  call's usage on each, so counting records counted 151 "turns" where there were
+  64 calls. `run_cost.mjs` deduplicates by `requestId`, keeping the record with
+  the largest `output_tokens` because usage accumulates as a response streams.
+  Any future cost claim about this factory is made in measured tokens from that
+  script or it is not made.
+  What the measurement actually showed, versus what the spec predicted:
+  1. **Per-role Tier-1 scoping, the spec's fix #1, measures under 4%.** Agents
+     already self-scope. `client-researcher` read only `guardrails.md` (741
+     tokens); only the journey and systems architects read the full contract set.
+     The premise of "1,600 lines times 23 agents" is not what happens.
+  2. **~39,500 tokens per agent of fixed startup**, proven on the interrupted
+     `registry-reviewer`: one call, zero tool uses, 39,567 cache-write. It is the
+     harness prompt plus a 29,992-byte listing of ~200 installed skills plus a
+     13,660-byte deferred MCP tool-name list. Re-read every call, that is ~40% of
+     all cache-read and ~26% of run cost, but only about a quarter of it is ours
+     to cut, and MCP servers are the *wrong* target: all five disabled on
+     2026-07-27 were worth 2,354 bytes between them, because deferred tools load
+     names only, not schemas. Skills are the lever, not MCP.
+  3. **The real waste was agents checking their own homework.** Every agent runs
+     load, then write-in-one-shot, then a long tail of mechanical self-checks at
+     its LARGEST context: 10 of the architect's 20 calls, 7 of 15 for
+     `ica-brand-voice`, **25 of 64 across phases 1-2**, spent grepping for em
+     dashes, counting fill tokens, and hand-validating sidecar JSON. The
+     write step was already efficient and was left alone.
+  Changes, none of which touch a Tier-1 contract:
+  - `skills/client-design/scripts/run_cost.mjs` NEW. Reads the harness `usage`
+    blocks, dedups by `requestId`, reports per-agent calls/read/write/output/peak
+    plus wall clock and cost at both Sonnet rate cards, and writes a `cost` block
+    into the run manifest. Wired into SKILL.md's PM assembly checks.
+  - `validate.mjs` gains `--conformance` (text and claims passes only, so it can
+    run mid-build before a manifest exists) and a **claims sidecar pass**:
+    `CLAIMS_INVALID_JSON`, `CLAIMS_TOKEN_UNDECLARED`, `CLAIMS_TOKEN_PHANTOM`,
+    `CLAIMS_SIDECAR_MISSING`, `CLAIMS_ORPHAN_SIDECAR`. Sidecars are written both
+    braced and bare depending on the agent, so both normalise before comparison.
+    Coverage now also says when 0 sidecars were inspected.
+  - Both workflow scripts run conformance once per wave and route failures to a
+    small fixer that loads the file and the violation list and nothing else,
+    rather than re-running the authoring agent at 195k context to delete a dash.
+    Bootstraps now tell agents explicitly NOT to self-grep, and say what runs
+    for them instead, so the instruction is a trade and not just a prohibition.
+  - 🔴 **Centralising made the rule STRONGER, not weaker.** First run of the new
+    pass over the dry run found 2 real em dashes in
+    `design/business-and-offer-brief.md`. `ica-brand-voice` grepped and caught
+    its own; `client-researcher` never grepped and shipped them. Self-checking is
+    a coin flip by construction. Guardrail 2 is unchanged; only the enforcement
+    point moved.
+  - `roster.json` v2 adds `registry_sections` per role, with a mandatory naming
+    spine (3, 5, 6, 9, 11, 12) always added because guardrail 6 makes spellings
+    load-bearing. Measured saving 41% to 66% of the ~10,600-token registry per
+    module role. It is a starting point and never a wall: roles are told they may
+    read any section, so a wrong entry costs a saving, not a blind agent.
+    Auditors, the reconciler, the fill-guide compiler, the assembler and the
+    system guide stay unscoped on purpose, since they cross-check everything.
+  - `client-researcher` gains a search cap. It spent 8 of its 16 calls on web
+    searches for a clinic with no discoverable footprint. Absence is now a
+    finding to record, not a reason to keep looking.
+  Still open, deliberately: the strategy document is NOT scoped per role. It is
+  the most load-bearing input in the run and a bad extract would reproduce the
+  Treatwell failure invisibly. Xander's call, 2026-07-27.
+  Not yet proven: these numbers are phases 1-2 only. Phases 3-4 are extrapolated
+  until a full run is measured with `run_cost.mjs`.
 - 2026-07-27: `done` = sort **58**, SHIPPED to grom-dashboard production
   (commit `82600ca`) and verified on prod by remapping a live clinic stage inside
   a transaction and rolling back. The Standard Build's eighth stage now reports.
@@ -23,7 +92,7 @@ divergence log motivated it.
   stage-write substitute (the workflow receiving the client's only in-system
   booking signal, so 21 for a deposit-taking client) which INHERITS 04's
   stage-origin guard, its `allowBackward` on the No-Show-origin branch, and its
-  removal row (01, 03, 06, 10) — without that last one a contact whose booking
+  removal row (01, 03, 06, 10), and without that last one a contact whose booking
   is real is chased forever; §4A.2 the day-before confirmation ask, resolved to
   one of three stated outcomes rather than dropped silently; §4A.3 the tags 04
   would have written. 20's entry now warns that the LP-widget Booking Started

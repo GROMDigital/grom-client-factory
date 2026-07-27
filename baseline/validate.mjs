@@ -43,8 +43,20 @@ const SEND_TYPES = new Set([
 const CREATE_OPP_TYPES = new Set(["create_opportunity", "internal_create_opportunity"]);
 const UPDATE_OPP_TYPES = new Set(["update_opportunity", "internal_update_opportunity"]);
 
-const root = process.argv[2];
-if (!root || !fs.existsSync(root)) { console.error("usage: validate.mjs <client-folder>"); process.exit(2); }
+// --conformance runs ONLY the text and claims passes. It exists so the workflow
+// can check guardrail conformance mid-build, before a manifest exists, without
+// drowning the result in MANIFEST_MISSING. Agents used to run these checks on
+// themselves with grep, at peak context, which was measured as roughly a
+// quarter of every run's model calls. The rules did not move; the checking did.
+const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
+const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
+const CONFORMANCE_ONLY = flags.has("--conformance");
+
+const root = positional[0];
+if (!root || !fs.existsSync(root)) {
+  console.error("usage: validate.mjs <client-folder> [--conformance]");
+  process.exit(2);
+}
 const violations = [];
 const v = (rule, file, detail) => violations.push(`${rule}\t${file}\t${detail}`);
 
@@ -61,7 +73,9 @@ const NOT_IMPLEMENTED = [
 // ---------------------------------------------------------------- 1. Manifest
 let manifest = null;
 const manifestPath = path.join(root, "client-manifest.json");
-if (!fs.existsSync(manifestPath)) {
+if (CONFORMANCE_ONLY) {
+  // deliberately not read; the manifest and workflow passes are out of scope here
+} else if (!fs.existsSync(manifestPath)) {
   v("MANIFEST_MISSING", "client-manifest.json", "no manifest at client-folder root");
 } else {
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")); }
@@ -175,7 +189,7 @@ for (const [num, e] of Object.entries(manifest?.base_workflows ?? {})) {
 
 const captures = [];
 const wfRoot = path.join(root, "workflow-json");
-for (const loc of dirs(wfRoot)) {
+for (const loc of (CONFORMANCE_ONLY ? [] : dirs(wfRoot))) {
   for (const wid of dirs(path.join(wfRoot, loc))) {
     const stamps = dirs(path.join(wfRoot, loc, wid)).sort();
     if (!stamps.length) continue;
@@ -329,6 +343,12 @@ const walk = (dir) => fs.existsSync(dir)
   : [];
 const rel = (f) => path.relative(root, f);
 
+// Tokens actually present in each authored doc, keyed by basename without
+// extension, which is also the claims sidecar's basename. Claims files are
+// excluded: a sidecar listing a token is a declaration, not an occurrence.
+const docTokens = new Map();
+const isClaims = (f) => rel(f).split(path.sep).includes("claims");
+
 for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp")), ...walk(path.join(root, "build"))]) {
   if (!/\.(md|html|json|txt)$/i.test(f)) continue;
   const text = fs.readFileSync(f, "utf8");
@@ -339,6 +359,12 @@ for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp
     const badToken = line.match(/\{\{FILL_(?![A-Z0-9_]+\}\})[^}]*\}\}/);
     if (badToken) v("MALFORMED_FILL_TOKEN", rel(f), `line ${i + 1}: ${badToken[0]}`);
   });
+  if (/\.(md|html)$/i.test(f) && !isClaims(f)) {
+    const key = path.basename(f).replace(/\.(md|html)$/i, "");
+    const set = docTokens.get(key) ?? new Set();
+    for (const m of text.matchAll(/\{\{(FILL_[A-Z0-9_]+)\}\}/g)) set.add(m[1]);
+    docTokens.set(key, set);
+  }
   if (rel(f).startsWith("lp" + path.sep)) {
     lines.forEach((line, i) => {
       if (PLATFORM.test(line)) v("PLATFORM_NAME_IN_LP", rel(f), `line ${i + 1}`);
@@ -348,13 +374,79 @@ for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp
   }
 }
 
+// -------------------------------------------------- 3b. Claims sidecar pass
+// Guardrail 3: every token an agent introduces must appear in its claims
+// sidecar. Agents were each enforcing this on themselves by grepping their own
+// output and hand-validating their own JSON, which cost model calls at peak
+// context and could be forgotten. Here it always runs.
+const claimsDirs = dirs(path.join(root, "build"))
+  .map((d) => path.join(root, "build", d, "claims"))
+  .filter((d) => fs.existsSync(d));
+
+// Sidecars are written with and without braces depending on the agent, so both
+// forms normalise to the bare name before comparison.
+const bare = (t) => String(t).replace(/^\{\{|\}\}$/g, "").trim();
+
+for (const cdir of claimsDirs) {
+  for (const file of fs.readdirSync(cdir).filter((f) => f.endsWith(".json"))) {
+    const full = path.join(cdir, file);
+    const key = file.replace(/\.json$/, "");
+    saw("claims sidecars");
+    let sidecar = null;
+    try { sidecar = JSON.parse(fs.readFileSync(full, "utf8")); }
+    catch (e) { v("CLAIMS_INVALID_JSON", rel(full), e.message); continue; }
+
+    const declared = new Set();
+    for (const side of ["defines", "references"]) {
+      for (const t of sidecar?.[side]?.fill_tokens ?? []) declared.add(bare(t));
+    }
+
+    const inDoc = docTokens.get(key);
+    if (!inDoc) {
+      v("CLAIMS_ORPHAN_SIDECAR", rel(full),
+        `no authored doc named ${key}.md or ${key}.html, so this sidecar guards nothing`);
+      continue;
+    }
+    saw("claimed fill tokens", declared.size);
+
+    for (const t of inDoc) {
+      if (!declared.has(t)) {
+        v("CLAIMS_TOKEN_UNDECLARED", rel(full),
+          `{{${t}}} appears in ${key} but is not in the sidecar, so the fill guide will never ask the client for it`);
+      }
+    }
+    for (const t of declared) {
+      if (!inDoc.has(t)) {
+        v("CLAIMS_TOKEN_PHANTOM", rel(full),
+          `sidecar claims {{${t}}} but it appears nowhere in ${key}, so the client gets asked a question nothing consumes`);
+      }
+    }
+  }
+}
+
+// A doc carrying tokens with no sidecar at all is the same defect as an
+// undeclared token, one level up.
+for (const [key, tokens] of docTokens) {
+  if (!tokens.size) continue;
+  const hasSidecar = claimsDirs.some((d) => fs.existsSync(path.join(d, `${key}.json`)));
+  if (!hasSidecar && claimsDirs.length) {
+    v("CLAIMS_SIDECAR_MISSING", key,
+      `${tokens.size} fill token(s) and no claims/${key}.json, so none of them reach the fill guide`);
+  }
+}
+
 // ------------------------------------------------------------- 4. Report
 const coverageLines = [
-  "validate coverage:",
+  CONFORMANCE_ONLY ? "validate coverage (--conformance: text and claims passes only):" : "validate coverage:",
   ...Object.entries(cov).map(([k, n]) => `  inspected ${n} ${k}`),
 ];
-if (!captures.length) {
+if (CONFORMANCE_ONLY) {
+  coverageLines.push("  manifest and workflow-JSON passes SKIPPED by --conformance, run without the flag before go-live");
+} else if (!captures.length) {
   coverageLines.push("  0 workflow captures found under workflow-json/ - EVERY workflow-JSON check above was a no-op");
+}
+if (!cov["claims sidecars"]) {
+  coverageLines.push("  0 claims sidecars found under build/*/claims/ - EVERY claims check above was a no-op");
 }
 coverageLines.push("  not implemented here:", ...NOT_IMPLEMENTED.map((s) => `    - ${s}`));
 console.error(coverageLines.join("\n"));

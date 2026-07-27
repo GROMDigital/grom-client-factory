@@ -1,0 +1,4 @@
+{
+  "defines": { "fill_tokens": ["{{FILL_DEPOSIT_AMOUNT}}", "FILL_GHOST_TOKEN"] },
+  "references": { "fill_tokens": [] }
+}

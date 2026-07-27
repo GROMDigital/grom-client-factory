@@ -92,6 +92,11 @@ Workflow A resume or a fresh run, re-gate.
    registry_hash and status; blocked modules = failed).
 3. PM assembly checks (you, with tools, not agents):
    - `node <plugin>/baseline/validate.mjs <client>` passes
+   - `node <plugin>/skills/client-design/scripts/run_cost.mjs <client> <runDate>`
+     writes real per-agent token counts into the run manifest under `cost`.
+     Run it every time: cost claims about this factory are only ever made in
+     measured tokens, never in transcript bytes. Report the run's model-call
+     count, token totals and estimated cost alongside the deliverables.
    - every doc in the registry doc index exists on disk (Assembler's audit
      should agree; trust but verify with ls)
    - residualConflicts from the workflow: confirm each is recorded as a
@@ -154,3 +159,11 @@ Workflow A resume or a fresh run, re-gate.
 - Costs are real: no fan-out before the post-registry gate is confirmed.
 - All workflow agents run Sonnet (the scripts set model: "sonnet"; do not
   override upward without the user asking).
+- Mechanical conformance is NOT an agent's job. Em dashes, malformed fill
+  tokens, and claims-sidecar consistency are enforced by
+  `baseline/validate.mjs --conformance`, run once per wave inside the workflow
+  scripts, with failures routed to a small fixer. Measured on the 2026-07-27
+  baseline, agents self-checking these with grep accounted for roughly a
+  quarter of all model calls, made at each agent's largest context, and it was
+  unreliable: the one agent that skipped its self-check shipped two em dashes.
+  If you add a new mechanical rule, add it to the validator, not to a prompt.

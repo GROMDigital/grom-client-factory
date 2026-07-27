@@ -8,8 +8,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const validator = path.join(here, "..", "validate.mjs");
 const fixture = (name) => path.join(here, "fixtures", name);
 
-function run(folder) {
-  const r = spawnSync("node", [validator, folder], { encoding: "utf8" });
+function run(folder, ...flags) {
+  const r = spawnSync("node", [validator, folder, ...flags], { encoding: "utf8" });
   // stdout carries the machine-readable violations; stderr carries the coverage report.
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
@@ -81,6 +81,52 @@ test("a broken Standard Build folder names every violated rule", () => {
   for (const rule of expected) {
     assert.match(r.out, new RegExp("^" + rule + "\\t", "m"), `expected ${rule} in output:\n${r.out}`);
   }
+});
+
+// --- claims sidecar pass -------------------------------------------------
+// These checks exist so agents stop grepping their own output to enforce
+// guardrail 3. Centralised, they run every time and cannot be skipped.
+
+test("a doc whose tokens all match its sidecar passes conformance", () => {
+  const r = run(fixture("claims-clean"), "--conformance");
+  assert.equal(r.code, 0, r.out);
+});
+
+test("claims mismatches are each their own rule", () => {
+  const r = run(fixture("claims-broken"), "--conformance");
+  assert.equal(r.code, 1);
+  for (const rule of [
+    "CLAIMS_INVALID_JSON",        // a sidecar that will not parse
+    "CLAIMS_TOKEN_UNDECLARED",    // token in the doc, absent from the sidecar
+    "CLAIMS_TOKEN_PHANTOM",       // token in the sidecar, absent from the doc
+    "CLAIMS_SIDECAR_MISSING",     // doc carries tokens and has no sidecar at all
+    "CLAIMS_ORPHAN_SIDECAR",      // sidecar guarding a doc that does not exist
+  ]) {
+    assert.match(r.out, new RegExp("^" + rule + "\\t", "m"), `expected ${rule} in output:\n${r.out}`);
+  }
+});
+
+test("sidecar tokens match with or without braces", () => {
+  // claims-clean declares one token braced and one bare; neither may be flagged.
+  const r = run(fixture("claims-clean"), "--conformance");
+  assert.doesNotMatch(r.out, /CLAIMS_TOKEN_(UNDECLARED|PHANTOM)/);
+});
+
+test("--conformance skips the manifest pass rather than failing on it", () => {
+  // claims-clean has no manifest at all. Without the flag that is a violation.
+  const scoped = run(fixture("claims-clean"), "--conformance");
+  assert.equal(scoped.code, 0, scoped.out);
+  assert.doesNotMatch(scoped.out, /MANIFEST_MISSING/);
+  assert.match(scoped.err, /manifest and workflow-JSON passes SKIPPED/);
+
+  const full = run(fixture("claims-clean"));
+  assert.equal(full.code, 1);
+  assert.match(full.out, /MANIFEST_MISSING/);
+});
+
+test("a folder with no sidecars says the claims checks were no-ops", () => {
+  const r = run(fixture("valid"));
+  assert.match(r.err, /0 claims sidecars found/);
 });
 
 test("coverage is reported, so a check that inspected nothing cannot hide", () => {

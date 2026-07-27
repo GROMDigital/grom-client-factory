@@ -109,7 +109,9 @@ This role DEFINES EVERYTHING. Populate `defines` with the FULL registry set: `de
 
 ## Self-check before you return
 
-Confirm against the file you wrote, not from memory: all 13 sections filled, no template placeholder text left, no em dashes anywhere.
+Confirm against the file you wrote, not from memory: all 13 sections filled, no template placeholder text left.
+
+Do NOT grep your own output for em dashes or fill tokens, and do not hand-validate your sidecar JSON. `baseline/validate.mjs` enforces all three for you after you return, and anything it finds comes back as a fix note with exact line numbers. Those checks cost model calls at your largest context, which is precisely where they cost most. Spend your turns on the conformance judgements below instead, which no script can make.
 
 Standard Build conformance, check each explicitly: every pipeline carries the eight fixed stages, spelled exactly, in order, with nothing renamed or removed, and any appended stage sits after Done. Every always-on workflow is present on its reserved number; every conditional one matches its condition; nothing is renumbered; every ADDED workflow sits at an unused number and names the mechanic that forced it. The removal matrix is reproduced, including that nothing removes the 20-series. The booking agent is a flow-builder bot and its availability tag precedes the booking node. Every per-cycle fact an AI captures has a named `stg_` staging slot and a named copying workflow. `decay_days` exceeds the ladder length. The manifest skeleton is version 2 and carries no per-client stage-to-canonical map.
 
