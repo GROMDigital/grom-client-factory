@@ -1,0 +1,148 @@
+{
+  "manifest_version": 2,
+  "client_key": "bad-clinic-v2",
+  "label": "Bad Clinic v2",
+  "status": "design",
+  "ghl_location_id": "LOC1",
+  "market": "AUS",
+  "currency": "AUD",
+  "timezone": "Australia/Melbourne",
+  "pipelines": [
+    {
+      "key": "consult",
+      "ghl_pipeline_id": "pipe-1",
+      "funnel_slug": "dup",
+      "offer_price": 0,
+      "stage_ids": {
+        "New Lead": "a-stage-1",
+        "Engaged": "a-stage-2",
+        "Booked": "a-stage-4",
+        "No Show": "a-stage-5",
+        "Showed": "a-stage-6",
+        "Continuing Treatment": "a-stage-7",
+        "Done": "a-stage-8",
+        "Qualified": "a-stage-3"
+      }
+    },
+    {
+      "key": "course",
+      "ghl_pipeline_id": "pipe-2",
+      "funnel_slug": "dup",
+      "offer_price": 2000,
+      "stage_ids": {
+        "New Lead": "b-stage-1",
+        "Engaged": "b-stage-2",
+        "Booking Started": "b-stage-3",
+        "Booked": "b-stage-4",
+        "No Show": "b-stage-5",
+        "Showed": "b-stage-6",
+        "Continuing Treatment": "b-stage-7",
+        "Done": "b-stage-8"
+      }
+    }
+  ],
+  "base_workflows": {
+    "10": {
+      "name": "10 Workflow 10",
+      "ghl_workflow_id": "wf-10",
+      "published": true
+    },
+    "11": {
+      "name": "11 Workflow 11",
+      "ghl_workflow_id": "wf-11",
+      "published": true
+    },
+    "12": {
+      "name": "12 Workflow 12",
+      "ghl_workflow_id": "wf-12",
+      "published": true
+    },
+    "13": {
+      "name": "13 Workflow 13",
+      "ghl_workflow_id": "wf-13",
+      "published": true
+    },
+    "99": {
+      "name": "99 Invented",
+      "ghl_workflow_id": "wf-99",
+      "published": false
+    },
+    "01": {
+      "name": "01 Workflow 01",
+      "ghl_workflow_id": "wf-01",
+      "published": true
+    },
+    "02": {
+      "name": "02 Workflow 02",
+      "ghl_workflow_id": "wf-02",
+      "published": true
+    },
+    "03": {
+      "name": "03 Workflow 03",
+      "ghl_workflow_id": "wf-03",
+      "published": true
+    },
+    "04": {
+      "name": "04 Workflow 04",
+      "ghl_workflow_id": "wf-04",
+      "published": true
+    },
+    "05": {
+      "name": "05 Workflow 05",
+      "ghl_workflow_id": "wf-05",
+      "published": true
+    },
+    "06": {
+      "name": "06 Workflow 06",
+      "ghl_workflow_id": "wf-06",
+      "published": true
+    },
+    "07": {
+      "name": "07 Workflow 07",
+      "ghl_workflow_id": "wf-07",
+      "published": true
+    },
+    "08": {
+      "name": "08 Workflow 08",
+      "ghl_workflow_id": "wf-08",
+      "published": true
+    },
+    "09": {
+      "name": "09 Workflow 09",
+      "ghl_workflow_id": "wf-09",
+      "published": true
+    }
+  },
+  "lost_reason_ids": {
+    "price": "lr",
+    "location": "lr",
+    "not suitable": "lr",
+    "went elsewhere": "lr",
+    "no response": "lr",
+    "not interested": "lr",
+    "duplicate / test": "lr"
+  },
+  "per_cycle_fields": [
+    {
+      "key": "treatment_interest",
+      "opportunity_field_id": "of-1"
+    },
+    {
+      "key": "cycle_index",
+      "opportunity_field_id": "of-2"
+    }
+  ],
+  "knobs": {
+    "touch_ceiling": 12,
+    "decay_days": 7,
+    "ladder_length_days": 7
+  },
+  "booking": {
+    "model": "in_page_widget"
+  },
+  "tracking": {
+    "client_key_snippet": "bad-clinic-v2",
+    "worker_url": "https://x.example"
+  },
+  "ids_harvested": false
+}

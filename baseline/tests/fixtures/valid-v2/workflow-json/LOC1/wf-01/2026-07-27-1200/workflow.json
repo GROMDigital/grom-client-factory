@@ -1,0 +1,131 @@
+{
+  "_id": "wf-01",
+  "locationId": "LOC1",
+  "name": "01 Lead Intake + Chase",
+  "status": "published",
+  "stopOnResponse": true,
+  "workflowData": {
+    "templates": [
+      {
+        "id": "n1",
+        "type": "find_opportunity",
+        "name": "Find opportunity",
+        "order": 0,
+        "parentKey": null,
+        "next": [
+          "t-found",
+          "t-notfound"
+        ],
+        "attributes": {
+          "sorting": "latest",
+          "type": "find_opportunity",
+          "cat": "multi-path",
+          "convertToMultipath": true,
+          "__customInputFields__": [
+            {
+              "filterField": "pipeline_id",
+              "value": "eq",
+              "secondValue": "pipe-1"
+            }
+          ],
+          "transitions": [
+            {
+              "id": "t-found",
+              "name": "Opportunity Found",
+              "conditionType": "pre-defined"
+            },
+            {
+              "id": "t-notfound",
+              "name": "Opportunity Not Found",
+              "conditionType": "pre-defined"
+            }
+          ]
+        }
+      },
+      {
+        "id": "t-found",
+        "type": "transition",
+        "name": "Opportunity Found",
+        "parentKey": "n1",
+        "next": "n2",
+        "attributes": {}
+      },
+      {
+        "id": "n2",
+        "type": "internal_update_opportunity",
+        "name": "Move to Booking Started",
+        "parentKey": "t-found",
+        "next": "n3",
+        "attributes": {
+          "type": "internal_update_opportunity",
+          "allowBackward": true,
+          "__customInputFields__": [
+            {
+              "filterField": "pipelineId",
+              "value": "pipe-1"
+            },
+            {
+              "filterField": "pipelineStageId",
+              "value": "a-stage-3",
+              "valueFieldType": "select"
+            }
+          ]
+        }
+      },
+      {
+        "id": "n3",
+        "type": "sms",
+        "name": "Instant first message",
+        "parentKey": "n2",
+        "next": null,
+        "attributes": {
+          "type": "sms",
+          "message": "hi"
+        }
+      },
+      {
+        "id": "t-notfound",
+        "type": "transition",
+        "name": "Opportunity Not Found",
+        "parentKey": "n1",
+        "next": "n4",
+        "attributes": {}
+      },
+      {
+        "id": "n4",
+        "type": "internal_create_opportunity",
+        "name": "Create the card",
+        "parentKey": "t-notfound",
+        "next": "n5",
+        "attributes": {
+          "type": "internal_create_opportunity",
+          "pipelineId": "pipe-1",
+          "__customInputFields__": [
+            {
+              "filterField": "pipelineStageId",
+              "value": "a-stage-1",
+              "valueFieldType": "select"
+            },
+            {
+              "filterField": "monetaryValue",
+              "value": 99,
+              "valueFieldType": "numerical",
+              "dataType": "NUMERICAL"
+            }
+          ]
+        }
+      },
+      {
+        "id": "n5",
+        "type": "goto",
+        "name": "Go To: found path",
+        "parentKey": "n4",
+        "next": null,
+        "attributes": {
+          "type": "goto",
+          "targetNodeId": "n2"
+        }
+      }
+    ]
+  }
+}

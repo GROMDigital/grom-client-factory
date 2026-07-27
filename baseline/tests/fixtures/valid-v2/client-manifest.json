@@ -1,0 +1,177 @@
+{
+  "manifest_version": 2,
+  "client_key": "good-clinic",
+  "label": "Good Clinic",
+  "status": "design",
+  "ghl_location_id": "LOC1",
+  "market": "AUS",
+  "currency": "AUD",
+  "timezone": "Australia/Melbourne",
+  "pipelines": [
+    {
+      "key": "consult",
+      "label": "Consult funnel",
+      "ghl_pipeline_id": "pipe-1",
+      "funnel_slug": "consult",
+      "offer_price": 99,
+      "calendar_ids": [],
+      "stage_ids": {
+        "New Lead": "a-stage-1",
+        "Engaged": "a-stage-2",
+        "Booking Started": "a-stage-3",
+        "Booked": "a-stage-4",
+        "No Show": "a-stage-5",
+        "Showed": "a-stage-6",
+        "Continuing Treatment": "a-stage-7",
+        "Done": "a-stage-8"
+      }
+    },
+    {
+      "key": "course",
+      "label": "Course funnel",
+      "ghl_pipeline_id": "pipe-2",
+      "funnel_slug": "course",
+      "offer_price": 2000,
+      "calendar_ids": [],
+      "stage_ids": {
+        "New Lead": "b-stage-1",
+        "Engaged": "b-stage-2",
+        "Booking Started": "b-stage-3",
+        "Booked": "b-stage-4",
+        "No Show": "b-stage-5",
+        "Showed": "b-stage-6",
+        "Continuing Treatment": "b-stage-7",
+        "Done": "b-stage-8"
+      }
+    }
+  ],
+  "base_workflows": {
+    "10": {
+      "name": "10 Workflow 10",
+      "ghl_workflow_id": "wf-10",
+      "published": true
+    },
+    "11": {
+      "name": "11 Workflow 11",
+      "ghl_workflow_id": "wf-11",
+      "published": true
+    },
+    "12": {
+      "name": "12 Workflow 12",
+      "ghl_workflow_id": "wf-12",
+      "published": true
+    },
+    "13": {
+      "name": "13 Workflow 13",
+      "ghl_workflow_id": "wf-13",
+      "published": true
+    },
+    "14": {
+      "name": "14 Workflow 14",
+      "ghl_workflow_id": "wf-14",
+      "published": true
+    },
+    "01": {
+      "name": "01 Workflow 01",
+      "ghl_workflow_id": "wf-01",
+      "published": true
+    },
+    "02": {
+      "name": "02 Workflow 02",
+      "ghl_workflow_id": "wf-02",
+      "published": true
+    },
+    "03": {
+      "name": "03 Workflow 03",
+      "ghl_workflow_id": "wf-03",
+      "published": true
+    },
+    "04": {
+      "name": "04 Workflow 04",
+      "ghl_workflow_id": "wf-04",
+      "published": true
+    },
+    "05": {
+      "name": "05 Workflow 05",
+      "ghl_workflow_id": "wf-05",
+      "published": true
+    },
+    "06": {
+      "name": "06 Workflow 06",
+      "ghl_workflow_id": "wf-06",
+      "published": true
+    },
+    "07": {
+      "name": "07 Workflow 07",
+      "ghl_workflow_id": "wf-07",
+      "published": true
+    },
+    "08": {
+      "name": "08 Workflow 08",
+      "ghl_workflow_id": "wf-08",
+      "published": true
+    },
+    "09": {
+      "name": "09 Workflow 09",
+      "ghl_workflow_id": "wf-09",
+      "published": true
+    }
+  },
+  "lost_reason_ids": {
+    "price": "lr-price",
+    "location": "lr-location",
+    "timing": "lr-timing",
+    "not suitable": "lr-not-suitable",
+    "went elsewhere": "lr-went-elsewhere",
+    "no response": "lr-no-response",
+    "not interested": "lr-not-interested",
+    "duplicate / test": "lr-duplicate-test"
+  },
+  "per_cycle_fields": [
+    {
+      "key": "treatment_interest",
+      "opportunity_field_id": "of-1",
+      "staging_contact_field_id": "cf-1",
+      "enumerated": true
+    },
+    {
+      "key": "cycle_index",
+      "opportunity_field_id": "of-2",
+      "staging_contact_field_id": null
+    },
+    {
+      "key": "amount_paid",
+      "opportunity_field_id": "of-3",
+      "staging_contact_field_id": null
+    }
+  ],
+  "knobs": {
+    "touch_ceiling": 12,
+    "decay_days": 14,
+    "ladder_length_days": 7,
+    "absence_close_days": 45,
+    "treatment_payment_in_system": false,
+    "send_window": {
+      "start_hour": 8,
+      "end_hour": 20
+    }
+  },
+  "booking": {
+    "model": "in_page_widget",
+    "calendar_ids": [],
+    "payment_product_names": [],
+    "external_system": null
+  },
+  "tracking": {
+    "client_key_snippet": "good-clinic",
+    "worker_url": "https://grom-lp-events.gromdigital001.workers.dev"
+  },
+  "ai_agents": {
+    "chat_primary": "ag-1",
+    "chat_booking": "ag-2",
+    "chat_booking_flow_workflow_id": "flow-1",
+    "voice_inbound": null,
+    "voice_outbound": null
+  },
+  "ids_harvested": true
+}

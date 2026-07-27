@@ -3,6 +3,25 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: the Standard Build, part 5. `validate.mjs` gains the version-aware
+  manifest pass and the workflow-JSON pass. Manifest: the v1/v2 required-key
+  split (the schema expresses it as `if`/`then`, which this validator cannot
+  evaluate, so it is applied explicitly), plus stage-name, duplicate-slug,
+  zero-offer-price, reserved-workflow-number, always-on presence,
+  booking-model conflict, lost-reason, per-cycle-field and
+  `decay_days > ladder_length_days` checks. Workflow JSON: the deployment gate
+  (published AND trigger file non-empty), `stopOnResponse`, the three-part
+  `monetaryValue` shape, stage-without-pipeline, `allowBackward` on the
+  regression-capable workflows, pipeline-only finders, not-found branches that
+  create then goto, unresolved gotos, and appointment-anchored waits with no
+  guard above them. It reads the latest capture per workflow from
+  `workflow-json/{loc}/{wid}/{stamp}/`.
+  **A COVERAGE report now prints to stderr on every run**, naming what each
+  check inspected and what is deliberately not implemented, because the estate's
+  recurring failure is a checker returning "pass, issues: []" on a build the
+  builder shows seven errors for. Fixtures `valid-v2` and `invalid-v2` added;
+  suite goes 4 tests to 7. First real run caught a live defect: Francesca's
+  `07f Course Opportunity Sync` writes `monetaryValue` as the string "2000".
 - 2026-07-27: the Standard Build, part 4. `client-manifest.schema.json` gains
   `manifest_version: 2`: `pipelines[]` (per campaign, each with its own
   `stage_ids` map of the eight fixed stage NAMES to GHL stage UUIDs) replacing

@@ -1,0 +1,134 @@
+{
+  "_id": "wf-07",
+  "locationId": "LOC1",
+  "name": "07 Cancellation Recovery",
+  "status": "draft",
+  "stopOnResponse": false,
+  "workflowData": {
+    "templates": [
+      {
+        "id": "b1",
+        "type": "find_opportunity",
+        "name": "Find opportunity",
+        "parentKey": null,
+        "next": [
+          "bt-found",
+          "bt-notfound"
+        ],
+        "attributes": {
+          "type": "find_opportunity",
+          "__customInputFields__": [
+            {
+              "filterField": "pipeline_id",
+              "value": "eq",
+              "secondValue": "pipe-1"
+            },
+            {
+              "filterField": "pipeline_stage_id",
+              "value": "eq",
+              "secondValue": "a-stage-4"
+            }
+          ],
+          "transitions": [
+            {
+              "id": "bt-found",
+              "name": "Opportunity Found",
+              "conditionType": "pre-defined"
+            },
+            {
+              "id": "bt-notfound",
+              "name": "Opportunity Not Found",
+              "conditionType": "pre-defined"
+            }
+          ]
+        }
+      },
+      {
+        "id": "bt-found",
+        "type": "transition",
+        "name": "Opportunity Found",
+        "parentKey": "b1",
+        "next": "b2",
+        "attributes": {}
+      },
+      {
+        "id": "b2",
+        "type": "internal_update_opportunity",
+        "name": "Regress to Booking Started",
+        "parentKey": "bt-found",
+        "next": "b3",
+        "attributes": {
+          "type": "internal_update_opportunity",
+          "__customInputFields__": [
+            {
+              "filterField": "pipelineStageId",
+              "value": "a-stage-3",
+              "valueFieldType": "select"
+            },
+            {
+              "filterField": "monetaryValue",
+              "value": "2000",
+              "valueFieldType": "string"
+            }
+          ]
+        }
+      },
+      {
+        "id": "b3",
+        "type": "sms",
+        "name": "Win-back message",
+        "parentKey": "b2",
+        "next": "b4",
+        "attributes": {
+          "type": "sms",
+          "message": "come back"
+        }
+      },
+      {
+        "id": "b4",
+        "type": "wait",
+        "name": "Wait until 2h after the appointment",
+        "parentKey": "b3",
+        "next": null,
+        "attributes": {
+          "type": "wait",
+          "appointmentStartAfter": {
+            "value": 2,
+            "when": "after"
+          },
+          "appointmentCondition": "any"
+        }
+      },
+      {
+        "id": "bt-notfound",
+        "type": "transition",
+        "name": "Opportunity Not Found",
+        "parentKey": "b1",
+        "next": "b5",
+        "attributes": {}
+      },
+      {
+        "id": "b5",
+        "type": "sms",
+        "name": "Dead end",
+        "parentKey": "bt-notfound",
+        "next": "b6",
+        "attributes": {
+          "type": "sms",
+          "message": "x"
+        }
+      },
+      {
+        "id": "b6",
+        "type": "goto",
+        "name": "Go To: nowhere",
+        "parentKey": "b5",
+        "next": null,
+        "attributes": {
+          "type": "goto",
+          "targetNodeId": "does-not-exist"
+        }
+      }
+    ]
+  }
+}

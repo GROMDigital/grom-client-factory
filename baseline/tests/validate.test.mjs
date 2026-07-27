@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -9,12 +9,9 @@ const validator = path.join(here, "..", "validate.mjs");
 const fixture = (name) => path.join(here, "fixtures", name);
 
 function run(folder) {
-  try {
-    const out = execFileSync("node", [validator, folder], { encoding: "utf8" });
-    return { code: 0, out };
-  } catch (e) {
-    return { code: e.status, out: (e.stdout || "") + (e.stderr || "") };
-  }
+  const r = spawnSync("node", [validator, folder], { encoding: "utf8" });
+  // stdout carries the machine-readable violations; stderr carries the coverage report.
+  return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
 
 test("valid client folder passes", () => {
@@ -49,4 +46,50 @@ test("malformed manifest JSON is its own rule", () => {
   const r = run(fixture("bad-json"));
   assert.equal(r.code, 1);
   assert.match(r.out, /MANIFEST_INVALID_JSON/);
+});
+
+test("a clean Standard Build folder passes", () => {
+  const r = run(fixture("valid-v2"));
+  assert.equal(r.code, 0, r.out);
+});
+
+test("a broken Standard Build folder names every violated rule", () => {
+  const r = run(fixture("invalid-v2"));
+  assert.equal(r.code, 1);
+  const expected = [
+    // manifest, v2 contracts
+    "MANIFEST_MISSING_STAGE",          // a renamed stage is a missing stage
+    "MANIFEST_ZERO_OFFER_PRICE",
+    "MANIFEST_DUPLICATE_FUNNEL_SLUG",
+    "MANIFEST_BAD_WORKFLOW_NUMBER",
+    "MANIFEST_MISSING_BASE_WORKFLOW",
+    "MANIFEST_MISSING_LOST_REASON",
+    "MANIFEST_MISSING_PER_CYCLE_FIELD",
+    "MANIFEST_KNOB_RELATION",
+    // workflow JSON
+    "WF_NOT_PUBLISHED",                // the deployment gate, half 1
+    "WF_TRIGGER_FILE_EMPTY",           // the deployment gate, half 2
+    "WF_STOP_ON_RESPONSE_OFF",
+    "WF_FINDER_NOT_PIPELINE_ONLY",
+    "WF_NOT_FOUND_DEAD_END",
+    "WF_MONETARY_VALUE_SHAPE",
+    "WF_STAGE_WITHOUT_PIPELINE",
+    "WF_MISSING_ALLOW_BACKWARD",
+    "WF_APPT_WAIT_NO_PAST_BRANCH",
+    "WF_GOTO_UNRESOLVED",
+  ];
+  for (const rule of expected) {
+    assert.match(r.out, new RegExp("^" + rule + "\\t", "m"), `expected ${rule} in output:\n${r.out}`);
+  }
+});
+
+test("coverage is reported, so a check that inspected nothing cannot hide", () => {
+  const clean = run(fixture("valid-v2"));
+  assert.match(clean.err, /validate coverage:/);
+  assert.match(clean.err, /inspected \d+ workflow steps/);
+  assert.match(clean.err, /not implemented here:/);
+
+  // A folder with no captures must SAY the workflow checks were no-ops.
+  const noWf = run(fixture("valid"));
+  assert.match(noWf.err, /0 workflow captures found/);
 });
