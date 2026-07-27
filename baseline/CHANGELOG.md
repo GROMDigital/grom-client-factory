@@ -3,6 +3,14 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-27: the Standard Build, part 3. `baseline/ai-agent-contract.md` added
+  (Tier-1): the two-chat-agent set, the flow-builder booking-bot requirement and
+  the four conditions that make it run at all, the hard requirement table, the
+  AI staging-slot rule, capability flags living on the ACTION not the agent,
+  personas from custom values, the per-node required-field map, the voice-AI
+  write surface, the live-test contract, and the validator checks. Motivated by
+  03's trigger BEING the booking agent and 12 triggering on platform-emitted
+  handover tags: agent config is inside the build contract, not adjacent to it.
 - 2026-07-26: the Standard Build, part 2. `baseline/base-workflows.md` added
   (Tier-1): fourteen always-on workflows with reserved numbering and gaps, the
   shared one-card-per-cycle guard and the five build rules under it, per-workflow
