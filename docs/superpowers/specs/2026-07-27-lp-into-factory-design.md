@@ -14,8 +14,11 @@ torn out at the same time. Today `doc-set-template.md` says landing pages are
 and the factory records only the slug and booking mechanism so tracking and
 workflows can account for it.
 
-That decision was correct for what existed then: an agent inventing a page from
-nothing produces a generic page.
+That decision was correct for what existed then, and the diagnosis is sharper than
+"generated content is low value". **The pages were bad because there was no
+template to work from.** An agent asked to produce a landing page from nothing is
+being asked to do design, and it produced design-by-agent, which is what a generic
+page is.
 
 **Three things changed since, and together they invert the maths.**
 
@@ -37,11 +40,23 @@ The library even states the intended usage: open it in an AI coding tool and say
 BUILD-GUIDE.md." **That already IS a factory role. It is just being run by hand,
 outside the factory, with the client context re-explained every time.**
 
-**So the actual thesis: the factory is not being asked to invent a page. It is
-being asked to stop making a human re-supply context it already holds.** The
-factory has the business brief, the ICA and brand voice, the offer mechanics, the
-declared price, the booking model, the funnel slug, and the tracking design. The
-person running BUILD-GUIDE.md by hand today is re-typing all of that.
+**So the actual thesis, and it is narrower than "the factory builds landing pages
+now": the DESIGN IS ALREADY LOCKED, so the remaining work is not design.** The
+five templates ARE the design. Layout, theme, motion, section composition, the
+booking card in the hero fold: all decided, all finished, all rendering the moment
+you copy the file.
+
+What is left per client is copy, SEO, and wiring. That is a filling job, and a
+filling job is something a factory role can do well, precisely because it is not
+the job that failed in July.
+
+🔴 **The role does NOT design a page. It does not compose one. It fills a locked
+one.** Any framing that lets it "build" a page reintroduces the exact failure.
+
+And the context that filling job needs, the factory already holds: the business
+brief, the ICA and brand voice, the offer mechanics, the declared price, the
+booking model, the funnel slug, and the tracking design. The person running
+BUILD-GUIDE.md by hand today is re-typing all of it.
 
 ## Scope
 
@@ -89,35 +104,89 @@ validator change.
 - **Never name the platform.** Guardrail 1, and an LP is the most client-visible
   artefact the factory produces.
 
-## 2. Template choice is a decision with stated reasons, not a vibe
+## 2. 🔴 The USER picks the template. The agent never does.
 
-The role must state, in `build-notes.md`, why it picked the template it picked,
-against three axes the library itself uses to differentiate them:
+**Hard requirement, not a default.** The session ASKS which of the five templates
+to use, and waits for an answer.
 
-| Axis | Read from |
+The reason is the same reason the design is locked at all. Template choice is the
+last remaining design decision on the page, and design-by-agent is what got
+landing pages removed from this factory. Handing the agent a rubric and letting it
+choose gives that decision back to the model with extra steps.
+
+It is also cheap to ask. Five options, the user knows the client and has usually
+spoken to them, and the answer is one word.
+
+Mechanically this makes template choice a GATE at the PM level, not a step inside
+the role. The PM asks, the user answers, and the role is spawned already knowing
+which file it is filling. The role never receives a choice it could get wrong.
+
+The PM presents the five with their differentiators, so the question is answerable
+without opening the library:
+
+| Template | Shape |
 |---|---|
-| price-led vs consult-led vs higher-ticket | the offer mechanics in the brief and registry section 1 |
-| deposit vs no-deposit | registry section 6 (is there a deposit product) and the Standard Build's 20-series presence |
-| palette / tone | `ica-brand-voice.md` |
+| `clinical-steel` | cool ice and steel-blue, session-led |
+| `direct-response` | warm amber, bold, price-led |
+| `premium-editorial` | ivory and charcoal, editorial, higher-ticket |
+| `clinical-trust` | cool sage, credibility-led, complimentary consult, NO deposit |
+| `clinical-botanical` | porcelain and deep-green, deposit-led |
 
-**The deposit axis is not cosmetic.** `clinical-trust` is the complimentary
-consult, no-deposit template; `clinical-botanical` is deposit-led. A build whose
-Standard Build manifest carries the 20-series and whose page has no deposit
-mechanic is internally inconsistent, and that is checkable.
+**One consistency note the PM surfaces WITH the question**, because it is
+mechanical and the user may not have it in mind: if the build's manifest carries
+the 20-series (a deposit exists) then a no-deposit template such as
+`clinical-trust` contradicts the build, and the reverse holds too. A flag
+alongside the question, never a veto. The user still chooses.
 
-## 3. Two clients must never get the same page
+## 3. Changes are SMALL and stay inside the template
 
-The library is explicit that the templates deliberately differ from each other
-and that customization means swapping, adding or dropping a section archetype so
-the page fits the client rather than mirroring its template.
+The role rewrites copy and SEO. It does not restructure.
 
-This needs to be a REQUIREMENT with a check behind it, not advice, because an
-agent's default behaviour is to copy the template and change the words. Proposed
-rule: **at least one section archetype must differ from the source template**,
-and `build-notes.md` must name the swap and the client reason for it.
+An earlier draft of this spec proposed a mandatory rule that at least one section
+archetype must differ from the source template, so that two clients never get the
+same page. **That is dropped, and it was wrong.** It pushed the agent toward
+exactly the behaviour that produced bad pages, and it optimised for a problem the
+setup already handles: five distinct templates, chosen deliberately per client and
+filled with genuinely client-true copy, do not collide often.
 
-Open question in §7: whether "one swap" is the right floor, or whether it should
-be expressed as a similarity check against the starter file.
+Section swaps stay POSSIBLE, via the `blocks/` archetypes and `CATALOG.md`,
+because a client sometimes genuinely needs a different section. They are a
+USER-REQUESTED change, never something the role does on its own initiative, and
+any swap is recorded in `build-notes.md`.
+
+The residual risk is real and small: two clients in the same market, given the
+same template with similar offers, will look related. The levers for that are the
+template choice, which is now a human's, and the copy, which is the bulk of the
+work anyway.
+
+## 3A. SEO is part of the fill, and the templates only cover half of it
+
+The starters already carry a per-client `<title>` and `<meta name="description">`,
+both filled with the demo client's data. That makes them exactly as dangerous as
+demo body copy: they ship verbatim unless rewritten. Both are in scope for the
+role, and both count as demo-copy failures if they survive.
+
+**What the templates do NOT carry today**, and what therefore needs deciding
+before this is built: Open Graph and Twitter card tags (so a shared link renders
+as a blank card), a canonical URL, and any structured data. For a local clinic
+page, `LocalBusiness` or `MedicalBusiness` schema with address, phone and hours is
+the obvious candidate.
+
+Two ways to close it:
+
+1. **Add them to the library's head block**, so every page gets them and the
+   factory just fills slots. Correct home, but it is a change to the LIBRARY,
+   which sits outside this project's scope as written.
+2. **Have the role emit them**, which makes the factory and the library disagree
+   about what a page contains, and leaves hand-built pages silently without them.
+
+Option 1 is right. It makes this project depend on a small library change, which
+is worth stating now rather than discovering mid-build.
+
+🔴 Structured data must carry no invented facts. Hours, address and phone are
+precisely the fields guardrail 3 forbids guessing, so without a verified source
+they are tokens and the schema block is incomplete by design rather than plausible
+and wrong.
 
 ## 4. Tracking is wired at build time, not reconciled afterwards
 
@@ -185,12 +254,15 @@ templates' distinctive copy strings are a known set, so any of them surviving in
 1. **How is demo copy detected?** A string blocklist harvested from the five
    starters is the obvious first answer, but it is brittle if the library changes
    and it cannot catch a paraphrase. Alternative: a similarity ratio against the
-   source starter, failing above a threshold. Needs deciding before build.
-2. **Is "one section swap" the right floor for differentiation**, or is it
-   gameable enough to be theatre?
+   source starter, failing above a threshold. Note the starters' `<title>` and
+   `<meta name="description">` are demo copy too and must be in whatever net gets
+   used. Needs deciding before build.
+2. **Does the SEO head block go into the library (option 1 in §3A)?** If yes this
+   project has a dependency on a library change and someone has to own it.
 3. **Does the manifest need `landing_pages[]`**, or is the registry plus the
    `tracking` block sufficient? This decides whether the schema goes to version 3
-   or stays at 2.
+   or stays at 2. It would also be the natural home for "which template was used",
+   which is otherwise only in `build-notes.md`.
 4. **Where does the library live for the factory to read?** It exists twice today:
    `Grom Digital Sub-Account/reference/lp-library` locally and
    `GROMDigital/grom-lp-library` on GitHub. The factory needs ONE declared path,
@@ -204,7 +276,12 @@ templates' distinctive copy strings are a known set, so any of them surviving in
 - **Building fresh from the 22 archetypes.** This is what the factory effectively
   did before July, and it produced the low-value output that got the whole thing
   removed. The library's own guide relegates from-scratch assembly to "only when
-  no template fits".
+  no template fits". The factory never gets that escape hatch: no template fits
+  means a human builds it, not that the agent starts composing.
+- **Letting the agent choose the template from a rubric.** Rejected in §2. It is
+  the same class of decision as the one that failed, dressed as a heuristic.
+- **A mandatory section swap per client.** Rejected in §3. It manufactures
+  restructuring work in a role whose entire value is that it does not restructure.
 - **Leaving LP authoring in a direct chat with the user.** It works, and it will
   keep working. It just re-supplies the client context by hand every time, and
   that context is the one thing the factory demonstrably holds.
