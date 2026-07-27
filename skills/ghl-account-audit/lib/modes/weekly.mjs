@@ -8,6 +8,7 @@ import {
 } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { Temporal } from '@js-temporal/polyfill';
+import { sourceCollectionsFromScopes } from '../adapters/collection.mjs';
 import { canonicalJson, sha256 } from '../canonical.mjs';
 
 const INTERNAL_LIMITATIONS = Object.freeze([
@@ -1055,12 +1056,34 @@ function looksLikeEnvelope(value) {
  * Every shape that genuinely CARRIES envelopes is now accepted:
  *  - a bare array of envelopes (the harness shape);
  *  - a record with an `envelopes` array (the shipped shape);
+ *  - a record with a `scopes` array (the LIVE PUBLIC RAIL's shape — see below);
  *  - a record that IS a single envelope;
  *  - a record whose `events` array carries envelopes.
  *
  * A record with an EMPTY ledger is honestly `absent` — zero evidence is missing evidence. Any
  * other shape is `unrecognised`, which is a MALFORMED shape error stated out loud, never a
  * silent empty list and never a claim that nothing was collected.
+ *
+ * ---------------------------------------------------------------------------------------------
+ * THE `scopes` BRANCH, AND WHY IT MUST COME BEFORE `events`.
+ *
+ * The live public rail checkpoints `{schemaVersion, source, boundLocationId, collectionWindow,
+ * collectionMode, events: [], scopes: [...], privateSourceEnvelopes, scopeCheckpoints,
+ * limitations}`. `events` is present and EMPTY on purpose, as the slot a governed baseline is
+ * later merged into. So the `events` branch below matched it first, found an empty array, and
+ * returned zero envelopes — and `inspectPublicRail` then reported `PUBLIC_EVIDENCE_MISSING` for a
+ * run that had just collected 588 real records.
+ *
+ * That never fired, because `mergeInternalEvidence` only runs when internal evidence exists and
+ * the internal rail has never been reachable from the CLI. It would have fired on the first run
+ * that turned it on, and it would have looked like an empty account rather than a shape bug — the
+ * same signature as the capture-horizon defect.
+ *
+ * The mapping is NOT written out again here. `sourceCollectionsFromScopes` is the one function
+ * both consumers use, so the envelopes this rail check inspects are byte-identical to the ones the
+ * measurement chain's projector validates. Two copies of that mapping is exactly how one consumer
+ * ends up reconciling an envelope the other rejects.
+ * ---------------------------------------------------------------------------------------------
  */
 function normalizePublicEvidence(value) {
   if (value === null || value === undefined) return { envelopes: [], unrecognised: false };
@@ -1069,7 +1092,21 @@ function normalizePublicEvidence(value) {
   if (Array.isArray(value.envelopes)) {
     return { envelopes: value.envelopes, unrecognised: false };
   }
+  // A record that IS one envelope. It stays ahead of the two ledger branches, exactly where it
+  // was: a single envelope carries neither `scopes` nor `events`, so the order cannot matter for
+  // correctness, and leaving it here means this function's behaviour on every shape that already
+  // worked is bit-for-bit what it was.
   if (looksLikeEnvelope(value)) return { envelopes: [value], unrecognised: false };
+  if (Array.isArray(value.scopes)) {
+    if (value.scopes.length === 0) return { envelopes: [], unrecognised: false };
+    try {
+      return { envelopes: sourceCollectionsFromScopes(value), unrecognised: false };
+    } catch {
+      // A `scopes` array this rail cannot turn into envelopes is a SHAPE error about evidence that
+      // exists. Saying nothing was collected would be a false statement.
+      return { envelopes: [], unrecognised: true };
+    }
+  }
   if (Array.isArray(value.events)) {
     if (value.events.length === 0) return { envelopes: [], unrecognised: false };
     if (value.events.every(looksLikeEnvelope)) {

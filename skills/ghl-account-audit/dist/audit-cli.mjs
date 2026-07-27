@@ -264,6 +264,28 @@ function incompleteCollection({
     incompleteReason: reason
   });
 }
+function sourceCollectionsFromScopes(publicEvidence) {
+  if (!publicEvidence || typeof publicEvidence !== "object" || Array.isArray(publicEvidence) || !Array.isArray(publicEvidence.scopes)) throw codedError("PUBLIC_EVIDENCE_SCOPES_INVALID", TypeError);
+  return publicEvidence.scopes.map((scope) => {
+    if (!scope || typeof scope !== "object" || Array.isArray(scope) || !scope.page) {
+      throw codedError("PUBLIC_EVIDENCE_SCOPES_INVALID", TypeError);
+    }
+    const collection = {
+      source: publicEvidence.source,
+      operationId: scope.operationId,
+      boundLocationId: publicEvidence.boundLocationId,
+      requestedWindow: { ...scope.requestedWindow },
+      appliedWindow: { ...scope.appliedWindow },
+      capturedAt: scope.capturedAt,
+      items: scope.items,
+      page: { ...scope.page }
+    };
+    if (collection.page.complete !== true) {
+      collection.incompleteReason = typeof scope.incompleteReason === "string" && scope.incompleteReason.length > 0 ? scope.incompleteReason : "PUBLIC_SCOPE_INCOMPLETE";
+    }
+    return collection;
+  });
+}
 var UPSTREAM_CODE_UNRECOGNISED, MACHINE_CODE;
 var init_collection = __esm({
   "lib/adapters/collection.mjs"() {
@@ -5907,6 +5929,14 @@ function normalizePublicEvidence(value) {
     return { envelopes: value.envelopes, unrecognised: false };
   }
   if (looksLikeEnvelope(value)) return { envelopes: [value], unrecognised: false };
+  if (Array.isArray(value.scopes)) {
+    if (value.scopes.length === 0) return { envelopes: [], unrecognised: false };
+    try {
+      return { envelopes: sourceCollectionsFromScopes(value), unrecognised: false };
+    } catch {
+      return { envelopes: [], unrecognised: true };
+    }
+  }
   if (Array.isArray(value.events)) {
     if (value.events.length === 0) return { envelopes: [], unrecognised: false };
     if (value.events.every(looksLikeEnvelope)) {
@@ -6621,6 +6651,7 @@ var INTERNAL_LIMITATIONS, FORBIDDEN_MOVEMENT, AUTH_REQUIRED, SNAPSHOT_SKEW, FULL
 var init_weekly = __esm({
   "lib/modes/weekly.mjs"() {
     init_index_esm();
+    init_collection();
     init_canonical();
     INTERNAL_LIMITATIONS = Object.freeze([
       "INTERNAL_WORKFLOW_DEFINITION_MISSING",
@@ -45344,11 +45375,6 @@ function codedError12(code, ErrorType = Error) {
 function byteOrder(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
-function isPlainObject12(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
 function sealedProfileId(frozenInputs) {
   const declared = frozenInputs?.target?.operatingProfile;
   if (typeof declared !== "string" || declared.length === 0) {
@@ -45362,30 +45388,6 @@ function sealedTimezone(frozenInputs) {
     throw codedError12("MEASUREMENT_TIMEZONE_UNDECLARED");
   }
   return declared;
-}
-function collectionsFromScopes(publicEvidence) {
-  if (!isPlainObject12(publicEvidence) || !Array.isArray(publicEvidence.scopes)) {
-    throw codedError12("MEASUREMENT_PUBLIC_EVIDENCE_SHAPE_UNEXPECTED", TypeError);
-  }
-  return publicEvidence.scopes.map((scope) => {
-    if (!isPlainObject12(scope) || !isPlainObject12(scope.page)) {
-      throw codedError12("MEASUREMENT_PUBLIC_EVIDENCE_SHAPE_UNEXPECTED", TypeError);
-    }
-    const collection = {
-      source: publicEvidence.source,
-      operationId: scope.operationId,
-      boundLocationId: publicEvidence.boundLocationId,
-      requestedWindow: { ...scope.requestedWindow },
-      appliedWindow: { ...scope.appliedWindow },
-      capturedAt: scope.capturedAt,
-      items: scope.items,
-      page: { ...scope.page }
-    };
-    if (collection.page.complete !== true) {
-      collection.incompleteReason = typeof scope.incompleteReason === "string" && scope.incompleteReason.length > 0 ? scope.incompleteReason : "PUBLIC_SCOPE_INCOMPLETE";
-    }
-    return collection;
-  });
 }
 function capturedThroughOf(publicEvidence) {
   const stamps = publicEvidence.scopes.map((scope) => scope.capturedAt).filter((value) => typeof value === "string" && value.length > 0).sort();
@@ -45432,7 +45434,7 @@ function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
     throw codedError12("MEASUREMENT_CUTOFF_UNDECLARED");
   }
   const context = { locationId };
-  const collections = collectionsFromScopes(publicEvidence);
+  const collections = sourceCollectionsFromScopes(publicEvidence);
   const projected = projectJourneyEvents({
     collections,
     context,
@@ -45474,6 +45476,7 @@ function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
 var MEASUREMENT_SCHEMA, GLOBAL_MATURITY_GRACE_DAYS;
 var init_measurement = __esm({
   "lib/measurement.mjs"() {
+    init_collection();
     init_canonical();
     init_evidence_graph();
     init_journey_projection();
@@ -46158,7 +46161,7 @@ import {
 function codedError15(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject13(value) {
+function isPlainObject12(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -46186,7 +46189,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync5(descriptor, "utf8"));
-    if (!isPlainObject13(parsed)) throw new Error();
+    if (!isPlainObject12(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError15(code);
@@ -46195,7 +46198,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject13(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject13(config2.frozenInputs) || !isPlainObject13(config2.context) || !isPlainObject13(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject12(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject12(config2.frozenInputs) || !isPlainObject12(config2.context) || !isPlainObject12(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -46203,7 +46206,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject13(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject13(rail.capabilityProofIndex) || !isPlainObject13(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject13(transport.responses) || !isPlainObject13(transport.toolsList))) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject12(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject12(rail.capabilityProofIndex) || !isPlainObject12(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject12(transport.responses) || !isPlainObject12(transport.toolsList))) throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -46233,7 +46236,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject13(frozenInputs)) fail2();
+  if (!isPlainObject12(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -46303,7 +46306,7 @@ function assertSealDocumentShape(document) {
   const fail2 = () => {
     throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject13(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject13(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject12(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject12(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -46349,7 +46352,7 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject13(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  if (!isPlainObject12(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, declaration.relativePath);
   if (!isWithin2(project, pathname)) fail2();
@@ -46407,7 +46410,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject13(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject12(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
@@ -46608,7 +46611,7 @@ function publicConfigError() {
   throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject13(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject12(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -46628,16 +46631,16 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject13(config2)) publicConfigError();
+  if (!isPlainObject12(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject13(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject13(config2.frozenInputs) || !isPlainObject13(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject12(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject12(config2.frozenInputs) || !isPlainObject12(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
   if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
     publicConfigError();
   }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject13(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject12(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -46665,7 +46668,7 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject13(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject12(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError15("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve4(projectRoot);
   const pathname = resolve4(project, descriptor.relativePath);
   if (!isWithin2(project, pathname)) {
@@ -46956,7 +46959,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject13(sealed)) return null;
+    if (!isPlainObject12(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;

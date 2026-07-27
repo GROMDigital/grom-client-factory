@@ -48,6 +48,7 @@
  * run was sealed for. This module adds a derivation on top of it, and derivations are proved by
  * re-running them, which is precisely what `lib/verifier.mjs` does.
  */
+import { sourceCollectionsFromScopes } from './adapters/collection.mjs';
 import { canonicalJson } from './canonical.mjs';
 import { buildEvidenceGraph } from './evidence-graph.mjs';
 import { projectJourneyEvents } from './journey-projection.mjs';
@@ -83,12 +84,6 @@ function byteOrder(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function isPlainObject(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
 /**
  * The profile this account is audited as. It is read from the SEALED frozen inputs, never from the
  * mutable context record, because the profile decides what every number means and a run must
@@ -111,45 +106,13 @@ function sealedTimezone(frozenInputs) {
 }
 
 /**
- * Rebuild the collection envelopes the projector validates from what the run durably checkpointed.
- *
- * `collectPublicEvidence` records each scope as the collection envelope MINUS `source` and
- * `boundLocationId` (both are stated once at the top of the public-evidence record instead of
- * being repeated per scope), PLUS an `incompleteReason: null` that a COMPLETE envelope may not
- * carry at all — `assertSourceCollection` refuses `Object.hasOwn(collection, 'incompleteReason')`
- * on a complete page, and it is right to. Both differences are repaired HERE, at the seam that
- * created them, rather than by loosening the projector.
+ * Rebuilding the collection envelopes from the checkpointed scopes now lives in
+ * `lib/adapters/collection.mjs` as `sourceCollectionsFromScopes`, because a SECOND consumer needs
+ * the identical mapping: `mergeInternalEvidence`'s public-rail check, which reports
+ * `PUBLIC_EVIDENCE_MISSING` on a run that collected 588 records if it is handed the raw record.
+ * Two hand-rolled copies of that mapping is how one consumer ends up reconciling an envelope the
+ * other one rejects, so there is one function and both call it.
  */
-function collectionsFromScopes(publicEvidence) {
-  if (!isPlainObject(publicEvidence) || !Array.isArray(publicEvidence.scopes)) {
-    throw codedError('MEASUREMENT_PUBLIC_EVIDENCE_SHAPE_UNEXPECTED', TypeError);
-  }
-  return publicEvidence.scopes.map((scope) => {
-    if (!isPlainObject(scope) || !isPlainObject(scope.page)) {
-      throw codedError('MEASUREMENT_PUBLIC_EVIDENCE_SHAPE_UNEXPECTED', TypeError);
-    }
-    const collection = {
-      source: publicEvidence.source,
-      operationId: scope.operationId,
-      boundLocationId: publicEvidence.boundLocationId,
-      requestedWindow: { ...scope.requestedWindow },
-      appliedWindow: { ...scope.appliedWindow },
-      capturedAt: scope.capturedAt,
-      items: scope.items,
-      page: { ...scope.page },
-    };
-    if (collection.page.complete !== true) {
-      // Rule 4 of the projector: incompleteness propagates and is never laundered. A scope that
-      // is partial without saying why still says SOMETHING, and a generic reason is honest where
-      // silence would read as completeness.
-      collection.incompleteReason = typeof scope.incompleteReason === 'string'
-        && scope.incompleteReason.length > 0
-        ? scope.incompleteReason
-        : 'PUBLIC_SCOPE_INCOMPLETE';
-    }
-    return collection;
-  });
-}
 
 /**
  * The last instant any of this evidence was READ. `undefined` when the run collected no scope at
@@ -238,7 +201,7 @@ export function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
   }
 
   const context = { locationId };
-  const collections = collectionsFromScopes(publicEvidence);
+  const collections = sourceCollectionsFromScopes(publicEvidence);
   const projected = projectJourneyEvents({
     collections, context, profile, projection,
   });

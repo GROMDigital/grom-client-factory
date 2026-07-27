@@ -26,8 +26,10 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { runAuditCli } from '../cli/audit.mjs';
 import { canonicalJson, sha256 } from '../lib/canonical.mjs';
+import { sourceCollectionsFromScopes } from '../lib/adapters/collection.mjs';
 import { measurePublicEvidence } from '../lib/measurement.mjs';
 import { buildWindows, computeJourneyMetrics } from '../lib/metrics.mjs';
+import { mergeInternalEvidence } from '../lib/modes/weekly.mjs';
 import { auditPaths } from '../lib/paths.mjs';
 import { loadMetricContracts, loadPublicReadAllowlist } from '../schemas/v1.mjs';
 
@@ -693,4 +695,125 @@ test('fixture scope records carry exactly the keys the real collector emits', as
     Object.keys(collected).sort(),
     Object.keys(publicEvidence()).sort(),
   );
+});
+
+// ---------------------------------------------------------------------------
+// The merge seam. Reachable only once the internal rail is on, which is why nothing caught it.
+// ---------------------------------------------------------------------------
+
+test('the merge check reads the live public rail shape instead of calling it missing', async () => {
+  /*
+   * `mergeInternalEvidence` runs ONLY when internal evidence exists, and the internal rail has
+   * never been reachable from the CLI, so this path has never executed on a real record. It would
+   * have executed on the first run that turned the rail on.
+   *
+   * The live record carries `events: []` as the slot a governed baseline is later merged into, and
+   * `normalizePublicEvidence` matched that empty array before it ever looked at `scopes`. So a run
+   * that had just collected 588 real records would have been reported as having no public evidence
+   * at all — the same signature as the capture-horizon defect: a shape bug wearing the costume of
+   * an empty account.
+   */
+  const collected = publicEvidence();
+  assert.deepEqual(collected.events, [], 'the fixture must reproduce the empty ledger that caused it');
+  assert.equal(collected.scopes.length, 4);
+
+  const merged = await mergeInternalEvidence({
+    publicEvidence: collected,
+    internalEvidence: {
+      schemaVersion: '1.0.0',
+      boundLocationId: LOCATION,
+      capturedAt: CAPTURED_AT,
+      workflows: [],
+      coverage: [],
+    },
+    coveragePolicy: { analyticalCutoff: CUTOFF_ISO },
+    checkpoint: { schemaVersion: '1.0.0', phase: 'collecting_public' },
+    refreshPublicEvidence: undefined,
+    runtime: {},
+  });
+
+  const limitations = (merged.limitations ?? []).map((entry) => (
+    typeof entry === 'string' ? entry : entry?.code
+  ));
+  assert.equal(
+    limitations.includes('PUBLIC_EVIDENCE_MISSING'),
+    false,
+    `588 records is not "missing": ${JSON.stringify(limitations)}`,
+  );
+  assert.equal(
+    limitations.includes('PUBLIC_EVIDENCE_MALFORMED'),
+    false,
+    `the mapped envelopes must satisfy the envelope allow-list unchanged: ${JSON.stringify(limitations)}`,
+  );
+  // And the location conflict check is genuinely running, not vacuously passing on zero envelopes.
+  assert.equal(merged.quarantined ?? false, false);
+});
+
+test('the merge check and the projector inspect byte-identical envelopes', () => {
+  /*
+   * THE ANTI-DRIFT PROPERTY, and the reason this mapping is one function rather than two.
+   *
+   * Two consumers turn the checkpointed scopes back into envelopes: the measurement chain, whose
+   * projector VALIDATES them, and the merge check, which RECONCILES them. If those two ever
+   * disagree, one of them reconciles an envelope the other rejects, and the run reports something
+   * true about a record neither of them actually read.
+   */
+  const collected = publicEvidence();
+  const forMerge = sourceCollectionsFromScopes(collected);
+  assert.equal(forMerge.length, collected.scopes.length);
+  for (const envelope of forMerge) {
+    // The three bookkeeping fields are dropped, and `status` in particular: it is a derived
+    // restatement of `page.complete`, and an envelope with two places to claim completeness is one
+    // where a `complete_partial` scope can be read as terminal.
+    assert.equal(Object.hasOwn(envelope, 'status'), false);
+    assert.equal(Object.hasOwn(envelope, 'actionId'), false);
+    assert.equal(Object.hasOwn(envelope, 'category'), false);
+    // A complete envelope may not carry the key at all, which is what the projector enforces.
+    assert.equal(Object.hasOwn(envelope, 'incompleteReason'), false);
+    assert.equal(envelope.boundLocationId, LOCATION);
+    assert.equal(envelope.source, 'public_ghl');
+  }
+  // The measurement chain accepts exactly these, which is the proof that both consumers agree.
+  const measured = measurePublicEvidence({
+    publicEvidence: collected,
+    frozenInputs: frozenInputs(),
+  });
+  assert.deepEqual(
+    measured.projection.map(({ operationId }) => operationId).sort(),
+    forMerge.map(({ operationId }) => operationId).sort(),
+  );
+});
+
+test('an incomplete scope keeps its reason through the merge mapping too', () => {
+  const truncated = publicEvidence({
+    scopes: [scope('contacts.search', CONTACTS, {
+      status: 'complete_partial',
+      incompleteReason: 'BUDGET_MAXIMUM_PAGES',
+      page: {
+        cursor: null,
+        nextCursor: 'more',
+        reportedCount: 99,
+        collectedCount: CONTACTS.length,
+        complete: false,
+        truncated: false,
+      },
+    })],
+  });
+  const [envelope] = sourceCollectionsFromScopes(truncated);
+  assert.equal(envelope.incompleteReason, 'BUDGET_MAXIMUM_PAGES');
+  assert.equal(envelope.page.complete, false);
+
+  // And a partial scope that says nothing about why still says SOMETHING, rather than reading as
+  // terminal by omission.
+  const silent = publicEvidence({
+    scopes: [scope('contacts.search', CONTACTS, {
+      status: 'complete_partial',
+      incompleteReason: null,
+      page: {
+        cursor: null, nextCursor: 'more', reportedCount: 99,
+        collectedCount: CONTACTS.length, complete: false, truncated: false,
+      },
+    })],
+  });
+  assert.equal(sourceCollectionsFromScopes(silent)[0].incompleteReason, 'PUBLIC_SCOPE_INCOMPLETE');
 });
