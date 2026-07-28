@@ -298,11 +298,16 @@
     </p>
     <p>
       Two things make it different from a checklist. There are <strong>no hardcoded
-      best-practice detectors</strong>: nothing in the code knows that a nurture should have five
-      emails or that a show rate should be sixty percent. And there is <strong>no per-account
-      configuration anywhere</strong>: no file tells it that <code>05 No-Show Recovery</code> is the
-      no-show recovery. Real experts read real evidence and are held to a contract about what a
-      finding has to contain.
+      best-practice detectors</strong>: no rule anywhere fires because a nurture has four emails
+      instead of five. And there is <strong>no per-account configuration</strong> telling it what
+      anything is for: no file says that <code>05 No-Show Recovery</code> is the no-show recovery.
+      Real experts read real evidence and are held to a contract about what a finding has to
+      contain.
+    </p>
+    <p>
+      The one exception is deliberate, and it is explained in <a href="#targets">the targets
+      section</a>: the account carries the numbers <em>you</em> are aiming at. Those are stated as
+      context, never as a test, and the expert is told to disagree with them if they are wrong.
     </p>
     <p>
       That second rule is why it works on accounts nobody built to a template. Point it at Francesca,
@@ -516,6 +521,73 @@
         </div>
       </article>
 
+    </div>
+  </section>
+
+  <section id="targets">
+    <h2><span class="num">Targets</span>The numbers you are aiming at, and why they are not benchmarks</h2>
+    <p>
+      These are two different things and keeping them apart is what stops this becoming a checklist.
+    </p>
+    <p>
+      A <strong>benchmark</strong> is what a competent operation in this exact situation achieves.
+      That depends on context no rule can hold: a Meta lead form and a referral are not the same
+      lead, a held deposit and a free consult are not the same booking. The expert supplies that,
+      from its own knowledge, and it must keep doing so.
+    </p>
+    <p>
+      A <strong>target</strong> is what the business has decided to aim at. No amount of evidence
+      reveals it. Grom's own show-rate target is 65% while the strategy call is given away free, and
+      85% if it ever carries a deposit, and nothing in the account says which of those you chose.
+      That was the genuine gap, so targets now live with the account's context and travel to every
+      expert.
+    </p>
+    <p>
+      <strong>Nothing compares them.</strong> No code fires a finding because a rate sits under a
+      target. The instruction that travels with the numbers is: state your own benchmark first,
+      before you look at the target, then say where reality sits against both, and if the target is
+      wrong for this situation say so and say why. Every target carries the reasoning behind it
+      precisely so it can be argued with.
+    </p>
+
+    <h3 style="margin-top:1.75rem">Clinic accounts</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Step</th><th class="num-col">Target</th><th>Where the number comes from</th></tr></thead>
+        <tbody>
+          <tr><td>Enquiry contacted</td><td class="num-col">98%</td><td>Automation contacts everyone, so a shortfall is a delivery failure rather than a demand problem</td></tr>
+          <tr><td>Booked consult attends</td><td class="num-col">85%</td><td>Aesthetic clinics run 15–25% no-shows, worse than general medicine because treatment is elective. No-shows cost 15–20% of annual revenue</td></tr>
+          <tr><td>Booked becomes a no-show</td><td class="num-col">15%</td><td>The inverse, stated separately because it is its own measured step</td></tr>
+          <tr><td>Attended consult buys</td><td class="num-col">50%</td><td>Average clinics convert 40–55%, top performers 75–85%, and the gap is the consultation process rather than the marketing</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:1.5rem">Grom's own account</h3>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Step</th><th class="num-col">Target</th><th>Where the number comes from</th></tr></thead>
+        <tbody>
+          <tr><td>Enquiry contacted</td><td class="num-col">98%</td><td>Same reasoning. Speed is the real lever: 32% close inside five minutes against 12% at 24 hours</td></tr>
+          <tr><td>Booked call attends</td><td class="num-col">65%</td><td>Normal band for a <em>free</em> B2B discovery call is 50–70%. A paid or deposit-backed call reaches 85%, so raising this is a decision about charging for the call</td></tr>
+          <tr><td>Attended call closes</td><td class="num-col">35%</td><td>Close rate on shown high-ticket discovery calls. Read against the caveat that this pipeline only marks won once the client pays</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:1.25rem">
+      Targets are set only where the step's denominator is unambiguous. The published "lead to
+      booked" bands are measured across all leads, while this account measures it across
+      <em>qualified</em> leads, and a target quietly carrying the wrong denominator would be worse
+      than no target at all.
+    </p>
+
+    <div class="quote" style="max-width:var(--measure)">
+      <b>What this immediately surfaced on Grom UK</b>
+      Two of the three targets cannot be measured at all. <em>Booked call attends</em> reads
+      ALL_SUBJECTS_EXCLUDED in every window, because 21 of 64 appointments were never resolved past
+      their own start time. The raw counts say 17 attended against 26 no-shows, roughly a 40% show
+      rate against a 65% target, but the system correctly refuses to publish that as a rate while a
+      third of the appointments sit unclosed. The first fix is record hygiene, not marketing.
     </div>
   </section>
 
