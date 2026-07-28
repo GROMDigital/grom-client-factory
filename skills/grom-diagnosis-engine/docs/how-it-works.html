@@ -1,790 +1,298 @@
-<title>The weekly GHL auditor, explained</title>
-
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Grom Diagnosis Engine, explained</title>
 <style>
+  *, *::before, *::after { box-sizing: border-box; }
   :root {
-    color-scheme: light dark;
-
-    --paper:      #F2F5F6;
-    --card:       #FFFFFF;
-    --ink:        #121A1E;
-    --ink-soft:   #4A5B62;
-    --ink-faint:  #7C8D94;
-    --rule:       #D7E0E2;
-    --rule-soft:  #E7EDEE;
-
-    --accent:     #0B5F66;
-    --accent-ink: #FFFFFF;
-    --accent-wash:#E2EFF0;
-
-    --built:      #276B47;
-    --built-wash: #E3F0E8;
-    --pending:    #8A5410;
-    --pending-wash:#F6EBDA;
-    --refused:    #9C2F2F;
-    --refused-wash:#F6E3E3;
-
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --serif: ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
-
-    --measure: 68ch;
-    --gutter: clamp(1.25rem, 4vw, 3rem);
+    --ink: #16181d; --ink-soft: #4a5058; --ink-faint: #767d87;
+    --rule: #e3e5ea; --bg: #ffffff; --panel: #f7f8fa;
+    --accent: #1f6f5c; --warn: #a5391f; --radius: 10px;
   }
-
   @media (prefers-color-scheme: dark) {
     :root {
-      --paper:      #0D1417;
-      --card:       #141E22;
-      --ink:        #E6EDEF;
-      --ink-soft:   #A3B4BA;
-      --ink-faint:  #71858C;
-      --rule:       #24343A;
-      --rule-soft:  #1B292E;
-
-      --accent:     #5FCBD3;
-      --accent-ink: #06282B;
-      --accent-wash:#123336;
-
-      --built:      #6FC694;
-      --built-wash: #133026;
-      --pending:    #D8A05A;
-      --pending-wash:#33260F;
-      --refused:    #E08585;
-      --refused-wash:#331A1A;
+      --ink: #e8eaee; --ink-soft: #b3b9c2; --ink-faint: #868d97;
+      --rule: #2b2f36; --bg: #14161a; --panel: #1c1f25;
+      --accent: #6fcfae; --warn: #e8917a;
     }
   }
-
-  :root[data-theme="light"] {
-    --paper:#F2F5F6; --card:#FFFFFF; --ink:#121A1E; --ink-soft:#4A5B62; --ink-faint:#7C8D94;
-    --rule:#D7E0E2; --rule-soft:#E7EDEE;
-    --accent:#0B5F66; --accent-ink:#FFFFFF; --accent-wash:#E2EFF0;
-    --built:#276B47; --built-wash:#E3F0E8;
-    --pending:#8A5410; --pending-wash:#F6EBDA;
-    --refused:#9C2F2F; --refused-wash:#F6E3E3;
-  }
-  :root[data-theme="dark"] {
-    --paper:#0D1417; --card:#141E22; --ink:#E6EDEF; --ink-soft:#A3B4BA; --ink-faint:#71858C;
-    --rule:#24343A; --rule-soft:#1B292E;
-    --accent:#5FCBD3; --accent-ink:#06282B; --accent-wash:#123336;
-    --built:#6FC694; --built-wash:#133026;
-    --pending:#D8A05A; --pending-wash:#33260F;
-    --refused:#E08585; --refused-wash:#331A1A;
-  }
-
   body {
-    background: var(--paper);
-    color: var(--ink);
-    font-family: var(--sans);
-    font-size: 17px;
-    line-height: 1.62;
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-
-  .wrap { max-width: 78rem; margin: 0 auto; padding: 0 var(--gutter) 6rem; }
-  .col  { max-width: var(--measure); }
-
-  /* ---- masthead ---- */
-
-  .masthead {
-    border-bottom: 1px solid var(--rule);
-    padding: clamp(3rem, 8vw, 5.5rem) 0 2.5rem;
-    display: flex; flex-direction: column; gap: 1.5rem;
-  }
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: .72rem;
-    letter-spacing: .13em;
-    text-transform: uppercase;
-    color: var(--accent);
-  }
-  h1 {
-    font-family: var(--serif);
-    font-weight: 500;
-    font-size: clamp(2.2rem, 5.5vw, 3.6rem);
-    line-height: 1.06;
-    letter-spacing: -.02em;
-    text-wrap: balance;
-    max-width: 20ch;
-  }
-  .standfirst { font-size: 1.14rem; color: var(--ink-soft); max-width: var(--measure); }
-  .standfirst strong { color: var(--ink); font-weight: 600; }
-
-  .facts {
-    display: flex; flex-wrap: wrap; gap: 0 2.5rem;
-    font-family: var(--mono); font-size: .78rem; color: var(--ink-faint);
-    padding-top: .5rem;
-  }
-  .facts b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
-
-  /* ---- sections ---- */
-
-  section { padding-top: 3.75rem; }
+  .wrap { max-width: 46rem; margin: 0 auto; padding: 4rem 1.5rem 8rem; }
+  @media (max-width: 640px) { .wrap { padding: 2.5rem 1.1rem 5rem; } }
+  h1 { font-size: 2.1rem; line-height: 1.18; letter-spacing: -0.021em; margin: 0 0 .6rem; }
   h2 {
-    font-family: var(--serif);
-    font-weight: 500;
-    font-size: clamp(1.5rem, 3vw, 2rem);
-    line-height: 1.15;
-    letter-spacing: -.015em;
-    margin-bottom: .35rem;
-    text-wrap: balance;
+    font-size: 1.3rem; line-height: 1.3; letter-spacing: -0.012em;
+    margin: 3.4rem 0 .9rem; padding-top: 1.6rem; border-top: 1px solid var(--rule);
   }
-  h2 .num {
-    font-family: var(--mono); font-size: .7rem; color: var(--accent);
-    letter-spacing: .12em; display: block; margin-bottom: .7rem; font-weight: 400;
-  }
-  h3 {
-    font-size: .95rem; font-weight: 650; letter-spacing: -.005em;
-    margin-bottom: .25rem;
-  }
-  p { max-width: var(--measure); }
-  p + p { margin-top: .9rem; }
-  section > p:first-of-type { margin-top: .9rem; }
-  em { font-style: italic; color: var(--ink); }
-  strong { font-weight: 640; }
+  h3 { font-size: 1.02rem; margin: 2rem 0 .5rem; letter-spacing: -0.005em; }
+  p { margin: 0 0 1.05rem; }
+  .lede { font-size: 1.12rem; color: var(--ink-soft); margin-bottom: 1.6rem; }
+  .meta { color: var(--ink-faint); font-size: .85rem; margin: 0 0 2.4rem; }
+  strong { font-weight: 630; }
   code {
-    font-family: var(--mono); font-size: .86em;
-    background: var(--rule-soft); padding: .1em .34em; border-radius: 3px;
+    font: .845em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--panel); padding: .12em .38em; border-radius: 4px;
+    border: 1px solid var(--rule); word-break: break-word;
   }
-  a { color: var(--accent); }
-
-  ul { max-width: var(--measure); margin-top: .9rem; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: .55rem; }
-  ul li { position: relative; padding-left: 1.15rem; }
-  ul li::before {
-    content: ""; position: absolute; left: 0; top: .66em;
-    width: 5px; height: 5px; background: var(--accent); border-radius: 50%;
+  .panel {
+    background: var(--panel); border: 1px solid var(--rule);
+    border-radius: var(--radius); padding: 1.1rem 1.25rem; margin: 1.4rem 0;
   }
-
-  /* ---- the pipeline diagram ---- */
-
-  .band { margin-top: 2rem; overflow-x: auto; padding-bottom: .5rem; }
-
-  .pipeline { display: flex; align-items: stretch; gap: 0; min-width: 62rem; }
-  .pnode {
-    flex: 1 1 0; background: var(--card); border: 1px solid var(--rule);
-    padding: 1rem 1.05rem 1.1rem; display: flex; flex-direction: column; gap: .35rem;
+  .panel > :last-child { margin-bottom: 0; }
+  .panel h3 { margin-top: 0; }
+  .flag { border-left: 3px solid var(--warn); }
+  .flag .tag {
+    color: var(--warn); font-weight: 650; font-size: .78rem; letter-spacing: .06em;
+    text-transform: uppercase; display: block; margin-bottom: .4rem;
   }
-  .pnode + .pnode { border-left: none; }
-  .pnode.model { background: var(--accent-wash); border-color: var(--accent); }
-  .pnode .kind {
-    font-family: var(--mono); font-size: .64rem; letter-spacing: .12em;
-    text-transform: uppercase; color: var(--ink-faint);
+  .stage { display: flex; gap: 1rem; padding: 1.15rem 0; border-bottom: 1px solid var(--rule); }
+  .stage:last-of-type { border-bottom: 0; }
+  .n {
+    flex: 0 0 2rem; height: 2rem; border-radius: 50%; background: var(--accent); color: var(--bg);
+    display: grid; place-items: center; font-weight: 700; font-size: .9rem; margin-top: .1rem;
   }
-  .pnode.model .kind { color: var(--accent); }
-  .pnode .name { font-family: var(--mono); font-size: .84rem; font-weight: 600; }
-  .pnode .what { font-size: .8rem; color: var(--ink-soft); line-height: 1.45; }
-  .pnode .count {
-    font-family: var(--mono); font-size: .68rem; color: var(--accent);
-    letter-spacing: .04em; margin-top: auto; padding-top: .5rem;
+  .stage .body { min-width: 0; }
+  .stage .body p { margin: .25rem 0 0; color: var(--ink-soft); font-size: .95rem; }
+  .stage .body .who {
+    font-size: .78rem; color: var(--ink-faint); text-transform: uppercase;
+    letter-spacing: .06em; margin-top: .45rem;
   }
-
-  .legend {
-    display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 1rem;
-    font-size: .8rem; color: var(--ink-soft);
+  .stage b { font-size: 1.01rem; }
+  .tablewrap { overflow-x: auto; margin: 1.3rem 0; border: 1px solid var(--rule); border-radius: var(--radius); }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; min-width: 28rem; }
+  th, td { text-align: left; padding: .62rem .85rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-weight: 640; font-size: .78rem; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); }
+  tr:last-child td { border-bottom: 0; }
+  pre {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius);
+    padding: .95rem 1.1rem; overflow-x: auto; margin: 1.2rem 0;
+    font: .84rem/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
-  .legend span { display: flex; align-items: center; gap: .5rem; }
-  .swatch { width: 13px; height: 13px; border: 1px solid var(--rule); flex: none; }
-  .swatch.det { background: var(--card); }
-  .swatch.mod { background: var(--accent-wash); border-color: var(--accent); }
-
-  /* ---- stage cards ---- */
-
-  .stages { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-top: 2rem; }
-  .stage { background: var(--card); padding: 1.6rem clamp(1.1rem, 3vw, 1.9rem); display: grid; gap: 1.4rem; }
-  @media (min-width: 56rem) { .stage { grid-template-columns: 13rem 1fr; gap: 2.5rem; } }
-  .stage-id { display: flex; flex-direction: column; gap: .3rem; }
-  .stage-id .n {
-    font-family: var(--mono); font-size: .68rem; letter-spacing: .13em;
-    text-transform: uppercase; color: var(--accent);
-  }
-  .stage-id .who { font-family: var(--serif); font-size: 1.28rem; line-height: 1.2; letter-spacing: -.01em; }
-  .stage-id .how-many { font-family: var(--mono); font-size: .72rem; color: var(--ink-faint); }
-  .stage-body > p { max-width: 62ch; }
-  .stage-body > p:first-child { margin-top: 0; }
-
-  .sees { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1rem; }
-  .sees b {
-    font-family: var(--mono); font-size: .7rem; font-weight: 500;
-    border: 1px solid var(--rule); padding: .2rem .5rem; color: var(--ink-soft);
-    background: var(--paper);
-  }
+  pre code { background: none; border: 0; padding: 0; }
+  ul, ol { margin: 0 0 1.05rem; padding-left: 1.25rem; }
+  li { margin-bottom: .38rem; }
   .quote {
-    margin-top: 1.1rem; padding: .85rem 1.1rem; background: var(--paper);
-    border-left: 2px solid var(--accent); font-size: .88rem; color: var(--ink-soft);
-    max-width: 62ch;
+    border-left: 3px solid var(--rule); padding: .1rem 0 .1rem 1.1rem;
+    color: var(--ink-soft); font-style: italic; margin: 1.2rem 0;
   }
-  .quote b { display: block; font-family: var(--mono); font-size: .66rem; letter-spacing: .1em;
-    text-transform: uppercase; color: var(--accent); margin-bottom: .35rem; font-weight: 500; }
-  .quote em { color: var(--ink); }
-
-  /* ---- tables ---- */
-
-  .tablewrap { overflow-x: auto; margin-top: 1.5rem; border: 1px solid var(--rule); background: var(--card); }
-  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: .87rem; }
-  th, td { text-align: left; padding: .6rem .9rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
-  thead th {
-    font-family: var(--mono); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase;
-    color: var(--ink-faint); font-weight: 500; background: var(--paper);
-    border-bottom: 1px solid var(--rule);
-  }
-  tbody tr:last-child td { border-bottom: none; }
-  td code { background: none; padding: 0; color: var(--ink-soft); }
-  .num-col { font-variant-numeric: tabular-nums; }
-
-  .pill {
-    display: inline-block; font-family: var(--mono); font-size: .66rem;
-    letter-spacing: .07em; text-transform: uppercase; padding: .18rem .45rem;
-    border-radius: 2px; white-space: nowrap;
-  }
-  .pill.built { background: var(--built-wash); color: var(--built); }
-  .pill.pending { background: var(--pending-wash); color: var(--pending); }
-  .pill.no { background: var(--refused-wash); color: var(--refused); }
-
-  /* ---- answer blocks ---- */
-
-  .answers { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin-top: 2rem; }
-  .answer { background: var(--card); padding: 1.4rem clamp(1.1rem, 3vw, 1.9rem); }
-  .answer .q {
-    font-family: var(--serif); font-size: 1.16rem; line-height: 1.3; letter-spacing: -.01em;
-    display: flex; align-items: baseline; gap: .8rem; flex-wrap: wrap;
-  }
-  .answer p { font-size: .93rem; margin-top: .65rem; }
-
-  /* ---- commands ---- */
-
-  .commands { margin-top: 1.75rem; border: 1px solid var(--rule); background: var(--card); overflow-x: auto; }
-  .cmd { display: grid; gap: .15rem .9rem; padding: .8rem clamp(.9rem, 2vw, 1.3rem); border-bottom: 1px solid var(--rule-soft); }
-  @media (min-width: 46rem) { .cmd { grid-template-columns: 26rem 1fr; align-items: baseline; } }
-  .cmd:last-child { border-bottom: none; }
-  .cmd.human { background: var(--accent-wash); }
-  .cmd .line { font-family: var(--mono); font-size: .8rem; white-space: nowrap; }
-  .cmd.human .line { color: var(--accent); font-weight: 600; }
-  .cmd .note { font-size: .84rem; color: var(--ink-soft); }
-
-  .footnote {
-    margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
-    font-size: .82rem; color: var(--ink-faint); max-width: var(--measure);
-  }
-  .footnote code { background: none; }
-
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .foot { margin-top: 4rem; padding-top: 1.4rem; border-top: 1px solid var(--rule); color: var(--ink-faint); font-size: .86rem; }
 </style>
-
+</head>
+<body>
 <div class="wrap">
 
-  <header class="masthead">
-    <div class="eyebrow">Internal tooling · Grom Digital</div>
-    <h1>The weekly GHL auditor</h1>
-    <p class="standfirst">
-      It reads a sub-account we manage, works out what that account is <em>for</em>, examines every
-      part of it with a separate expert, and produces a ranked list of what is losing money and what
-      to write instead. <strong>It is never told what to look at.</strong> Everything it knows about
-      the account, it derives from the account.
-    </p>
-    <div class="facts">
-      <span>Branch <b>codex/weekly-ghl-auditor</b></span>
-      <span>Suite <b>830</b></span>
-      <span>Test bench <b>Grom UK</b></span>
-      <span>Pushed <b>no</b></span>
-    </div>
-  </header>
+<h1>The Grom Diagnosis Engine</h1>
+<p class="lede">It reads one client account and works out what is losing them money, then tells you what to fix and in what order. It never changes anything.</p>
+<p class="meta">Skill <code>grom-client-factory:grom-diagnosis-engine</code> · plugin 1.6.0 · describes what the code actually does, as of the SK Skin and Grom UK runs of 27 July 2026</p>
 
-  <section>
-    <h2><span class="num">What it is</span>An instrument, not a report generator</h2>
-    <p>
-      The product answers six questions every week: why leads do not reply, why they do not engage
-      the AI, why they do not book, why booked leads do not show, why cancellations never rebook,
-      and why nobody progresses. It answers them for one sub-account at a time, read-only, and it
-      never touches the account.
-    </p>
-    <p>
-      Two things make it different from a checklist. There are <strong>no hardcoded
-      best-practice detectors</strong>: no rule anywhere fires because a nurture has four emails
-      instead of five. And there is <strong>no per-account configuration</strong> telling it what
-      anything is for: no file says that <code>05 No-Show Recovery</code> is the no-show recovery.
-      Real experts read real evidence and are held to a contract about what a finding has to
-      contain.
-    </p>
-    <p>
-      The one exception is deliberate, and it is explained in <a href="#targets">the targets
-      section</a>: the account carries the numbers <em>you</em> are aiming at. Those are stated as
-      context, never as a test, and the expert is told to disagree with them if they are wrong.
-    </p>
-    <p>
-      That second rule is why it works on accounts nobody built to a template. Point it at Francesca,
-      SK Skin or Alevere and it maps whatever is actually there.
-    </p>
-  </section>
+<h2>What it is, in one paragraph</h2>
 
-  <section>
-    <h2><span class="num">The shape</span>Four stages of expert, with a predictable step between every one</h2>
-    <p>
-      A model call is the only unpredictable step in the whole product. The audit kernel is the
-      opposite. It saves the result of every step, and if a run gets interrupted and picks up again
-      later it re-does that step and checks it came out identical. A run that answers differently the
-      second time stops itself, on the grounds that something it depended on has moved. Which means
-      if an expert were called from inside the run, the run would stop itself every single time it
-      resumed, because no expert answers a question exactly the same way twice.
-    </p>
-    <p>
-      The answer is a handover that repeats: a predictable step writes the question, the experts
-      answer it as files, and the next predictable step reads those answers and writes the next
-      question. Hand the same answers back and you get exactly the same result, down to the character.
-    </p>
+<p>Point it at a sub-account. It reads that account twice over: once through the public side for what happened to real people, and once through the internal side for how the automation is actually built and what every message says. Then a series of expert agents read that evidence and argue about it. What comes out is a ranked list of problems, one file per problem saying what to change, the replacement copy written out message by message, and a running order for doing the work.</p>
 
-    <div class="band">
-      <div class="pipeline">
-        <div class="pnode">
-          <div class="kind">Command</div>
-          <div class="name">audit run</div>
-          <div class="what">Reads the account from both sources, measures the journey, writes the evidence and the first question.</div>
-          <div class="count">588 records</div>
-        </div>
-        <div class="pnode model">
-          <div class="kind">Stage 1 · expert</div>
-          <div class="name">The map</div>
-          <div class="what">Reads the whole account and derives what it is.</div>
-          <div class="count">1 agent</div>
-        </div>
-        <div class="pnode">
-          <div class="kind">Command</div>
-          <div class="name">audit map</div>
-          <div class="what">Validates coverage, then writes one question per object in the account.</div>
-          <div class="count">19 prompts</div>
-        </div>
-        <div class="pnode model">
-          <div class="kind">Stage 2 · experts</div>
-          <div class="name">Per object</div>
-          <div class="what">One expert per workflow and per AI agent, each seeing its object whole.</div>
-          <div class="count">19 agents</div>
-        </div>
-        <div class="pnode">
-          <div class="kind">Command</div>
-          <div class="name">audit reviews</div>
-          <div class="what">Collects the reviews, records any that never arrived, writes the three account-wide questions.</div>
-          <div class="count">3 prompts</div>
-        </div>
-        <div class="pnode model">
-          <div class="kind">Stage 3 · experts</div>
-          <div class="name">Account-wide</div>
-          <div class="what">Journey and KPIs, the account as one system, the messages as one stream.</div>
-          <div class="count">3 agents</div>
-        </div>
-        <div class="pnode">
-          <div class="kind">Stage 4 · command</div>
-          <div class="name">audit investigate</div>
-          <div class="what">Refuses malformed findings by name, groups the rest into causes, ranks them, writes the deliverables.</div>
-          <div class="count">3 documents</div>
-        </div>
-      </div>
-    </div>
-    <div class="legend">
-      <span><i class="swatch det"></i> Predictable code. Same input, same output, every time.</span>
-      <span><i class="swatch mod"></i> A model call. Always outside the kernel.</span>
-    </div>
-  </section>
+<p>It is read-only end to end. Nothing it produces is applied automatically, because everything it touches sends real messages to real patients.</p>
 
-  <section>
-    <h2><span class="num">Before any of it</span>What the evidence actually is</h2>
-    <p>
-      Two separate connections feed the run. The <strong>official one</strong> is the documented
-      GoHighLevel interface, locked to a fixed list of things we are allowed to read, and it brings
-      back contacts, opportunities, appointments, conversations and calendars: the movement of real
-      people, which becomes the numbers. The <strong>second one</strong> logs in the way a browser
-      does and reads what the documented interface simply does not offer: the
-      full step graph of every workflow, the runtime of those workflows, the AI agents' instructions,
-      and the email library so a send step that points at a template arrives with its actual words
-      rather than just a subject line.
-    </p>
-    <p>
-      Nothing is redacted. This is an internal tool reading accounts we administer, and a hole in the
-      evidence is indistinguishable from a hole in the account: a redaction does not read as "we
-      chose not to look", it reads as "there is nothing there".
-    </p>
-    <p>
-      One limit travels with every single prompt and is repeated in every output: <em>nothing proves
-      the configuration we read today was the configuration in force during the window.</em> A
-      configuration may be called consistent with an outcome, or said to produce one going forward.
-      It may never be said to have caused a past outcome.
-    </p>
-  </section>
+<h2>The two rules that shape everything else</h2>
 
-  <section>
-    <h2><span class="num">The four stages</span>Who reads what, and why it is split this way</h2>
-    <p>
-      The previous design split each workflow across three analysts and none of them saw it whole.
-      One got triggers, steps and runtime with no copy. One got the messages with no idea that 184
-      steps had been skipped or that the sequence never stops when a lead replies. Neither could
-      write the sentence that mattered. That is the mistake the four stages fix.
-    </p>
+<div class="panel">
+<h3>1. The auditor decides what to analyse. It is never told.</h3>
+<p>Nothing anywhere says what a workflow is for. No config file names them, and deliberately never will. Stage 1 works it out from the evidence. That is what lets it run against any account whether or not it was built to our standard, and it is what catches a workflow whose real job is not the job its name claims. On Grom UK it found four of those.</p>
+</div>
 
-    <div class="stages">
+<div class="panel">
+<h3>2. No hardcoded checklists.</h3>
+<p>There is no list of best practices being ticked off. Expert agents read the evidence and form an opinion, held to a contract that forces them to state their confidence and a test that would prove them wrong. This was a deliberate correction: a rule checker only finds the things you already thought of, which is the opposite of the point.</p>
+</div>
 
-      <article class="stage">
-        <div class="stage-id">
-          <div class="n">Stage 1</div>
-          <div class="who">The map</div>
-          <div class="how-many">1 expert, always</div>
-        </div>
-        <div class="stage-body">
-          <p>
-            One systems analyst reads the entire account cold and works out what journey it runs,
-            what each workflow's job actually appears to be, which sit on the money path, which are
-            delivery, and which look abandoned. It classifies but does not diagnose: there is
-            deliberately no field on a map for a problem, because a diagnosis made here would be
-            repeated by every expert downstream and arrive at the ranking stage looking like
-            nineteen independent corroborations of one opinion.
-          </p>
-          <p>
-            The answer is refused unless it covers <strong>every workflow exactly once</strong> and
-            names only workflows and journey steps the account actually has. That check is what makes
-            the map safe to hand to everyone else.
-          </p>
-          <div class="quote">
-            <b>On Grom UK, first attempt, accepted with no repair</b>
-            27 of 27 workflows mapped. Four whose name disagrees with their behaviour. Eight
-            structural gaps, including the one no configuration file could ever have produced:
-            <em>the Pilot Program is free for 30 days and the client only pays on results, and no
-            workflow in the account is pointed at the trial or at converting a trialing client into a
-            paying one.</em>
-          </div>
-        </div>
-      </article>
+<h2>The five stages</h2>
 
-      <article class="stage">
-        <div class="stage-id">
-          <div class="n">Stage 2</div>
-          <div class="who">One expert per object</div>
-          <div class="how-many">19 on Grom UK</div>
-        </div>
-        <div class="stage-body">
-          <p>
-            A copywriter and systems analyst in one person, handed a single workflow and asked to
-            make it work. Each sees six views of its own object and nothing about any other, because
-            an analyst handed one workflow reads every message in it and the same analyst handed
-            twenty-seven reads none of them properly.
-          </p>
-          <div class="sees">
-            <b>config</b><b>runtime</b><b>every message in full</b><b>its place in the account</b><b>the KPIs it should move</b><b>the stage-1 map</b>
-          </div>
-          <p style="margin-top:1rem">
-            The count comes from the account, and the map decides it: a one-message workflow on the
-            money path gets an expert, a one-message receipt does not, and every exclusion is listed
-            with its reason. The output is prose against a rubric, including <strong>full replacement
-            copy</strong> for anything it would change. It writes prose rather than filling in a
-            form, because no form has a box for "this message asks permission to make a second ask",
-            and forcing a craft judgement into one either inflates it into something bigger than it
-            is or loses it entirely.
-          </p>
-          <div class="quote">
-            <b>What one expert wrote about 05 No-Show Recovery</b>
-            <em>The sequence is not set to stop when someone replies, and nothing takes them out of
-            it, so a lead who rebooks on day one still receives "Last follow-up from me" on day 14
-            and "Closing this one out" on day 21, while 02 Booking Confirmation is confirming the
-            same call to the same person.</em>
-            Settings, wording and placement in one thought. No single expert could reach that before,
-            because no single expert could see all three.
-          </div>
-        </div>
-      </article>
+<p>Each stage is agents reading and thinking. Between every pair sits a plain program that validates the work and prepares the next one. The number of agents comes from the account: fewer workflows, fewer experts.</p>
 
-      <article class="stage">
-        <div class="stage-id">
-          <div class="n">Stage 3</div>
-          <div class="who">Three account-wide experts</div>
-          <div class="how-many">3, always</div>
-        </div>
-        <div class="stage-body">
-          <p>
-            These are the only experts that produce findings. Each reads the map and all nineteen
-            reviews in full, and each rubric tells it plainly: <strong>do not repeat that
-            work.</strong> One workflow's weak opening is already recorded. What is wanted here is
-            the same weakness in nine sequences.
-          </p>
-          <ul>
-            <li><strong>The lead journey and its KPIs.</strong> Where the account loses the most people, in absolute numbers rather than worst percentage, and what it costs.</li>
-            <li><strong>The account as one system.</strong> What collides with what, the same job done twice in two places, handoffs that drop people, the stage of the journey nothing covers.</li>
-            <li><strong>Every message as one stream.</strong> Not sequence by sequence. Total touches on one person across everything live at once, contradictions between sequences, whether the voice is one voice, whether the channel mix matches where conversations actually end.</li>
-          </ul>
-        </div>
-      </article>
+<div class="stage">
+  <div class="n">1</div>
+  <div class="body">
+    <b>One expert derives the map</b>
+    <p>Reads the whole account cold and works out what it is: what journey it runs, what each workflow appears to be for, which sit on the money path, which are delivery, which look abandoned. Where a name and the behaviour disagree, it says so and goes with the behaviour.</p>
+    <p class="who">1 agent · every workflow must be accounted for or the map is refused</p>
+  </div>
+</div>
 
-      <article class="stage">
-        <div class="stage-id">
-          <div class="n">Stage 4</div>
-          <div class="who">The investigation</div>
-          <div class="how-many">No model at all</div>
-        </div>
-        <div class="stage-body">
-          <p>
-            Pure code. It checks every finding, groups the survivors by what they point at, scores
-            them, and writes the documents. Two findings from different experts that point at the
-            same journey step or the same workflow become one problem with two independent
-            witnesses, and two experts arriving somewhere separately is most of what makes a finding
-            believable.
-          </p>
-          <p>
-            It only groups on things specific enough to mean something. Grouping on broad ones, like
-            "this is about the conversation stage", once merged all 24 findings into one useless
-            blob, because almost everything is about the conversation stage.
-          </p>
-        </div>
-      </article>
+<div class="stage">
+  <div class="n">2</div>
+  <div class="body">
+    <b>One expert per workflow, and per AI agent</b>
+    <p>Each sees its object whole: the configuration, what actually happened to real contacts, every message in full, what runs alongside it, and the metric it is meant to move. This is the heart of it. It answers "is this good, where does it lose people, and what should each message say instead".</p>
+    <p class="who">SK Skin: 20 agents, being 16 workflows and 4 AI agents · Grom UK: 19</p>
+  </div>
+</div>
 
-    </div>
-  </section>
+<div class="stage">
+  <div class="n">3</div>
+  <div class="body">
+    <b>Three experts read the whole account</b>
+    <p>One follows the lead journey and the numbers to find where people drop out. One reads the account as a single system: collisions, duplicate automation, what one lead experiences moving across sequences. One reads every message as a single stream, in the order a real person receives them.</p>
+    <p class="who">3 agents · each reads over 100,000 words and is not allowed to skim</p>
+  </div>
+</div>
 
-  <section id="targets">
-    <h2><span class="num">Targets</span>The numbers you are aiming at, and why they are not benchmarks</h2>
-    <p>
-      These are two different things and keeping them apart is what stops this becoming a checklist.
-    </p>
-    <p>
-      A <strong>benchmark</strong> is what a competent operation in this exact situation achieves.
-      That depends on context no rule can hold: a Meta lead form and a referral are not the same
-      lead, a held deposit and a free consult are not the same booking. The expert supplies that,
-      from its own knowledge, and it must keep doing so.
-    </p>
-    <p>
-      A <strong>target</strong> is what the business has decided to aim at. No amount of evidence
-      reveals it. Grom's own show-rate target is 65% while the strategy call is given away free, and
-      85% if it ever carries a deposit, and nothing in the account says which of those you chose.
-      That was the genuine gap, so targets now live with the account's context and travel to every
-      expert.
-    </p>
-    <p>
-      <strong>Nothing compares them.</strong> No code fires a finding because a rate sits under a
-      target. The instruction that travels with the numbers is: state your own benchmark first,
-      before you look at the target, then say where reality sits against both, and if the target is
-      wrong for this situation say so and say why. Every target carries the reasoning behind it
-      precisely so it can be argued with.
-    </p>
+<div class="stage">
+  <div class="n">4</div>
+  <div class="body">
+    <b>Group, rank, and write it up</b>
+    <p>A plain program, not an agent. It validates every finding, refuses malformed ones by name, groups the rest into root causes, ranks them, and writes one solution package per cause.</p>
+    <p class="who">no agent · deterministic</p>
+  </div>
+</div>
 
-    <h3 style="margin-top:1.75rem">Clinic accounts</h3>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th>Step</th><th class="num-col">Target</th><th>Where the number comes from</th></tr></thead>
-        <tbody>
-          <tr><td>Enquiry contacted</td><td class="num-col">98%</td><td>Automation contacts everyone, so a shortfall is a delivery failure rather than a demand problem</td></tr>
-          <tr><td>Booked consult attends</td><td class="num-col">85%</td><td>Aesthetic clinics run 15–25% no-shows, worse than general medicine because treatment is elective. No-shows cost 15–20% of annual revenue</td></tr>
-          <tr><td>Booked becomes a no-show</td><td class="num-col">15%</td><td>The inverse, stated separately because it is its own measured step</td></tr>
-          <tr><td>Attended consult buys</td><td class="num-col">50%</td><td>Average clinics convert 40–55%, top performers 75–85%, and the gap is the consultation process rather than the marketing</td></tr>
-        </tbody>
-      </table>
-    </div>
+<div class="stage">
+  <div class="n">5</div>
+  <div class="body">
+    <b>One expert sets the running order</b>
+    <p>Reads the ranked problems and decides what is really one job, what has to land first, and which fixes pull against each other. It is forbidden from re-diagnosing: the contract gives it nowhere to put a new finding.</p>
+    <p class="who">1 agent · every problem must be placed exactly once</p>
+  </div>
+</div>
 
-    <h3 style="margin-top:1.5rem">Grom's own account</h3>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th>Step</th><th class="num-col">Target</th><th>Where the number comes from</th></tr></thead>
-        <tbody>
-          <tr><td>Enquiry contacted</td><td class="num-col">98%</td><td>Same reasoning. Speed is the real lever: 32% close inside five minutes against 12% at 24 hours</td></tr>
-          <tr><td>Booked call attends</td><td class="num-col">65%</td><td>Normal band for a <em>free</em> B2B discovery call is 50–70%. A paid or deposit-backed call reaches 85%, so raising this is a decision about charging for the call</td></tr>
-          <tr><td>Attended call closes</td><td class="num-col">35%</td><td>Close rate on shown high-ticket discovery calls. Read against the caveat that this pipeline only marks won once the client pays</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <p style="margin-top:1.25rem">
-      Targets are only set where it is clear what the percentage is measured out of. The published
-      "lead to booked" figures count every lead, while this account counts only the leads it marked
-      as qualified. Those are different sums, and a target quietly measuring the wrong one would be
-      worse than having no target at all.
-    </p>
+<h3>Why one expert per workflow, rather than one per topic</h3>
 
-    <div class="quote" style="max-width:var(--measure)">
-      <b>What this immediately surfaced on Grom UK</b>
-      Two of the three targets cannot be measured at all. The system refuses to put a number on
-      <em>booked call attends</em> over any period, because 21 of 64 appointments were never marked
-      as attended or missed after the fact and are still sitting in a before-the-call status. The
-      raw counts say 17 attended against 26 no-shows, roughly 40% against a 65% target, but it will
-      not publish that as a rate while a third of the appointments are unaccounted for, and it is
-      right not to: some of those 21 probably showed up. <em>The first fix here is closing out
-      appointments, not marketing.</em>
-    </div>
-  </section>
+<p>This is the most important design decision, and it came from getting it wrong first. Originally a workflow was split across three specialists: one looked at configuration, one at copy, one at the numbers. None saw it whole, so none could produce the sentence that actually mattered:</p>
 
-  <section>
-    <h2><span class="num">The contract</span>Why a finding can be thrown out</h2>
-    <p>
-      An expert's answer is a claim, not evidence. Every finding must name one of nine mechanism
-      families, point at a measured step, state a number for what good looks like and where that came
-      from, and carry three things that make it possible to disagree with:
-    </p>
-    <ul>
-      <li><strong>Two competing explanations</strong>, each marked material or not, and whether it was ruled out.</li>
-      <li><strong>The evidence against itself.</strong></li>
-      <li><strong>A discriminating test</strong>: what to check, what result supports it, what result refutes it.</li>
-    </ul>
-    <p>
-      A finding missing any of those is <strong>refused</strong>, not ranked low, and the refusal is
-      printed in the report with its reason. An unfalsifiable opinion cannot reach the backlog looking
-      authoritative. One expert fumbling one finding does not cost its other five; one expert
-      returning something that is not a list of findings is fatal, because a missing lane published as
-      a whole investigation is the one error nobody can spot by reading the output.
-    </p>
-  </section>
+<p class="quote">This sequence sends ten messages, keeps sending after the lead has already replied, and the text at the moment of peak interest withholds the rebooking link.</p>
 
-  <section>
-    <h2><span class="num">The output</span>Three documents and one package per cause</h2>
-    <div class="tablewrap">
-      <table>
-        <thead>
-          <tr><th>File</th><th>What it is</th><th>Who reads it</th></tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>BACKLOG.md</code></td>
-            <td>One table, ranked. Cause, confidence, how many experts reached it, impact, effort, risk, score. Effort and risk sit next to impact rather than folded into the score, so you can override the order for a reason the weights cannot know.</td>
-            <td>You, for ten seconds on a Monday</td>
-          </tr>
-          <tr>
-            <td><code>INVESTIGATION.md</code></td>
-            <td>Every cause in rank order with the full argument: the analysis, the benchmark, the size, the competing explanations nobody ruled out, the evidence against, and the test that would settle it.</td>
-            <td>Anyone who wants to disagree</td>
-          </tr>
-          <tr>
-            <td>One file per problem, in <code>packages/</code></td>
-            <td>What is wrong, what to change, where it applies, how you will know it worked, and what to check before touching anything.</td>
-            <td>Whoever implements it</td>
-          </tr>
-          <tr>
-            <td><code>reviews/*.md</code></td>
-            <td>The nineteen per-object reviews, kept. This is where the replacement copy lives, message by message.</td>
-            <td>Whoever rewrites the sequences</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <p style="margin-top:1.25rem">
-      Solution packages are <strong>for a human to implement</strong> and the file says so on its
-      first line. They are not executable change sets. Making them executable means every touched
-      object bound by id <em>and</em> version, which is a contract no expert is currently asked to
-      produce, and extending it is a decision rather than a task.
-    </p>
-  </section>
+<p>That is configuration, runtime and copy in one thought. No specialist reading a third of the object could write it. The first version of this only "surfaced the obvious things" for exactly that reason, and the fix was structural rather than better prompting.</p>
 
-  <section>
-    <h2><span class="num">Your questions</span>Straight answers</h2>
+<h2>What it reads</h2>
 
-    <div class="answers">
+<div class="tablewrap">
+<table>
+<thead><tr><th>Side</th><th>What it gets</th></tr></thead>
+<tbody>
+<tr><td><strong>Public</strong></td><td>Contacts, conversations, appointments and opportunities. What actually happened to real people.</td></tr>
+<tr><td><strong>Internal</strong></td><td>Every workflow's real configuration and step graph, the AI agent setups, and the actual body of every email, including ones held in the template library.</td></tr>
+</tbody>
+</table>
+</div>
 
-      <div class="answer">
-        <div class="q">Does it produce solution packages? <span class="pill built">Yes</span></div>
-        <p>
-          One per ranked problem, saved in that run's own folder. The last live run produced fifteen.
-          Each carries the test that decides whether the fix actually worked, written by the expert
-          who found the problem rather than made up afterwards.
-        </p>
-      </div>
+<p>The internal side needs a login token that expires every hour and can only be captured from a real browser session. That is what <code>uxie-ghl-factory:connect</code> is for. Check it before starting a run rather than during, because an expired token jams the connection for every call that follows.</p>
 
-      <div class="answer">
-        <div class="q">A prioritised backlog? <span class="pill built">Yes</span></div>
-        <p>
-          <code>BACKLOG.md</code>, ranked by seven criteria with effort and risk counting against.
-          Ordered so the first row is the thing to do this week.
-        </p>
-      </div>
+<h2>Running one, start to finish</h2>
 
-      <div class="answer">
-        <div class="q">Does it compare this week against last week? <span class="pill no">Not wired</span></div>
-        <p>
-          No, and I would rather say that plainly than let the half-built part of it imply otherwise.
-          There <em>is</em> a finished, tested piece for this: a running history that can already
-          track a problem being found, approved, fixed, checked, and coming back. It only ever gets
-          added to, never edited, so the history cannot be quietly rewritten.
-        </p>
-        <p>
-          Nothing uses it. I searched every file in the project and the only thing that touches it is
-          its own test. So no run has ever recorded a problem in it, and no run has ever looked one
-          up. Comparing weeks is a finished part sitting on the bench, not a working feature.
-        </p>
-      </div>
+<h3>First time on a new account</h3>
 
-      <div class="answer">
-        <div class="q">Does it save this week's data so next week can read it? <span class="pill pending">Half</span></div>
-        <p>
-          The <em>data</em> is all kept. Every run saves its evidence, the map, all nineteen reviews,
-          the investigation and every package into its own dated folder, and a small local database
-          records the run and how it went. Nothing is thrown away, and two runs cannot overwrite each
-          other: once a file is written it is never changed, and re-running the same one either
-          produces exactly the same file or stops and tells you something upstream has moved.
-        </p>
-        <p>
-          What is missing is the <em>link between them</em>. Nothing records this week's problems into
-          that history, and nothing reads last week's back out to compare. Next week's run will not
-          know this week happened. Connecting the two is real work rather than a switch, and it is
-          the obvious next build once the new four-stage version has had one live run.
-        </p>
-      </div>
+<pre><code>node scripts/init-account.mjs \
+  --project ~/.grom-audit-runs/&lt;label&gt; --location &lt;locationId&gt; --label &lt;label&gt; \
+  --credential-env &lt;ENV_VAR&gt; --token-file &lt;path to the token&gt;</code></pre>
 
-    </div>
-  </section>
+<p>One command. It reads the account's own company id, timezone and name from the account itself rather than trusting anyone to type them. That matters more than it sounds: SK Skin is a Melbourne clinic whose account timezone is Sydney, and using the city would have shifted every weekly boundary with nothing complaining.</p>
 
-  <section>
-    <h2><span class="num">Status</span>What is built, proven, and still open</h2>
-    <div class="tablewrap">
-      <table>
-        <thead>
-          <tr><th>Part</th><th>State</th><th>Evidence</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>Reading the account, both connections</td><td><span class="pill built">Live</span></td><td>588 real records, identical across two separate runs</td></tr>
-          <tr><td>Measuring the journey</td><td><span class="pill built">Live</span></td><td>Reproduces every hand-derived number, and found three nobody had</td></tr>
-          <tr><td>Stage 1, the map</td><td><span class="pill built">Proven</span></td><td>27 of 27 workflows, first attempt, on real Grom UK evidence</td></tr>
-          <tr><td>Stage 2, per-object review</td><td><span class="pill built">Proven</span></td><td>One agent on 05 No-Show Recovery produced the whole-object finding</td></tr>
-          <tr><td>Stage 3, account-wide experts</td><td><span class="pill built">Built</span></td><td>Wired and tested; not yet run against the enriched prompts</td></tr>
-          <tr><td>Stage 4, causes and ranking</td><td><span class="pill built">Live</span></td><td>24 findings to 15 ranked causes on the last full run</td></tr>
-          <tr><td>A live run through the new four-stage chain</td><td><span class="pill pending">Owed</span></td><td>Needs a fresh login. Nothing else proves the handovers hold when a run is interrupted and picks up again</td></tr>
-          <tr><td>Week-over-week comparison</td><td><span class="pill no">Not wired</span></td><td>The history is built and tested, and nothing uses it</td></tr>
-          <tr><td>Executable change sets</td><td><span class="pill no">By decision</span></td><td>Needs experts to record exactly which object and version they would change; your call, not a task</td></tr>
-          <tr><td>Pushed to a remote</td><td><span class="pill no">Never</span></td><td>Twenty-four commits, local only</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
+<div class="panel flag">
+<span class="tag">Do this before the first run</span>
+<p>It also writes an empty facts file for the account. <strong>Fill it in before running anything.</strong> Ask the client what would make a number mean something other than what it looks like: who marks appointment outcomes, which calendars are deliberately two-phase, what is switched off on purpose, whether deposits are taken, where test data lives.</p>
+<p>The evidence is sealed the moment a run starts, so a fact added afterwards can never reach an expert. On SK Skin this is what stopped the report announcing a catastrophic no-show rate that was really a recording gap.</p>
+</div>
 
-  <section>
-    <h2><span class="num">Running it</span>The whole cycle, in order</h2>
-    <div class="commands">
-      <div class="cmd">
-        <div class="line">audit run --mode weekly …</div>
-        <div class="note">Collects, measures, writes the briefs and the stage-1 question.</div>
-      </div>
-      <div class="cmd human">
-        <div class="line">→ dispatch 1 agent</div>
-        <div class="note">Its whole instruction is <code>prompt-account-map.md</code>. Save the JSON it returns.</div>
-      </div>
-      <div class="cmd">
-        <div class="line">audit map --map &lt;file&gt;</div>
-        <div class="note">Validates the map, writes one prompt per object.</div>
-      </div>
-      <div class="cmd human">
-        <div class="line">→ dispatch N agents, in parallel</div>
-        <div class="note">One per prompt in <code>reviews/</code>. Each writes to the answer file the command named.</div>
-      </div>
-      <div class="cmd">
-        <div class="line">audit reviews</div>
-        <div class="note">Collects them, records any that never arrived, writes the three lane prompts.</div>
-      </div>
-      <div class="cmd human">
-        <div class="line">→ dispatch 3 agents, in parallel</div>
-        <div class="note">One per lane. Each writes a JSON array of findings.</div>
-      </div>
-      <div class="cmd">
-        <div class="line">audit investigate --findings &lt;dir&gt;</div>
-        <div class="note">Refuses, groups, ranks, and writes the backlog, the investigation and the packages.</div>
-      </div>
-      <div class="cmd">
-        <div class="line">audit briefs</div>
-        <div class="note">At any point: which stage this run is at and what to dispatch next, read off the disk rather than a status field.</div>
-      </div>
-    </div>
-  </section>
+<h3>Every run after that</h3>
 
-  <p class="footnote">
-    Briefs and reviews live under <code>private/</code> and quote real message copy, so they are
-    evidence and never publication material. Nothing in this cycle writes to a GoHighLevel account.
-    The authority for what the product is remains <code>PRODUCT-SPEC.md</code>; the current position
-    of the build is in <code>.superpowers/sdd/STATE.md</code>.
-  </p>
+<pre><code>audit run          collects both sides, measures, writes the stage-1 prompt
+  → 1 agent        the account map
+audit map          validates it, writes one prompt per workflow and per agent
+  → N agents       one per object
+audit reviews      collects them, writes the three account-wide prompts
+  → 3 agents       journey, system, message stream
+audit investigate  groups, ranks, writes the packages and the backlog
+  → 1 agent        the running order
+audit plan         validates it, writes PLAN.md and REPORT.html</code></pre>
+
+<p>If you lose your place, <code>audit briefs</code> tells you which stage a run is at, worked out from what is on disk rather than from a status somebody wrote down.</p>
+
+<p>Roughly an hour and a half for a 16-workflow account, and around three million agent tokens. That cost scales with the number of workflows and is the dominant cost of the whole thing.</p>
+
+<h2>What you get, and the order to read it</h2>
+
+<p>Everything lands in the client's own folder under <code>Grom Diagnosis Engine (Weekly Audit)/&lt;account&gt;/&lt;date&gt;/</code>, in the same shape for every account and every week, so an agent can be pointed at the folder and rely on it.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>File</th><th>What it is</th></tr></thead>
+<tbody>
+<tr><td><code>START-HERE.md</code></td><td>The read order, the account's caveats, and what the run could not see. Written for whoever or whatever opens the folder.</td></tr>
+<tr><td><code>PLAN.md</code></td><td><strong>Start here.</strong> The running order: what to do first, what blocks what, what conflicts.</td></tr>
+<tr><td><code>BACKLOG.md</code></td><td>The ranked problems in one table, with confidence and how many experts found each.</td></tr>
+<tr><td><code>packages/</code></td><td>One file per problem: what is wrong, what to change, how you will know it worked. <strong>The action list.</strong></td></tr>
+<tr><td><code>reviews/</code></td><td>One per workflow and per AI agent. <strong>The replacement copy lives here</strong>, message by message.</td></tr>
+<tr><td><code>CHANGES-MADE.md</code></td><td>A template. Fill it in as you do the work. See below.</td></tr>
+<tr><td><code>LAST-WEEK.md</code></td><td>From the second run on: what you said you changed against what the account still shows.</td></tr>
+<tr><td><code>INVESTIGATION.md</code></td><td>The full argument behind every problem, for when you disagree with one.</td></tr>
+<tr><td><code>REPORT.html</code></td><td>The same material as a page, for a person to read.</td></tr>
+<tr><td><code>evidence/</code></td><td>The sealed briefs and every prompt an expert read, so any claim can be traced.</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><strong>The one thing that is not obvious:</strong> when a package says "rewrite this message", the actual words are in <code>reviews/</code>, not in the package. The packages say what and why. The reviews carry the text.</p>
+
+<h2>Week over week</h2>
+
+<p>Every run records what it found, per account, and compares itself against every run before it. This is automatic and there is nothing to pass in. You get three answers per problem: <strong>new</strong>, <strong>recurring</strong> with how long it has been there, and <strong>absent</strong>.</p>
+
+<p>Identity is not the labels the experts use, because they invent fresh ones every week. A problem is recognised by what it is: the mechanism, plus the specific workflows and metrics it touches. That match is strict on purpose. Rename a workflow and it reports a new problem rather than quietly claiming the old one came back, because a wrong match across weeks is worse than an unmatched pair.</p>
+
+<div class="panel flag">
+<span class="tag">The thing to understand</span>
+<p><strong>Absent does not mean fixed, and the engine will never say it does.</strong> A problem can vanish because it was solved, because an expert framed it differently this week, because the evidence moved, or because its finding was refused on a technicality. Nothing in the account can tell those apart.</p>
+<p>That is what <code>CHANGES-MADE.md</code> is for. The engine writes it as a template, already listing this run's problems in the plan's order, and whoever does the work fills in what they actually did. The next run reads it and separates the three cases that matter:</p>
+<ul>
+<li><strong>Changed, and now gone.</strong> Treat as fixed. The only combination that earns the word.</li>
+<li><strong>Changed, and still here.</strong> The fix did not work, or did not address the cause.</li>
+<li><strong>Gone, and nobody touched it.</strong> Unexplained. A reason to look, not to celebrate.</li>
+</ul>
+<p>If nobody fills it in, nothing breaks. The page just says plainly that nothing can be concluded.</p>
+</div>
+
+<h2>What it cannot do</h2>
+
+<p>These are real limits, not modesty. They are stated in the outputs too.</p>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th>Limit</th><th>What it means for you</th></tr></thead>
+<tbody>
+<tr><td><strong>A finding is an argument, not a verdict</strong></td><td>Nothing re-checks a claim after stage 3, so a wrong finding travels intact into the plan. Every package carries a test that would settle it. Run the test before expensive work.</td></tr>
+<tr><td><strong>Runtime is opt-in</strong></td><td>Unless it is requested for a specific workflow, claims about how a workflow behaves are read from how it is built.</td></tr>
+<tr><td><strong>It cannot prove causation</strong></td><td>Nothing proves the configuration read today was in force during the weeks being measured. A setup can be called consistent with an outcome, never the cause of a past one.</td></tr>
+<tr><td><strong>Small accounts, soft percentages</strong></td><td>SK Skin had 21 appointments. Two or three records move a percentage a long way. Read ratios as direction.</td></tr>
+<tr><td><strong>The ranking order is imperfect</strong></td><td>On SK Skin the most serious and most corroborated problem ranked fourth. Read the top handful as a set rather than a strict order.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>What the two real runs produced</h2>
+
+<div class="tablewrap">
+<table>
+<thead><tr><th></th><th>SK Skin</th><th>Grom UK</th></tr></thead>
+<tbody>
+<tr><td>Workflows and AI agents reviewed</td><td>20</td><td>19</td></tr>
+<tr><td>Findings from the three account-wide experts</td><td>25</td><td>28</td></tr>
+<tr><td>Refused as malformed</td><td>0</td><td>0</td></tr>
+<tr><td>Root causes after grouping</td><td>16</td><td>20</td></tr>
+<tr><td>Found by more than one expert independently</td><td>2</td><td>5</td></tr>
+<tr><td>Batches of work</td><td>10</td><td>13</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>The most convincing evidence that it works is convergence. On Grom UK, five experts who could not see each other's work traced back to one defect nobody had named: six workflows fire the same bare event, and both a signed-client rail and a cold-lead rail listen to it unfiltered, so cold leads were told "since you signed up" and signed clients were told their clinic was broken.</p>
+
+<p>On SK Skin, three independent reviewers reached the same hole from different directions. The ads pixel workflow reported leads reaching no nurture. The long-term nurture workflow turned out to be an empty draft with no trigger and no steps. And the chat agent only re-engages someone who explicitly says no, so the roughly 200 of 213 conversations that simply go quiet meet nothing at all.</p>
+
+<p class="foot">Read-only. Every fix is a proposal for a human to approve. Nothing in this engine writes to a client account, and the packages say so on every page.</p>
 
 </div>
+</body>
+</html>
