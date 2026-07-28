@@ -434,7 +434,12 @@ function availableReviews(directory) {
       && existsSync(answer)
       && lstatSync(answer).isFile()
       && readFileSync(answer, 'utf8').trim().length > 0;
-  });
+  }).map((review) => ({
+    ...review,
+    // The review's own text, so the report can surface the line each expert ended on. Read here
+    // rather than in the renderer, which stays a pure function of what it is handed.
+    text: readFileSync(join(directory, review.answerFile), 'utf8'),
+  }));
 }
 
 /**

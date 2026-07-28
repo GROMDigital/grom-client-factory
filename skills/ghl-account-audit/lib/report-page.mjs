@@ -240,10 +240,43 @@ function deliverySection({ map, causes, rankOf, reviews }) {
   }).join('')}</tbody>
     </table>
   </div>
+  ${(() => {
+    const said = delivery
+      .map((entry) => ({ entry, review: reviewed.find((candidate) => candidate.object === entry.name) }))
+      .filter(({ review }) => review && oneChangeOf(review.text))
+      .map(({ entry, review }) => `
+        <details class="qf">
+          <summary><span class="qf-rank">1</span><span class="qf-title">${escapeHtml(entry.name)}</span><span class="qf-more">one change</span></summary>
+          <div class="qf-body"><p class="qf-fix">${escapeHtml(oneChangeOf(review.text))}</p></div>
+        </details>`);
+    return said.length === 0 ? '' : `<h3>What each reviewer said to change</h3>
+    <p class="caption">One line per workflow, from the expert that read it on its own. These come from
+    the per-workflow reviews and have not been through the account-wide analysis or the ranking.</p>
+    <div class="qfindings">${said.join('')}</div>`;
+  })()}
   ${related.length === 0
     ? '<p class="muted">No account-wide finding points at any of these workflows this week.</p>'
-    : `<h3>What was found on this side</h3>
+    : `<h3>What the account-wide analysis found here</h3>
   <div class="qfindings">${related.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}`;
+}
+
+/**
+ * THE ONE LINE EACH REVIEWER ENDED ON.
+ *
+ * Every per-workflow and per-agent review closes with THE ONE CHANGE, because the rubric demands it:
+ * if the owner does exactly one thing to this object, what is it. That is the single most useful
+ * sentence in a 10,000-word review and until now it appeared nowhere in the report, which showed only
+ * the account-wide findings.
+ *
+ * It matters most for the delivery rail. The account-wide experts read the reviews, so a sales finding
+ * carries stage-2's work forward into the ranking. Nothing forces every review to produce a finding,
+ * so a workflow can be reviewed carefully and still be absent from the ranked list, and on this account
+ * that is most of onboarding.
+ */
+function oneChangeOf(text) {
+  const match = String(text ?? '').match(/\*\*THE ONE CHANGE\*\*\s*[—-]?\s*([\s\S]*?)(?:\n\s*\n|$)/u);
+  if (!match) return null;
+  return match[1].replace(/\s+/gu, ' ').replace(/\*\*/gu, '').trim() || null;
 }
 
 /**
@@ -520,6 +553,12 @@ export function renderReportPage({
   ${(map?.gaps ?? []).length === 0 ? '' : `
   <h3>Stages with no automation pointed at them</h3>
   <ul>${map.gaps.map((gap) => `<li>${escapeHtml(gap)}</li>`).join('')}</ul>`}
+  ${(situation?.knownDataCaveats ?? []).length === 0 ? '' : `
+  <h3>What the experts were told, that the evidence cannot show</h3>
+  <p class="caption">Facts about this account that no amount of data reveals. Every expert reads these
+  before judging anything, and they are the difference between a diagnosis and a confidently wrong one.
+  A run only carries the ones recorded before it collected.</p>
+  <ul>${situation.knownDataCaveats.map((caveat) => `<li>${escapeHtml(caveat)}</li>`).join('')}</ul>`}
 </section>
 
 <section>
