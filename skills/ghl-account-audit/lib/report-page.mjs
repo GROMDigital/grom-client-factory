@@ -187,6 +187,80 @@ function collisionDiagram(collisions) {
     </div>`).join('');
 }
 
+/**
+ * THE SIX QUESTIONS, ANSWERED ONE BY ONE.
+ *
+ * The product exists to answer six specific questions every week, and until now the report published a
+ * ranked list and left a reader to work out for themselves which findings bore on "why are booked leads
+ * not showing up". This section is the answer, per question.
+ *
+ * Findings attach BY ANCHOR, using the question-to-step mapping the profile declares. Nothing is
+ * inferred from a title and no model decides the grouping: a finding appears under a question when it
+ * anchors to one of that question's journey steps.
+ *
+ * FOUR HONEST OUTCOMES, and three of them are not "here is the answer":
+ *
+ *   answered      the step is measured and findings explain it
+ *   unmeasured    findings exist, but the step cannot be read, so the size is unknown
+ *   none          the step is measured and nobody found anything wrong with it
+ *   unanswerable  this account has no step corresponding to the question at all
+ *
+ * "Nobody could measure this" is a real answer to a business question and a more useful one than an
+ * empty heading, so it is stated.
+ */
+function questionsSection({ questions, questionEdges, kpis, targets, causes, rankOf }) {
+  if ((questionEdges ?? []).length === 0) return '';
+  const byQuestion = new Map(questionEdges.map((entry) => [entry.question, entry.edgeIds]));
+  const targetFor = new Map((targets ?? []).map((entry) => [entry.edgeId, entry]));
+  const windows = Object.keys(kpis ?? {});
+  const chosen = windows
+    .map((name) => [name, Object.values(kpis[name]).filter((cell) => typeof cell.rate === 'number').length])
+    .sort((left, right) => right[1] - left[1])[0];
+  const cells = chosen ? kpis[chosen[0]] : {};
+
+  return questions.map((question, position) => {
+    const number = position + 1;
+    const edgeIds = byQuestion.get(number) ?? [];
+    const related = causes.filter((cause) => edgeIds.some((edgeId) => cause.anchors.includes(`kpi:${edgeId}`)));
+    const measured = edgeIds.filter((edgeId) => typeof cells[edgeId]?.rate === 'number');
+    const state = edgeIds.length === 0
+      ? 'unanswerable'
+      : related.length === 0
+        ? 'none'
+        : measured.length === 0 ? 'unmeasured' : 'answered';
+    const label = {
+      answered: `${related.length} ${related.length === 1 ? 'finding' : 'findings'}`,
+      unmeasured: 'not measurable',
+      none: 'nothing found',
+      unanswerable: 'no such step here',
+    }[state];
+
+    const numbers = edgeIds.map((edgeId) => {
+      const cell = cells[edgeId];
+      const target = targetFor.get(edgeId);
+      const actual = typeof cell?.rate === 'number' ? percent(cell.rate) : null;
+      return `<li><code>${escapeHtml(edgeId)}</code> ${actual === null
+        ? `<span class="unmeasured">not measurable${cell?.reasonCode ? `: ${escapeHtml(cell.reasonCode)}` : ''}</span>`
+        : `<strong>${actual}</strong>${target ? ` <span class="muted">against a ${percent(target.target)} target</span>` : ''}`}</li>`;
+    });
+
+    return `
+    <article class="qa q-${state}">
+      <h3><span class="qn">Q${number}</span>${escapeHtml(question)} <span class="qstate">${label}</span></h3>
+      ${edgeIds.length === 0
+    ? '<p class="muted">This account has no journey step corresponding to this question, so the run cannot answer it. That is a gap in what is measured, not a finding about the account.</p>'
+    : `<ul class="plain nums">${numbers.join('')}</ul>`}
+      ${related.length === 0
+    ? (edgeIds.length === 0 ? '' : '<p class="muted">No analyst filed a finding against this step this week.</p>')
+    : `<div class="qfindings">${related.map((cause) => `
+        <div class="qf">
+          <p class="qf-title">#${rankOf.get(cause.causeId)} ${escapeHtml(cause.findings[0]?.title ?? '')}</p>
+          ${cause.findings.map((finding) => `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`).join('')}
+        </div>`).join('')}</div>`}
+    </article>`;
+  }).join('');
+}
+
 /** The plan, which is the part a reader acts on, so it comes before the detail. */
 function planSection(plan, titleOf, rankOf) {
   if (plan === null) {
@@ -238,7 +312,20 @@ export function renderReportPage({
   journeyBrief = null,
   automationBrief = null,
   reviews = [],
+  questionEdges = [],
+  accountName: suppliedName = null,
 } = {}) {
+  const situation = journeyBrief?.situation ?? null;
+  /*
+   * The account's NAME, taken from the CURRENT profile rather than the sealed brief.
+   *
+   * Deliberate, and the one place this page prefers live configuration to the run's own artefacts: a
+   * display name is not evidence. A run collected before the name was recorded should still render with
+   * it, and an account renamed later should render under its new name rather than the id it had in
+   * March. Falling back to the location id is honest and ugly; guessing a name would be neither.
+   */
+  const accountName = suppliedName ?? situation?.accountName ?? index.locationId;
+  const questions = journeyBrief?.questionsToAnswer ?? [];
   const titleOf = new Map(investigation.causes.map((cause) => [cause.causeId, cause.findings[0]?.title ?? cause.causeId]));
   const rankOf = new Map(investigation.causes.map((cause, position) => [cause.causeId, position + 1]));
   const ageOf = new Map((recurrence?.causes ?? []).map((entry) => [entry.causeId, entry]));
@@ -269,12 +356,21 @@ export function renderReportPage({
 
   const body = `
 <header class="masthead">
-  <p class="eyebrow">Weekly account audit &middot; internal</p>
-  <h1>${escapeHtml(index.locationId)}</h1>
-  <p class="standfirst">Evidence collected to ${escapeHtml(index.collectionWindow?.to ?? 'unknown')}.
-    ${investigation.causeCount} ranked ${investigation.causeCount === 1 ? 'problem' : 'problems'},
-    ${investigation.corroboratedCauseCount} of them reached independently by more than one analyst.</p>
-  <p class="warnbar">Contains real customer message copy and account data. Internal only: do not publish or share outside Grom.</p>
+  <p class="eyebrow">Weekly account audit</p>
+  <h1>${escapeHtml(accountName)}</h1>
+  <p class="standfirst">${situation?.whoThisIs ? escapeHtml(situation.whoThisIs) : ''}</p>
+  <p class="metaline">
+    Week ending ${escapeHtml((index.collectionWindow?.to ?? '').slice(0, 10) || 'unknown')}
+    &middot; account <code>${escapeHtml(index.locationId)}</code>
+    ${situation?.theFunnel ? '' : ''}
+  </p>
+  <div class="scores">
+    <div><span class="s-n">${investigation.causeCount}</span><span class="s-l">problems found</span></div>
+    <div><span class="s-n">${investigation.corroboratedCauseCount}</span><span class="s-l">reached by more than one analyst</span></div>
+    <div><span class="s-n">${reviews.length}</span><span class="s-l">workflows and agents reviewed one by one</span></div>
+    <div><span class="s-n">${plan === null ? '&mdash;' : plan.batches.length}</span><span class="s-l">batches of work in the plan</span></div>
+  </div>
+  <p class="warnbar">Internal. Quotes real customer messages and account data, so keep it inside Grom.</p>
 </header>
 
 <section>
@@ -305,25 +401,39 @@ export function renderReportPage({
 </section>
 
 <section>
-  <h2><span class="num">03</span>Where people fall out</h2>
+  <h2><span class="num">03</span>The six questions, answered</h2>
+  <p>This is what the audit exists to answer. Each question is tied to the step of the journey it is
+  about, and a finding appears under it when the finding points at that step.</p>
+  ${questionsSection({
+    questions,
+    questionEdges,
+    kpis: journeyBrief?.kpis,
+    targets: journeyBrief?.targets,
+    causes: investigation.causes,
+    rankOf,
+  })}
+</section>
+
+<section>
+  <h2><span class="num">04</span>Where people fall out</h2>
   ${funnelDiagram({ kpis: journeyBrief?.kpis, targets: journeyBrief?.targets })}
 </section>
 
 ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 <section>
-  <h2><span class="num">04</span>What starts what</h2>
+  <h2><span class="num">05</span>What starts what</h2>
   <p>One workflow finishing can start another. Where many things fire one shared event and many things
   listen for it, the wrong person receives the wrong sequence.</p>
   ${collisionDiagram(automationBrief?.collisions)}
 </section>`}
 
 <section>
-  <h2><span class="num">05</span>The plan</h2>
+  <h2><span class="num">06</span>The plan</h2>
   ${planSection(plan, titleOf, rankOf)}
 </section>
 
 <section>
-  <h2><span class="num">06</span>Every problem, ranked</h2>
+  <h2><span class="num">07</span>Every problem, ranked</h2>
   <p class="caption">The grey line under each problem is the fix its analyst proposed, in their words.</p>
   <div class="tablewrap">
     <table class="problems">
@@ -334,7 +444,7 @@ ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 </section>
 
 <section>
-  <h2><span class="num">07</span>Where the detail is</h2>
+  <h2><span class="num">08</span>Where the detail is</h2>
   <p>This page is the overview. The working material is on disk beside it.</p>
   <div class="tablewrap">
     <table>
@@ -434,6 +544,25 @@ th.num,td.num{text-align:right}
 .chain-map .side{background:var(--card);padding:.9rem 1rem}
 .chain-map .via{background:var(--wash);padding:.9rem 1rem;display:flex;align-items:center;justify-content:center}
 .chain-map .via code{background:none;color:var(--accent);font-size:.74rem}
+.metaline{font-size:.82rem;color:var(--faint);margin:0}
+.scores{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:.5rem}
+.scores>div{background:var(--card);padding:.85rem 1rem;display:flex;flex-direction:column;gap:.15rem}
+.s-n{font-family:var(--serif);font-size:1.9rem;line-height:1;color:var(--accent)}
+.s-l{font-size:.76rem;color:var(--faint);line-height:1.3}
+.qa{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--rule);padding:1rem 1.2rem;margin-top:.75rem}
+.qa.q-answered{border-left-color:var(--bad)}
+.qa.q-unmeasured{border-left-color:var(--warn)}
+.qa.q-none{border-left-color:var(--good)}
+.qa.q-unanswerable{border-left-color:var(--faint)}
+.qa h3{margin:0 0 .5rem;font-size:1rem;font-weight:600;display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;line-height:1.35}
+.qn{font-family:var(--mono);font-size:.68rem;color:var(--accent);letter-spacing:.08em}
+.qstate{font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);margin-left:auto;white-space:nowrap}
+.q-answered .qstate{color:var(--bad)}.q-unmeasured .qstate{color:var(--warn)}.q-none .qstate{color:var(--good)}
+ul.nums{font-size:.84rem;gap:.2rem;margin-bottom:.6rem}
+ul.nums code{font-size:.78rem}
+.qfindings{display:flex;flex-direction:column;gap:.55rem;margin-top:.6rem;border-top:1px solid var(--rule-soft);padding-top:.6rem}
+.qf-title{font-size:.88rem;font-weight:600;margin:0;max-width:none}
+.qf-fix{font-size:.84rem;color:var(--soft);margin:.15rem 0 0;max-width:none}
 .thisweek{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--accent);padding:1rem 1.2rem;font-size:.98rem;max-width:72ch}
 .prereq,.conflict{background:var(--card);border:1px solid var(--rule);padding:.8rem 1rem;margin-bottom:.5rem;max-width:72ch}
 .prereq p,.conflict p{margin:.3rem 0 0;font-size:.88rem}

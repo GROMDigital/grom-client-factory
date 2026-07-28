@@ -1059,6 +1059,10 @@ export function runWorkOrder({ paths, runId, plan: answer } = {}) {
       journeyBrief: briefs.briefs.lanes.leadJourneyKpi,
       automationBrief: briefs.briefs.lanes.workflowConfigRuntime,
       reviews: availableReviews(briefs.directory),
+      // Which journey step each of the six questions is about. Profile data, so the report can answer
+      // them one by one without any code deciding what a question means.
+      questionEdges: loadProfile(index.profileId).questionEdges ?? [],
+      accountName: loadProfile(index.profileId).situation?.accountName ?? null,
     });
     writeOnce(join(directory, 'REPORT.html'), html);
     reportPage = 'REPORT.html';

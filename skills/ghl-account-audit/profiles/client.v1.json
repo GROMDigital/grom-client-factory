@@ -63,5 +63,47 @@
         "basis": "Average clinics convert 40 to 55 percent of attended consultations into booked treatment; 50 is the top of average. Top performers reach 75 to 85 percent, and the published gap is attributed to the consultation process itself rather than to marketing."
       }
     ]
-  }
+  },
+  "questionEdges": [
+    {
+      "question": 1,
+      "edgeIds": [
+        "lead_created_to_first_engagement"
+      ]
+    },
+    {
+      "question": 2,
+      "edgeIds": [
+        "first_engagement_to_qualified"
+      ]
+    },
+    {
+      "question": 3,
+      "edgeIds": [
+        "qualified_to_booked"
+      ]
+    },
+    {
+      "question": 4,
+      "edgeIds": [
+        "booked_to_showed",
+        "booked_to_no_show"
+      ]
+    },
+    {
+      "question": 5,
+      "edgeIds": [
+        "booked_to_cancelled",
+        "cancelled_to_rebooked"
+      ]
+    },
+    {
+      "question": 6,
+      "edgeIds": [
+        "showed_to_opportunity_outcome",
+        "won_to_collected_revenue",
+        "closed_to_reactivated"
+      ]
+    }
+  ]
 }

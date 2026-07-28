@@ -37,6 +37,7 @@
     }
   ],
   "situation": {
+    "accountName": "GROM Digital UK",
     "whoThisIs": "Grom Digital, a UK marketing agency selling done-for-you patient acquisition to aesthetic and cosmetic clinics. Founder-led sales calls.",
     "howLeadsArrive": "Meta (Facebook and Instagram) lead-form ads. The lead never visits a website first, so the email address is pre-filled from their Facebook profile and is often a secondary or dormant inbox.",
     "whatIsSold": "The Pilot Program: free for 30 days, the client pays on results. A signed client is TRIALING before any money moves, and there is no upfront fee to object to.",
@@ -69,5 +70,44 @@
         "basis": "About 35 percent of shown high-ticket B2B discovery calls close, and first-meeting-to-opportunity runs 30 to 50 percent where discovery is sharp. Read this against the caveat that this pipeline only marks won once the client PAYS."
       }
     ]
-  }
+  },
+  "questionEdges": [
+    {
+      "question": 1,
+      "edgeIds": [
+        "enquiry_to_contacted",
+        "contacted_to_qualified"
+      ]
+    },
+    {
+      "question": 2,
+      "edgeIds": [
+        "contacted_to_qualified"
+      ]
+    },
+    {
+      "question": 3,
+      "edgeIds": [
+        "qualified_to_strategy_call"
+      ]
+    },
+    {
+      "question": 4,
+      "edgeIds": [
+        "strategy_call_to_showed"
+      ]
+    },
+    {
+      "question": 5,
+      "edgeIds": []
+    },
+    {
+      "question": 6,
+      "edgeIds": [
+        "showed_to_decision",
+        "showed_to_decision_30d",
+        "won_to_collected_revenue"
+      ]
+    }
+  ]
 }

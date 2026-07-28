@@ -71,6 +71,18 @@ const KpiTargetSchema = z.object({
 }).strict();
 
 const SituationSchema = z.object({
+  /*
+   * WHAT TO CALL THIS ACCOUNT IN A DOCUMENT SOMEBODY READS.
+   *
+   * Optional, because it is per-account identity and the `client` profile is a template shared by
+   * every clinic. Where it is absent the report falls back to the location id, which is honest and
+   * ugly rather than a guessed name.
+   *
+   * It lives here rather than being collected because the sub-account record is not on the governed
+   * read allowlist, and widening that boundary to fetch a display name would be a poor trade. The
+   * durable fix, if this ever matters for many accounts at once, is to collect it.
+   */
+  accountName: z.string().min(1).optional(),
   whoThisIs: z.string().min(1),
   howLeadsArrive: z.string().min(1),
   whatIsSold: z.string().min(1),
@@ -91,6 +103,26 @@ const SituationSchema = z.object({
   }
 });
 
+/**
+ * WHICH JOURNEY STEPS EACH OF THE SIX QUESTIONS IS ABOUT.
+ *
+ * The product exists to answer six questions every week (`THE_QUESTIONS` in `lib/analysis-brief.mjs`),
+ * and until now the report never answered them ONE BY ONE: it published a ranked list and left a reader
+ * to work out for themselves which findings bore on "why are booked leads not showing up".
+ *
+ * This is the mapping that lets the report group them, and it is PROFILE DATA for the same reason the
+ * journeys are: which step corresponds to "not booking" depends on what this account's journey is
+ * called, and no amount of evidence reveals it. It is a mapping, never a judgement: nothing here says
+ * what a good rate is or what the answer should be.
+ *
+ * A question with no declared edges, or with edges nobody could measure, is reported as unanswerable
+ * on this evidence, which is a real answer and a more useful one than silence.
+ */
+const QuestionEdgesSchema = z.object({
+  question: z.number().int().min(1).max(6),
+  edgeIds: z.array(z.string().min(1)),
+}).strict();
+
 export const CoverageProfileSchema = z.object({
   profileId: z.enum(['client', 'grom_internal']),
   version: z.literal(SCHEMA_VERSION),
@@ -98,6 +130,7 @@ export const CoverageProfileSchema = z.object({
   excludedCapabilities: z.array(z.string().min(1)),
   journeys: z.array(JourneySchema).min(1),
   situation: SituationSchema.optional(),
+  questionEdges: z.array(QuestionEdgesSchema).max(6).optional(),
 }).strict().superRefine((profile, ctx) => {
   const ids = profile.journeys.map(({ journeyId }) => journeyId);
   if (new Set(ids).size !== ids.length) {
