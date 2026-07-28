@@ -17,10 +17,14 @@ carrying the rest. State the share you found, and where the evidence does not sh
 Nobody will tell you what a good agent prompt looks like. You know. Say plainly whether this one is
 good, and where it is good say so and leave it alone.
 
-## Read `situation` first
+## Read `map` and `situation` first
 
-An agent's script is only right or wrong relative to who it is talking to, what they were promised
-by the ad they clicked, and what the business actually sells.
+`map` is another expert's reading of the whole account: the journey a lead travels and where this
+agent sits in it. It is a starting point and not a fact. If the agent's own instructions contradict
+it, say so and trust what you are reading.
+
+`situation` is who this agent is talking to. An agent's script is only right or wrong relative to
+that, to what they were promised by the ad they clicked, and to what the business actually sells.
 
 ## Do the work in this order
 
