@@ -268,7 +268,7 @@ function findingBlock(cause, rank) {
       : `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`;
   }).join('');
   return `
-  <details class="qf">
+  <details class="qf" id="p${rank}">
     <summary><span class="qf-rank">#${rank}</span><span class="qf-title">${title}</span><span class="qf-more">the fix</span></summary>
     <div class="qf-body">${bodies}</div>
   </details>`;
@@ -305,10 +305,29 @@ function questionsSection({ questions, questionEdges, kpis, targets, causes, ran
     .sort((left, right) => right[1] - left[1])[0];
   const cells = chosen ? kpis[chosen[0]] : {};
 
+  /*
+   * EACH FINDING IS WRITTEN OUT ONCE, under the first question it bears on, and referenced by number
+   * everywhere else.
+   *
+   * A broadly-anchored finding legitimately touches several questions: "nothing reacts to a reply"
+   * genuinely bears on nurture, on engagement and on booking. Printing it in full under all three made
+   * question two look like a copy of question one and tripled the length of the section for no
+   * information. The cross-reference keeps the fact without the bulk.
+   */
+  const primary = new Map();
+  for (const [number, edgeIds] of [...byQuestion.entries()].sort((left, right) => left[0] - right[0])) {
+    for (const cause of causes) {
+      if (primary.has(cause.causeId)) continue;
+      if (edgeIds.some((edgeId) => cause.anchors.includes(`kpi:${edgeId}`))) primary.set(cause.causeId, number);
+    }
+  }
+
   return questions.map((question, position) => {
     const number = position + 1;
     const edgeIds = byQuestion.get(number) ?? [];
-    const related = causes.filter((cause) => edgeIds.some((edgeId) => cause.anchors.includes(`kpi:${edgeId}`)));
+    const matching = causes.filter((cause) => edgeIds.some((edgeId) => cause.anchors.includes(`kpi:${edgeId}`)));
+    const related = matching.filter((cause) => primary.get(cause.causeId) === number);
+    const alsoSeen = matching.filter((cause) => primary.get(cause.causeId) !== number);
     const measured = edgeIds.filter((edgeId) => typeof cells[edgeId]?.rate === 'number');
     const state = edgeIds.length === 0
       ? 'unanswerable'
@@ -338,8 +357,10 @@ function questionsSection({ questions, questionEdges, kpis, targets, causes, ran
     ? '<p class="muted">This account has no journey step corresponding to this question, so the run cannot answer it. That is a gap in what is measured, not a finding about the account.</p>'
     : `<ul class="plain nums">${numbers.join('')}</ul>`}
       ${related.length === 0
-    ? (edgeIds.length === 0 ? '' : '<p class="muted">No analyst filed a finding against this step this week.</p>')
+    ? (edgeIds.length === 0 || alsoSeen.length > 0 ? '' : '<p class="muted">No analyst filed a finding against this step this week.</p>')
     : `<div class="qfindings">${related.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}
+      ${alsoSeen.length === 0 ? '' : `<p class="alsoseen">Also bears on this step, written out above:
+        ${alsoSeen.map((cause) => `<a href="#p${rankOf.get(cause.causeId)}">#${rankOf.get(cause.causeId)}</a>`).join(' ')}</p>`}
     </article>`;
   }).join('');
 }
@@ -350,8 +371,15 @@ function planSection(plan, titleOf, rankOf) {
     return `<p class="note">No running order was produced for this run, so the problems below are in
       ranked order with nothing said about sequencing, prerequisites or conflicts.</p>`;
   }
+  /*
+   * The planner's own summary, as steps. It is asked for as one paragraph and it always comes back as
+   * "first this, second that, third the other", which is a list. Same splitter as the journey.
+   */
+  const week = asSteps(plan.thisWeek);
   return `
-  <div class="thisweek">${escapeHtml(plan.thisWeek)}</div>
+  <div class="thisweek">${week.length > 1
+    ? `<ol class="weeksteps">${week.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
+    : escapeHtml(plan.thisWeek)}</div>
   ${plan.prerequisites.length === 0 ? '' : `
   <h3>Do these first, or you cannot tell whether the rest worked</h3>
   ${plan.prerequisites.map(({ causeId, blocks, why }) => `
@@ -462,7 +490,7 @@ export function renderReportPage({
 </header>
 
 <section>
-  <h2><span class="num">01</span>What was done</h2>
+  <h2><span class="secnum">01</span>What was done</h2>
   <p>Five stages of expert read this account. Nothing was told what to look for and no rule in the
   code decides what good looks like: the account's own evidence is read, and every finding must name
   a mechanism, state a benchmark, carry two competing explanations and a test that would refute it, or
@@ -477,7 +505,7 @@ export function renderReportPage({
 </section>
 
 <section>
-  <h2><span class="num">02</span>The account as we found it</h2>
+  <h2><span class="secnum">02</span>The account as we found it</h2>
   ${map?.journey ? `<p class="lead">${escapeHtml(map.journey)}</p>` : ''}
   ${(() => {
     const steps = (map?.journeySteps ?? []).length > 0 ? map.journeySteps : asSteps(map?.journey);
@@ -495,7 +523,7 @@ export function renderReportPage({
 </section>
 
 <section>
-  <h2><span class="num">03</span>The six questions, answered</h2>
+  <h2><span class="secnum">03</span>The six questions, answered</h2>
   <p>This is what the audit exists to answer. Each question is tied to the step of the journey it is
   about, and a finding appears under it when the finding points at that step.</p>
   ${questionsSection({
@@ -510,30 +538,30 @@ export function renderReportPage({
 
 ${deliverySection({ map, causes: investigation.causes, rankOf, reviews }) === '' ? '' : `
 <section>
-  <h2><span class="num">04</span>After they sign: onboarding and delivery</h2>
+  <h2><span class="secnum">04</span>After they sign: onboarding and delivery</h2>
   ${deliverySection({ map, causes: investigation.causes, rankOf, reviews })}
 </section>`}
 
 <section>
-  <h2><span class="num">05</span>Where people fall out</h2>
+  <h2><span class="secnum">05</span>Where people fall out</h2>
   ${funnelDiagram({ kpis: journeyBrief?.kpis, targets: journeyBrief?.targets })}
 </section>
 
 ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 <section>
-  <h2><span class="num">06</span>What starts what</h2>
+  <h2><span class="secnum">06</span>What starts what</h2>
   <p>One workflow finishing can start another. Where many things fire one shared event and many things
   listen for it, the wrong person receives the wrong sequence.</p>
   ${collisionDiagram(automationBrief?.collisions)}
 </section>`}
 
 <section>
-  <h2><span class="num">07</span>The plan</h2>
+  <h2><span class="secnum">07</span>The plan</h2>
   ${planSection(plan, titleOf, rankOf)}
 </section>
 
 <section>
-  <h2><span class="num">08</span>Every problem, ranked</h2>
+  <h2><span class="secnum">08</span>Every problem, ranked</h2>
   <p class="caption">The grey line under each problem is the fix its analyst proposed, in their words.</p>
   <div class="tablewrap">
     <table class="problems">
@@ -544,7 +572,7 @@ ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 </section>
 
 <section>
-  <h2><span class="num">09</span>Where the detail is</h2>
+  <h2><span class="secnum">09</span>Where the detail is</h2>
   <p>This page is the overview. The working material is on disk beside it.</p>
   <div class="tablewrap">
     <table>
@@ -578,16 +606,18 @@ ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 }
 
 /** Inline, because the page is opened as a local file where an external stylesheet cannot load. */
-const PAGE_STYLE = `<title>Account audit</title>
+const PAGE_STYLE = `<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Account audit</title>
 <style>
 :root{color-scheme:light dark;
---paper:#F2F5F6;--card:#FFF;--ink:#121A1E;--soft:#4A5B62;--faint:#7C8D94;--rule:#D7E0E2;--rule-soft:#E9EFF0;
+--paper:#F2F5F6;--card:#FFF;--ink:#121A1E;--soft:#3B4A50;--faint:#66787F;--rule:#D7E0E2;--rule-soft:#E9EFF0;
 --accent:#0B5F66;--wash:#E2EFF0;--warn:#8A5410;--warn-wash:#F6EBDA;--bad:#9C2F2F;--bad-wash:#F6E3E3;--good:#276B47;
 --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--serif:ui-serif,Georgia,"Times New Roman",serif;}
-@media(prefers-color-scheme:dark){:root{--paper:#0D1417;--card:#141E22;--ink:#E6EDEF;--soft:#A3B4BA;--faint:#71858C;--rule:#24343A;--rule-soft:#1B292E;--accent:#5FCBD3;--wash:#123336;--warn:#D8A05A;--warn-wash:#33260F;--bad:#E08585;--bad-wash:#331A1A;--good:#6FC694;}}
-:root[data-theme=light]{--paper:#F2F5F6;--card:#FFF;--ink:#121A1E;--soft:#4A5B62;--faint:#7C8D94;--rule:#D7E0E2;--rule-soft:#E9EFF0;--accent:#0B5F66;--wash:#E2EFF0;--warn:#8A5410;--warn-wash:#F6EBDA;--bad:#9C2F2F;--bad-wash:#F6E3E3;--good:#276B47;}
-:root[data-theme=dark]{--paper:#0D1417;--card:#141E22;--ink:#E6EDEF;--soft:#A3B4BA;--faint:#71858C;--rule:#24343A;--rule-soft:#1B292E;--accent:#5FCBD3;--wash:#123336;--warn:#D8A05A;--warn-wash:#33260F;--bad:#E08585;--bad-wash:#331A1A;--good:#6FC694;}
-body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.6;margin:0;padding:0 clamp(1rem,4vw,3rem) 5rem;max-width:82rem;margin-inline:auto;-webkit-font-smoothing:antialiased}
+@media(prefers-color-scheme:dark){:root{--paper:#0D1417;--card:#141E22;--ink:#E6EDEF;--soft:#B2C2C7;--faint:#84979C;--rule:#24343A;--rule-soft:#1B292E;--accent:#5FCBD3;--wash:#123336;--warn:#D8A05A;--warn-wash:#33260F;--bad:#E08585;--bad-wash:#331A1A;--good:#6FC694;}}
+:root[data-theme=light]{--paper:#F2F5F6;--card:#FFF;--ink:#121A1E;--soft:#3B4A50;--faint:#66787F;--rule:#D7E0E2;--rule-soft:#E9EFF0;--accent:#0B5F66;--wash:#E2EFF0;--warn:#8A5410;--warn-wash:#F6EBDA;--bad:#9C2F2F;--bad-wash:#F6E3E3;--good:#276B47;}
+:root[data-theme=dark]{--paper:#0D1417;--card:#141E22;--ink:#E6EDEF;--soft:#B2C2C7;--faint:#84979C;--rule:#24343A;--rule-soft:#1B292E;--accent:#5FCBD3;--wash:#123336;--warn:#D8A05A;--warn-wash:#33260F;--bad:#E08585;--bad-wash:#331A1A;--good:#6FC694;}
+body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.62;margin:0;padding:0 clamp(1rem,4vw,3rem) 5rem;max-width:66rem;margin-inline:auto;-webkit-font-smoothing:antialiased}
 .masthead{padding:clamp(2.5rem,7vw,4.5rem) 0 2rem;border-bottom:1px solid var(--rule);display:flex;flex-direction:column;gap:1rem}
 .eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.13em;text-transform:uppercase;color:var(--accent);margin:0}
 h1{font-family:var(--mono);font-size:clamp(1.4rem,3.5vw,2.1rem);margin:0;letter-spacing:-.01em;word-break:break-all}
@@ -595,7 +625,7 @@ h1{font-family:var(--mono);font-size:clamp(1.4rem,3.5vw,2.1rem);margin:0;letter-
 .warnbar{font-size:.82rem;background:var(--warn-wash);color:var(--warn);padding:.5rem .8rem;border-radius:3px;margin:.5rem 0 0;max-width:70ch}
 section{padding-top:3rem}
 h2{font-family:var(--serif);font-weight:500;font-size:clamp(1.35rem,2.6vw,1.8rem);line-height:1.15;margin:0 0 .8rem;text-wrap:balance}
-h2 .num{font-family:var(--mono);font-size:.68rem;color:var(--accent);letter-spacing:.12em;display:block;margin-bottom:.55rem;font-weight:400}
+h2 .secnum{font-family:var(--mono);font-size:.66rem;color:var(--accent);letter-spacing:.14em;display:block;text-align:left;margin-bottom:.5rem;font-weight:400}
 h3{font-size:.92rem;font-weight:650;margin:2rem 0 .6rem}
 h4{font-size:.85rem;font-weight:640;margin:0 0 .4rem}
 p{max-width:74ch}.lead{font-size:1.05rem;color:var(--ink);max-width:72ch}
@@ -666,14 +696,17 @@ ul.nums code{font-size:.78rem}
 .qfindings{display:flex;flex-direction:column;gap:.55rem;margin-top:.6rem;border-top:1px solid var(--rule-soft);padding-top:.6rem}
 details.qf{border-top:1px solid var(--rule-soft);padding:.15rem 0}
 details.qf:first-child{border-top:none}
-details.qf>summary{cursor:pointer;list-style:none;display:flex;gap:.55rem;align-items:baseline;padding:.45rem 0;font-size:.88rem;line-height:1.45}
+details.qf>summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:2.4rem minmax(0,1fr) auto;gap:.6rem;align-items:baseline;padding:.6rem 0;font-size:.92rem;line-height:1.5}
 details.qf>summary::-webkit-details-marker{display:none}
 details.qf>summary:hover .qf-title{color:var(--accent)}
 .qf-rank{font-family:var(--mono);font-size:.7rem;color:var(--faint);flex:none}
 .qf-title{font-weight:600}
-.qf-more{margin-left:auto;font-family:var(--mono);font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);flex:none;opacity:.75}
+.qf-more{font-family:var(--mono);font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);flex:none;opacity:.75}
 details.qf[open] .qf-more{opacity:.4}
-.qf-body{padding:.2rem 0 .8rem 1.8rem}
+.qf-body{padding:.2rem 0 .9rem 3rem}
+.alsoseen{font-size:.82rem;color:var(--faint);margin:.6rem 0 0;max-width:none}
+.alsoseen a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:.8rem;padding:0 .1rem}
+.alsoseen a:hover{text-decoration:underline}
 .qf-fix{font-size:.86rem;color:var(--soft);margin:0 0 .5rem;max-width:74ch}
 ul.fixsteps{list-style:none;padding:0;margin:0 0 .5rem;display:flex;flex-direction:column;gap:.35rem;max-width:74ch}
 ul.fixsteps>li{font-size:.86rem;color:var(--soft);line-height:1.5;padding-left:.9rem;position:relative}
@@ -682,7 +715,10 @@ details.fixes{margin-top:.35rem}
 details.fixes>summary{cursor:pointer;font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);opacity:.75}
 details.fixes>summary::-webkit-details-marker{display:none}
 details.fixes ul.fixsteps,details.fixes p{margin-top:.4rem;font-size:.82rem}
-.thisweek{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--accent);padding:1rem 1.2rem;font-size:.98rem;max-width:72ch}
+.thisweek{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--accent);padding:1rem 1.2rem;font-size:.96rem;max-width:74ch}
+ol.weeksteps{counter-reset:w;list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.55rem}
+ol.weeksteps>li{counter-increment:w;position:relative;padding-left:1.6rem;line-height:1.55}
+ol.weeksteps>li::before{content:counter(w);position:absolute;left:0;top:.05rem;font-family:var(--mono);font-size:.7rem;color:var(--accent)}
 .prereq,.conflict{background:var(--card);border:1px solid var(--rule);padding:.8rem 1rem;margin-bottom:.5rem;max-width:72ch}
 .prereq p,.conflict p{margin:.3rem 0 0;font-size:.88rem}
 .batches{padding-left:0;list-style:none;counter-reset:b;display:flex;flex-direction:column;gap:1px;background:var(--rule);border:1px solid var(--rule)}
