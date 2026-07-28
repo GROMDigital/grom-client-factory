@@ -134,9 +134,9 @@ function funnelDiagram({ kpis, targets }) {
              ${target ? `<i class="target" style="--t:${Math.round(target.target * 100)}%"></i>` : ''}
            </span>`}
       </td>
-      <td class="num">${percent(rate) ?? '&mdash;'}</td>
-      <td class="num target-col">${target ? percent(target.target) : '&mdash;'}</td>
-      <td class="num">${cell.numerator ?? '&mdash;'} / ${cell.denominator ?? '&mdash;'}</td>
+      <td class="num">${percent(rate) ?? 'n/a'}</td>
+      <td class="num target-col">${target ? percent(target.target) : 'n/a'}</td>
+      <td class="num">${cell.numerator ?? 'n/a'} / ${cell.denominator ?? 'n/a'}</td>
     </tr>`;
   });
   return `
@@ -243,11 +243,35 @@ function deliverySection({ map, causes, rankOf, reviews }) {
   ${related.length === 0
     ? '<p class="muted">No account-wide finding points at any of these workflows this week.</p>'
     : `<h3>What was found on this side</h3>
-  <div class="qfindings">${related.map((cause) => `
-    <div class="qf">
-      <p class="qf-title">#${rankOf.get(cause.causeId)} ${escapeHtml(cause.findings[0]?.title ?? '')}</p>
-      ${cause.findings.map((finding) => `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`).join('')}
-    </div>`).join('')}</div>`}`;
+  <div class="qfindings">${related.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}`;
+}
+
+/**
+ * A FINDING'S FIX, COLLAPSED.
+ *
+ * The analysts write real fixes: multi-paragraph instructions with the replacement subject lines and
+ * bodies written out in full. That is exactly what was asked of them and it is the most valuable text
+ * the run produces, and printing eleven of them inline under one question turned the summary into a
+ * wall nobody reads. The owner said so, looking at question one.
+ *
+ * So the title is the summary line and the fix is one click away, using `<details>` rather than script
+ * because the page is opened as a local file. Collapsed, a question reads as a scannable list of
+ * problems; expanded, nothing has been cut. Long fixes are broken into steps by the same splitter the
+ * journey uses, since a multi-step instruction is a list written as prose.
+ */
+function findingBlock(cause, rank) {
+  const title = escapeHtml(cause.findings[0]?.title ?? '');
+  const bodies = cause.findings.map((finding) => {
+    const steps = asSteps(finding.fix);
+    return steps.length > 1
+      ? `<ul class="fixsteps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`
+      : `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`;
+  }).join('');
+  return `
+  <details class="qf">
+    <summary><span class="qf-rank">#${rank}</span><span class="qf-title">${title}</span><span class="qf-more">the fix</span></summary>
+    <div class="qf-body">${bodies}</div>
+  </details>`;
 }
 
 /**
@@ -315,11 +339,7 @@ function questionsSection({ questions, questionEdges, kpis, targets, causes, ran
     : `<ul class="plain nums">${numbers.join('')}</ul>`}
       ${related.length === 0
     ? (edgeIds.length === 0 ? '' : '<p class="muted">No analyst filed a finding against this step this week.</p>')
-    : `<div class="qfindings">${related.map((cause) => `
-        <div class="qf">
-          <p class="qf-title">#${rankOf.get(cause.causeId)} ${escapeHtml(cause.findings[0]?.title ?? '')}</p>
-          ${cause.findings.map((finding) => `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`).join('')}
-        </div>`).join('')}</div>`}
+    : `<div class="qfindings">${related.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}
     </article>`;
   }).join('');
 }
@@ -396,7 +416,7 @@ export function renderReportPage({
   const problemRows = investigation.causes.map((cause, position) => {
     const age = ageOf.get(cause.causeId);
     const ageText = age === undefined
-      ? '&mdash;'
+      ? 'n/a'
       : age.status === 'RECURRING'
         ? `seen in ${age.priorRuns} earlier ${age.priorRuns === 1 ? 'run' : 'runs'}`
         : 'new';
@@ -404,7 +424,12 @@ export function renderReportPage({
     <tr>
       <td class="num">${position + 1}</td>
       <td>${escapeHtml(cause.findings[0]?.title ?? cause.causeId)}
-        <div class="fixes">${cause.findings.map((finding) => `<span>${escapeHtml(finding.fix)}</span>`).join('')}</div>
+        <details class="fixes"><summary>the fix</summary>${cause.findings.map((finding) => {
+    const steps = asSteps(finding.fix);
+    return steps.length > 1
+      ? `<ul class="fixsteps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`
+      : `<p>${escapeHtml(finding.fix)}</p>`;
+  }).join('')}</details>
       </td>
       <td>${ageText}</td>
       <td><span class="pill b-${escapeHtml(worstBand(cause, 'commercialImpact'))}">${escapeHtml(worstBand(cause, 'commercialImpact'))}</span></td>
@@ -431,7 +456,7 @@ export function renderReportPage({
     <div><span class="s-n">${investigation.causeCount}</span><span class="s-l">problems found</span></div>
     <div><span class="s-n">${investigation.corroboratedCauseCount}</span><span class="s-l">reached by more than one analyst</span></div>
     <div><span class="s-n">${reviews.length}</span><span class="s-l">workflows and agents reviewed one by one</span></div>
-    <div><span class="s-n">${plan === null ? '&mdash;' : plan.batches.length}</span><span class="s-l">batches of work in the plan</span></div>
+    <div><span class="s-n">${plan === null ? 'n/a' : plan.batches.length}</span><span class="s-l">batches of work in the plan</span></div>
   </div>
   <p class="warnbar">Internal. Quotes real customer messages and account data, so keep it inside Grom.</p>
 </header>
@@ -444,7 +469,7 @@ export function renderReportPage({
   it is thrown away.</p>
   <div class="stagegrid">
     <div><span class="big">1</span>expert derived what this account is and what each workflow is for</div>
-    <div><span class="big">${reviews.length || '&mdash;'}</span>experts each read ONE workflow or agent whole: settings, runtime, and every message</div>
+    <div><span class="big">${reviews.length || 'n/a'}</span>experts each read ONE workflow or agent whole: settings, runtime, and every message</div>
     <div><span class="big">3</span>experts read the account as a whole: the journey, the system, the messages as one stream</div>
     <div><span class="big">${investigation.causeCount}</span>problems after grouping, ranked, each with a fix and a way to check it</div>
   </div>
@@ -613,7 +638,6 @@ th.num,td.num{text-align:right}
 .b-CRITICAL,.b-HIGH{background:var(--bad-wash);color:var(--bad)}
 .b-MEDIUM{background:var(--warn-wash);color:var(--warn)}
 .b-LOW,.b-NONE{background:var(--rule-soft);color:var(--faint)}
-.fixes{display:flex;flex-direction:column;gap:.2rem;margin-top:.35rem;font-size:.82rem;color:var(--faint)}
 .chain-map{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:1rem}
 @media(min-width:52rem){.chain-map{grid-template-columns:1fr auto 1fr}}
 .chain-map .side{background:var(--card);padding:.9rem 1rem}
@@ -640,8 +664,24 @@ ol.steps>li::before{content:counter(s);position:absolute;left:.6rem;top:.52rem;f
 ul.nums{font-size:.84rem;gap:.2rem;margin-bottom:.6rem}
 ul.nums code{font-size:.78rem}
 .qfindings{display:flex;flex-direction:column;gap:.55rem;margin-top:.6rem;border-top:1px solid var(--rule-soft);padding-top:.6rem}
-.qf-title{font-size:.88rem;font-weight:600;margin:0;max-width:none}
-.qf-fix{font-size:.84rem;color:var(--soft);margin:.15rem 0 0;max-width:none}
+details.qf{border-top:1px solid var(--rule-soft);padding:.15rem 0}
+details.qf:first-child{border-top:none}
+details.qf>summary{cursor:pointer;list-style:none;display:flex;gap:.55rem;align-items:baseline;padding:.45rem 0;font-size:.88rem;line-height:1.45}
+details.qf>summary::-webkit-details-marker{display:none}
+details.qf>summary:hover .qf-title{color:var(--accent)}
+.qf-rank{font-family:var(--mono);font-size:.7rem;color:var(--faint);flex:none}
+.qf-title{font-weight:600}
+.qf-more{margin-left:auto;font-family:var(--mono);font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);flex:none;opacity:.75}
+details.qf[open] .qf-more{opacity:.4}
+.qf-body{padding:.2rem 0 .8rem 1.8rem}
+.qf-fix{font-size:.86rem;color:var(--soft);margin:0 0 .5rem;max-width:74ch}
+ul.fixsteps{list-style:none;padding:0;margin:0 0 .5rem;display:flex;flex-direction:column;gap:.35rem;max-width:74ch}
+ul.fixsteps>li{font-size:.86rem;color:var(--soft);line-height:1.5;padding-left:.9rem;position:relative}
+ul.fixsteps>li::before{content:"";position:absolute;left:0;top:.62em;width:4px;height:4px;border-radius:50%;background:var(--accent);opacity:.6}
+details.fixes{margin-top:.35rem}
+details.fixes>summary{cursor:pointer;font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);opacity:.75}
+details.fixes>summary::-webkit-details-marker{display:none}
+details.fixes ul.fixsteps,details.fixes p{margin-top:.4rem;font-size:.82rem}
 .thisweek{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--accent);padding:1rem 1.2rem;font-size:.98rem;max-width:72ch}
 .prereq,.conflict{background:var(--card);border:1px solid var(--rule);padding:.8rem 1rem;margin-bottom:.5rem;max-width:72ch}
 .prereq p,.conflict p{margin:.3rem 0 0;font-size:.88rem}
