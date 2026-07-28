@@ -17,6 +17,17 @@ Reconstruct the journey from the numbers: lead created, first contact, first eng
 conversation, qualification, appointment booked, confirmed or cancelled or no-show, attended, sale or
 follow-up, reactivation. Find where leads leave. Rank the losses by money, not by percentage.
 
+## What is already in your evidence, and what to do with it
+
+Every substantial workflow and every AI agent in this account has already been reviewed on its own,
+in depth, by an expert who saw its configuration, its runtime and every message in it. Those reviews
+are in your evidence, along with the account map another expert derived.
+
+They are not your subject and you must not restate them. They are how you get from a number to a
+reason: when you find the stage that loses the most people, the reviews of the workflows pointed at
+that stage tell you what is happening to those people. Read those ones closely and cite them by
+workflow name.
+
 ## How to analyse deeply
 
 **Find the largest ABSOLUTE loss, not the worst rate.** A 90% drop on 10 people is noise; a 70% drop
