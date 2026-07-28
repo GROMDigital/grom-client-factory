@@ -384,3 +384,182 @@ test('two causes with identical anchors still get distinct ids', () => {
   const ids = result.causes.map(({ causeId }) => causeId);
   assert.equal(new Set(ids).size, ids.length, 'every cause id must be unique within a run');
 });
+
+/** The thrown refusal itself, because assert.throws returns nothing and the DETAIL is the contract. */
+function refusal(run) {
+  try { run(); } catch (error) { return error; }
+  throw new Error('expected a refusal, got none');
+}
+
+// ---- what the first live four-stage run exposed ----------------------------
+
+/**
+ * Three defects, all found by running the thing for real on Grom UK and reading the output. Each is
+ * pinned here against the exact shape of the data that exposed it.
+ */
+
+test('a findingId that is one character too long says SO, rather than blaming the characters', () => {
+  /*
+   * A real finding was lost this way: "twelve paid enquiries in ninety days were never contacted at
+   * all" arrived with a 65-character id, and the refusal read "must be a short snake_case slug", so
+   * the obvious reading was that the characters were wrong. A refusal nobody can act on costs the
+   * same as a bug.
+   */
+  const tooLong = finding({ lane: 'lead_journey_kpi', findingId: 'a'.repeat(65) });
+  const error = refusal(() => validateLaneFinding(tooLong, { lane: 'lead_journey_kpi' }));
+  assert.equal(error.code, 'LANE_FINDING_INVALID');
+  assert.match(error.detail, /65 characters, limit is 64/u);
+
+  // 64 exactly is fine, and the boundary is the thing worth pinning.
+  assert.doesNotThrow(() => validateLaneFinding(
+    finding({ lane: 'lead_journey_kpi', findingId: 'a'.repeat(64) }),
+    { lane: 'lead_journey_kpi' },
+  ));
+  // And a genuinely malformed id still says so in the other terms.
+  const shouty = refusal(() => validateLaneFinding(finding({ lane: 'lead_journey_kpi', findingId: 'Not_Snake_Case' }), { lane: 'lead_journey_kpi' }));
+  assert.match(shouty.detail, /lower-case letters, digits and underscores/u);
+});
+
+/**
+ * A fixture big enough that the SHARED anchors are actually HUBS, which is the only situation the
+ * overlap merge exists for. Two findings never reach it: nothing is common enough to be excluded, so
+ * they merge on anchors alone in the first pass and prove nothing about the second.
+ *
+ * `hubAnchors` floors its cap at 3, so an anchor must appear in FOUR findings to be excluded. Twelve
+ * findings total: four share one wide anchor set, eight carry their own.
+ */
+function wideSet(mechanism, findingId, lane) {
+  return finding({
+    lane,
+    findingId,
+    mechanism,
+    anchors: {
+      kpiEdgeIds: ['e1', 'e2', 'e3'],
+      workflowNames: ['w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7', 'w8'],
+      journeyStages: ['conversation'],
+    },
+  });
+}
+
+function fillers(count, lane = 'conversation_copy_ai') {
+  return Array.from({ length: count }, (unused, index) => finding({
+    lane,
+    findingId: `filler_${index}`,
+    anchors: { kpiEdgeIds: [`filler_edge_${index}`], workflowNames: [], journeyStages: [] },
+  }));
+}
+
+test('broadly-anchored findings about the same thing MERGE, even though every shared anchor is a hub', () => {
+  /*
+   * The hub filter's mirror-image failure, measured on the real run. Three lanes each filed "nothing
+   * in this account reacts when a lead replies", anchored across 6, 13 and 10 workflows. Anchoring
+   * that broadly means every anchor they share is common, so `hubAnchors` excluded ALL of them and the
+   * findings had nothing left to merge on: 28 findings became 22 causes with visible duplicates.
+   */
+  const investigation = investigateRootCause({
+    laneAnalyses: {
+      lead_journey_kpi: [
+        wideSet('ownership_or_handoff', 'nobody_reacts_to_a_reply', 'lead_journey_kpi'),
+        wideSet('ownership_or_handoff', 'reply_goes_nowhere', 'lead_journey_kpi'),
+      ],
+      workflow_config_runtime: [
+        wideSet('ownership_or_handoff', 'no_inbound_message_trigger', 'workflow_config_runtime'),
+        wideSet('ownership_or_handoff', 'no_reply_route_at_all', 'workflow_config_runtime'),
+      ],
+      conversation_copy_ai: fillers(8),
+    },
+    briefsHash: 'f'.repeat(64),
+  });
+
+  const sizes = investigation.causes.map((cause) => cause.findings.length).sort((a, b) => b - a);
+  /*
+   * THREE of the four merge, not all four, and that is the size guard working rather than a bug. An
+   * anchor needs four findings to count as a hub, and a cause may not exceed that same limit, so a
+   * fully-merged wide group can never be larger than the threshold that separated it. The guard is
+   * what stops this pass rebuilding the single 24-finding blob the hub filter was written to prevent.
+   */
+  assert.equal(sizes[0], 3, 'the duplicates must merge up to the size guard');
+  const merged = investigation.causes.find((cause) => cause.findings.length === 3);
+  assert.ok(merged.corroboratingLanes.length >= 2, 'a merged cause must credit every lane in it');
+});
+
+test('a different mechanism is never merged, however much the anchors overlap', () => {
+  /*
+   * The guard that keeps this pass honest. On the real run it is what kept "announces a final message
+   * and then sends more" separate from "nothing reacts to a reply", which share almost every anchor.
+   *
+   * Two pairs here, identical anchors, different families. Ignoring mechanism would let all four
+   * merge and the size guard would cut it to [3, 1]; respecting it gives two clean pairs.
+   */
+  const investigation = investigateRootCause({
+    laneAnalyses: {
+      lead_journey_kpi: [
+        wideSet('ownership_or_handoff', 'handoff_one', 'lead_journey_kpi'),
+        wideSet('ownership_or_handoff', 'handoff_two', 'lead_journey_kpi'),
+      ],
+      workflow_config_runtime: [
+        wideSet('delivery_failure', 'delivery_one', 'workflow_config_runtime'),
+        wideSet('delivery_failure', 'delivery_two', 'workflow_config_runtime'),
+      ],
+      conversation_copy_ai: fillers(8),
+    },
+    briefsHash: 'f'.repeat(64),
+  });
+
+  const sizes = investigation.causes.map((cause) => cause.findings.length).sort((a, b) => b - a);
+  assert.deepEqual(sizes, [2, 2, 1, 1, 1, 1, 1, 1, 1, 1]);
+});
+
+test('journey stages alone never merge two causes', () => {
+  /*
+   * Including stages in the overlap test collapsed 27 real findings into 7 causes, several holding
+   * seven unrelated problems, because every finding on this account names `conversation`.
+   */
+  const investigation = investigateRootCause({
+    laneAnalyses: {
+      lead_journey_kpi: [finding({ lane: 'lead_journey_kpi', findingId: 'stage_only_one',
+        anchors: { kpiEdgeIds: ['unique_a'], workflowNames: [], journeyStages: ['conversation', 'attended'] },
+      })],
+      workflow_config_runtime: [finding({ lane: 'workflow_config_runtime', findingId: 'stage_only_two',
+        anchors: { kpiEdgeIds: ['unique_b'], workflowNames: [], journeyStages: ['conversation', 'attended'] },
+      })],
+      conversation_copy_ai: [],
+    },
+    briefsHash: 'f'.repeat(64),
+  });
+  assert.equal(investigation.causeCount, 2);
+});
+
+test('a safety finding is ranked as heavily as a commercial one, and is optional', () => {
+  /*
+   * The live run ranked an active voice agent carrying another company's script, with a webhook
+   * secret in a field the model reads, at 21 OF 22 -- correctly under the old rules, because every
+   * criterion measured money and a credential exposure costs none.
+   */
+  const lowMoney = {
+    commercialImpact: 'LOW', leadsAffected: 'LOW', urgency: 'LOW',
+    implementationEffort: 'LOW', risk: 'LOW', testability: 'HIGH',
+  };
+  const rank = (scoring) => investigateRootCause({
+    laneAnalyses: {
+      lead_journey_kpi: [finding({ lane: 'lead_journey_kpi', findingId: 'the_one', scoring })],
+      workflow_config_runtime: [],
+      conversation_copy_ai: [],
+    },
+    briefsHash: 'f'.repeat(64),
+  }).causes[0].rankScore;
+
+  const withoutSafety = rank(lowMoney);
+  const withSafety = rank({ ...lowMoney, safetyOrCompliance: 'CRITICAL' });
+  assert.ok(withSafety > withoutSafety, 'a critical safety exposure must outrank the same finding without one');
+
+  // Absent is the normal case and must score exactly as before the field existed.
+  assert.equal(rank({ ...lowMoney, safetyOrCompliance: 'NONE' }), withoutSafety);
+
+  // Present and misspelled is REFUSED, because scoring zero silently is how it gets buried twice.
+  const typo = refusal(() => validateLaneFinding(
+    finding({ lane: 'lead_journey_kpi', findingId: 'typo_band', scoring: { ...lowMoney, safetyOrCompliance: 'SEVERE' } }),
+    { lane: 'lead_journey_kpi' },
+  ));
+  assert.match(typo.detail, /safetyOrCompliance, when given, must be/u);
+});

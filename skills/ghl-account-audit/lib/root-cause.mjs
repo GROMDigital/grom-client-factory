@@ -68,6 +68,24 @@ export const CONFIDENCE = Object.freeze(['C0', 'C1', 'C2', 'C3']);
  */
 export const RANKING_WEIGHTS = Object.freeze({
   commercialImpact: 5,
+  /*
+   * SAFETY IS WEIGHTED LIKE COMMERCIAL IMPACT, and the first live four-stage run is why.
+   *
+   * It found an active voice agent carrying another company's script and a webhook secret in a field
+   * the model can read, and RANKED IT 21 OF 22. Correctly, by the rules as they stood: every
+   * criterion here asked how much money the problem costs, a credential or a compliance exposure
+   * costs none directly, so it scored LOW impact and sank. The same run found all four AI agents
+   * dodging "are you a bot" and one instructed to deny it outright, which in the UK is a regulatory
+   * question rather than a conversion one, and it landed at 12.
+   *
+   * A backlog that buries those under copy tweaks is telling the reader something false about
+   * priority. So a finding may now declare `safetyOrCompliance`, and it is weighted equally with
+   * money, because a business does not trade one off against the other.
+   *
+   * OPTIONAL, defaulting to NONE. Making it required would have invalidated every finding of the run
+   * that exposed the gap, and a finding that simply has no safety dimension is the normal case.
+   */
+  safetyOrCompliance: 5,
   evidenceStrength: 4,
   leadsAffected: 3,
   urgency: 2,
@@ -134,8 +152,19 @@ export function validateLaneFinding(finding, { lane } = {}) {
     throw Object.assign(codedError('LANE_FINDING_INVALID'), { detail });
   };
   if (!isPlainObject(finding)) fail('not a record');
-  if (typeof finding.findingId !== 'string' || !/^[a-z][a-z0-9_]{2,63}$/u.test(finding.findingId)) {
-    fail('findingId must be a short snake_case slug');
+  /*
+   * SAY WHICH RULE WAS BROKEN. The first live four-stage run lost a real finding here -- twelve paid
+   * enquiries never contacted at all -- to an id of SIXTY-FIVE characters, one over the limit. The
+   * message said "must be a short snake_case slug", so the obvious reading was that the characters
+   * were wrong when the length was the only problem. A refusal nobody can act on costs the same as a
+   * bug.
+   */
+  if (typeof finding.findingId !== 'string') fail('findingId missing');
+  if (finding.findingId.length > 64) {
+    fail(`findingId is ${finding.findingId.length} characters, limit is 64`);
+  }
+  if (!/^[a-z][a-z0-9_]{2,63}$/u.test(finding.findingId)) {
+    fail('findingId must be lower-case letters, digits and underscores, starting with a letter');
   }
   if (lane !== undefined && finding.lane !== lane) fail('lane mismatch');
   if (!LANES.includes(finding.lane)) fail('unknown lane');
@@ -183,6 +212,15 @@ export function validateLaneFinding(finding, { lane } = {}) {
   if (!isPlainObject(scoring)) fail('scoring missing');
   for (const key of ['commercialImpact', 'leadsAffected', 'urgency', 'implementationEffort', 'risk', 'testability']) {
     if (band(scoring[key]) === null) fail(`scoring.${key} must be NONE/LOW/MEDIUM/HIGH/CRITICAL`);
+  }
+  /*
+   * OPTIONAL, but not optional to get right. Absent means the finding has no safety or compliance
+   * dimension, which is the normal case and scores zero. PRESENT AND MISSPELLED would also score
+   * zero, silently, which is how a credential exposure ends up ranked below a copy tweak for a second
+   * time. So a value that is there must be a real band.
+   */
+  if (scoring.safetyOrCompliance !== undefined && band(scoring.safetyOrCompliance) === null) {
+    fail('scoring.safetyOrCompliance, when given, must be NONE/LOW/MEDIUM/HIGH/CRITICAL');
   }
   if (typeof finding.fix !== 'string' || finding.fix.trim().length === 0) fail('fix is required');
   return finding;
@@ -325,7 +363,101 @@ function groupByAnchor(findings) {
     });
   };
 
-  return split(findings, hubs);
+  return mergeByOverlap(split(findings, hubs), limit);
+}
+
+/**
+ * SECOND PASS: MERGE TWO CAUSES THAT ARE OBVIOUSLY THE SAME PROBLEM.
+ *
+ * The hub filter fixed one failure and created its mirror image. Measured on the first live run of
+ * the four-stage chain: 28 findings became 22 causes, and three of them were "nothing in this account
+ * reacts when a lead replies", filed independently by all three lanes.
+ *
+ * WHY THEY DID NOT MERGE. Each named 6, 13 and 10 workflows and up to 8 KPI edges. Anchoring that
+ * broadly means every anchor they share is, by definition, common -- so `hubAnchors` excluded ALL of
+ * them and left the three findings with nothing to merge on. The hub rule exists to stop a common
+ * anchor dragging an unrelated NARROW finding into a cause. It misfires when BOTH findings are broad,
+ * which is exactly what an account-wide lane produces.
+ *
+ * So rarity is the wrong test on its own. Two findings that overlap across most of their anchors are
+ * about the same thing whether or not those anchors are individually popular, and the mechanism
+ * family is what stops that becoming "everything at the conversation stage is one cause": the three
+ * reply findings all named `ownership_or_handoff`, while the two "announces a final message and then
+ * sends more" findings named `workflow_configuration_or_execution` and stay separate, correctly.
+ *
+ * The size guard is kept. A merge that would push a cause past the same limit `split` enforces is
+ * refused, so this can never rebuild the single blob the hub filter was written to prevent.
+ */
+/*
+ * TWO THRESHOLDS, BOTH REQUIRED, and the measurements that forced that.
+ *
+ * Taken from the 27 accepted findings of the first live four-stage run, comparing pairs that plainly
+ * ARE one problem against pairs that plainly are not:
+ *
+ *                                              containment   jaccard
+ *   MERGE  "nobody reacts to a reply" x2             0.94       0.68
+ *   MERGE  "announces a final message, sends more"   0.90       0.75
+ *   KEEP   AI agents deny being a bot / no reply     1.00       0.24
+ *   KEEP   offer missing / nurture hypocrisy         0.83       0.38
+ *   KEEP   appointment outcomes / unasked question   0.67       0.43
+ *
+ * NEITHER MEASURE SEPARATES THEM ALONE. Containment says merge the bot finding with the reply
+ * finding, because the smaller one's three anchors all appear in the larger one's thirteen. Jaccard
+ * puts a pair that must merge (0.43) exactly level with a pair that must not (0.43). Requiring both
+ * separates cleanly, with the closest wrong merge two thresholds away from qualifying.
+ *
+ * JOURNEY STAGES ARE EXCLUDED FROM BOTH. Every finding on this account names `conversation` and
+ * `attended`, so including stages pushed unrelated pairs to 0.75 containment and collapsed 27
+ * findings into 7 causes, several of them holding seven unrelated problems. Stages are context, and
+ * `groupByAnchor` already refuses them as merge keys for the same reason.
+ *
+ * THIS IS DELIBERATELY CONSERVATIVE. It merges the pairs no reader would accept as separate and
+ * leaves genuinely arguable ones alone: one of the three reply findings stays its own cause because
+ * it is framed differently enough that the numbers cannot tell. Judging THOSE is the running-order
+ * expert's job, not arithmetic's. A false merge hides a real problem, which is worse than a duplicate
+ * a reader can see and dismiss.
+ */
+const OVERLAP_MERGE_CONTAINMENT = 0.85;
+const OVERLAP_MERGE_JACCARD = 0.6;
+
+/** The DISCRIMINATING anchors only. Stages are excluded, for the reason above. */
+function allAnchors(finding) {
+  return new Set([
+    ...(finding.anchors.kpiEdgeIds ?? []).map((id) => `kpi:${id}`),
+    ...(finding.anchors.workflowNames ?? []).map((name) => `workflow:${name}`),
+  ]);
+}
+
+function saysSameThing(left, right) {
+  if (left.mechanism !== right.mechanism) return false;
+  const a = allAnchors(left);
+  const b = allAnchors(right);
+  if (a.size === 0 || b.size === 0) return false;
+  let shared = 0;
+  for (const key of a) if (b.has(key)) shared += 1;
+  const containment = shared / Math.min(a.size, b.size);
+  const jaccard = shared / new Set([...a, ...b]).size;
+  return containment >= OVERLAP_MERGE_CONTAINMENT && jaccard >= OVERLAP_MERGE_JACCARD;
+}
+
+function mergeByOverlap(causes, limit) {
+  const merged = causes.map((group) => [...group]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    outer: for (let i = 0; i < merged.length; i += 1) {
+      for (let j = i + 1; j < merged.length; j += 1) {
+        if (merged[i].length + merged[j].length > limit) continue;
+        const same = merged[i].some((left) => merged[j].some((right) => saysSameThing(left, right)));
+        if (!same) continue;
+        merged[i] = [...merged[i], ...merged[j]];
+        merged.splice(j, 1);
+        changed = true;
+        break outer;
+      }
+    }
+  }
+  return merged;
 }
 
 /**
@@ -362,6 +494,8 @@ function scoreCause(findings) {
    */
   const parts = {
     commercialImpact: best('commercialImpact') * RANKING_WEIGHTS.commercialImpact + 0,
+    // Absent means NONE, so a finding with no safety dimension scores exactly as it did before.
+    safetyOrCompliance: best('safetyOrCompliance') * RANKING_WEIGHTS.safetyOrCompliance + 0,
     evidenceStrength: evidenceStrength * RANKING_WEIGHTS.evidenceStrength + 0,
     leadsAffected: best('leadsAffected') * RANKING_WEIGHTS.leadsAffected + 0,
     urgency: best('urgency') * RANKING_WEIGHTS.urgency + 0,

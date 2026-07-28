@@ -79,10 +79,15 @@ Six well-argued findings beat twenty observations. For each thing you raise, do 
 Return JSON only. An array of findings, each in exactly this shape. It is validated strictly and a
 malformed finding is discarded, so nothing you say survives if the shape is wrong.
 
+**`findingId` must be AT MOST 64 CHARACTERS**, lower-case letters, digits and underscores, starting
+with a letter. Three or four words, like the example below. It is a handle, not a summary: the title
+is where the sentence goes. A real finding has already been thrown away here for being 65 characters
+long, so count them.
+
 ```json
 [
   {
-    "findingId": "short_snake_case_slug",
+    "findingId": "no_sms_on_lead_form_traffic",
     "lane": "<your lane id, exactly as given>",
     "title": "One plain line stating the problem, not the metric.",
     "mechanism": "one of the nine families listed in your lane brief",
@@ -106,6 +111,7 @@ malformed finding is discarded, so nothing you say survives if the shape is wron
     "sizing": "Money where possible. Otherwise leads, bookings or conversations, and say the currency value is unknown.",
     "scoring": {
       "commercialImpact": "NONE | LOW | MEDIUM | HIGH | CRITICAL",
+      "safetyOrCompliance": "NONE | LOW | MEDIUM | HIGH | CRITICAL",
       "leadsAffected": "NONE | LOW | MEDIUM | HIGH | CRITICAL",
       "urgency": "NONE | LOW | MEDIUM | HIGH | CRITICAL",
       "implementationEffort": "NONE | LOW | MEDIUM | HIGH | CRITICAL",
@@ -121,6 +127,16 @@ malformed finding is discarded, so nothing you say survives if the shape is wron
 findings are merged by what they point at. Anchor precisely, using the exact KPI edge ids, workflow
 names and stage names from your brief. A finding anchored loosely gets merged with the wrong cause;
 one anchored to nothing is discarded.
+
+**`scoring.safetyOrCompliance` is the ONLY OPTIONAL field in the shape above.** Omit it entirely, or
+set it to `NONE`, unless it genuinely applies. It is for harm that is not measured in conversion: a credential or
+secret sitting where it can be read or repeated. A regulatory exposure, such as an AI agent telling a
+member of the public it is human. Anything that would embarrass the business or breach a duty if it
+came out. Leave it off entirely when it does not apply, which is most findings. When it does apply,
+it is weighted as heavily as commercial impact, because a business does not trade one against the
+other. It exists because a real run buried an active agent carrying another company's script, with a
+webhook secret in a field the model reads, at position 21 of 22, on the correct grounds that it costs
+no money.
 
 `scoring.implementationEffort` and `scoring.risk` are COSTS and count against your finding. Be
 honest about them: a cheap low-risk fix that can be verified next week is worth more than an
