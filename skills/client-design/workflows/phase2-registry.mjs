@@ -117,12 +117,17 @@ Read only the named files. Your final message is data, not prose.`,
 phase('Architecture')
 const REGISTRY_SUMMARY = {
   type: 'object',
-  required: ['client_key', 'no_lps', 'no_voice', 'no_chat_ai', 'lps', 'workflows', 'doc_index', 'summary_for_human'],
+  required: ['client_key', 'no_lps', 'no_voice', 'no_chat_ai', 'no_phone_compliance', 'no_domains_deliverability', 'lps', 'workflows', 'doc_index', 'summary_for_human', 'fields_and_tags_for_human'],
   properties: {
     client_key: { type: 'string' },
     no_lps: { type: 'boolean' },
     no_voice: { type: 'boolean' },
     no_chat_ai: { type: 'boolean' },
+    // Opt-in as of 2026-07-28: Grom executes phone compliance and domain setup
+    // by hand, so both default to skipped. Their content still exists in
+    // registry section 8, which golive-checklist and voice-ai fall back to.
+    no_phone_compliance: { type: 'boolean' },
+    no_domains_deliverability: { type: 'boolean' },
     lps: { type: 'array', items: { type: 'object', required: ['slug', 'purpose'], properties: { slug: { type: 'string' }, purpose: { type: 'string' } } } },
     workflows: { type: 'array', items: { type: 'object', required: ['number', 'name'], properties: { number: { type: 'string' }, name: { type: 'string' } } } },
     doc_index: { type: 'array', items: { type: 'object', required: ['file', 'owner_role'], properties: { file: { type: 'string' }, owner_role: { type: 'string' } } } },

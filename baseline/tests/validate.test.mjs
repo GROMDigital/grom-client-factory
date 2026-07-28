@@ -202,6 +202,18 @@ test("--docs catches a document that was started and abandoned", () => {
   assert.match(r.out, /^DOC_STUB\tdesign\/stub\.md\t.*bytes/m, r.out);
 });
 
+test("per-workflow docs under design/workflows/ are treated as customer copy", () => {
+  // 07-journey-and-workflows.md was split into one document per workflow so the
+  // audit fixer loads a small file instead of 73KB. Those files carry the real
+  // SMS and email copy, and their basenames are per-client slugs no name
+  // pattern can match, so the rule is the directory.
+  const r = run(fixture("workflow-split"), "--conformance");
+  assert.equal(r.code, 1);
+  assert.match(r.out, /^EM_DASH\tdesign\/workflows\/01-meta-lead-intake\.md\t/m, r.out);
+  // and the exemption still holds for internal analysis prose beside it
+  assert.doesNotMatch(r.out, /^EM_DASH\tdesign\/business-and-offer-brief\.md/m, r.out);
+});
+
 // --- the code repair that replaced 24 fixer agents ------------------------
 
 test("code repair clears every mechanical claims defect", () => {

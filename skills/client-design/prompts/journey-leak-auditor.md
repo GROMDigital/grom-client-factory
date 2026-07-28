@@ -24,6 +24,8 @@ Read these, in this order:
 3. The journey-and-workflows doc: your PRIMARY input, holding the master journey
    and every workflow spec (triggers, ordered steps, step ids, waits, goals,
    embedded alerts, where each path exits). Trace against this first.
+
+🔴 CHANGED 2026-07-28: the per-workflow specs no longer live in the journey document. It now holds the master journey map, the edge-case matrix and an index table only. Every workflow's full spec, including its actual message copy, is a separate file under `design/workflows/`, one per workflow, listed in the registry doc index and owned by `workflow-designer`. Read the journey document for the shape and the index, then read the per-workflow files you need. A pass that reads only the journey document now sees no copy and no steps at all.
 4. The conversation-ai doc: the chat AI, its wake and handoff behavior.
 5. The voice-ai doc: any voice agent, its call flows and handoffs.
 6. The calendars-booking-payments doc: booking, deposit, and payment mechanics.

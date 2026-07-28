@@ -3,6 +3,105 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-28: **the factory lean redesign, built.** Agreed with Xander line by
+  line after measuring the Better By Ati standard-path run: 53 agents against an
+  estimate of 18, $43.40 against $15-20, and a closing `validate.mjs` that
+  FAILED. Spec: `docs/superpowers/specs/2026-07-28-factory-lean-redesign.md`.
+  Correctness first, economy second, in that order deliberately.
+
+  **Nothing may delete work.** Three of the 24 conformance fixer agents met
+  `CLAIMS_ORPHAN_SIDECAR`, a rule their prompt did not cover, improvised, and
+  deleted five claims sidecars carrying 25 fill tokens. The system built to
+  guarantee every token reaches the client destroyed that guarantee for five
+  documents. Mechanical repair is now `baseline/conformance_fix.mjs`, code, which
+  renames deterministically, creates what is missing, reconciles declared tokens
+  against real ones, and NEVER deletes a file: its worst accepted outcome is
+  leaving one for a human. Only em dashes in customer-facing copy still need
+  judgement, so ONE agent takes those, and only when there are any. 24 agents to
+  0 or 1, run once per workflow rather than once per wave.
+
+  **The validator was the liar.** All nine violations in that failing closing run
+  were its own fault. Sidecars are written to `design/claims/` AND
+  `build/<run>/claims/` and it only read the second, which is what told those
+  fixers the files were orphans. It never scanned the client-root documents
+  (`go-live-checklist.md`, `post-launch-onboarding.md`), so their sidecars looked
+  orphaned by construction. And `{{FILL_*}}` in the fill guide's own explanatory
+  prose flagged as `MALFORMED_FILL_TOKEN` on three consecutive runs, a violation
+  no fixer could ever clear. All three fixed; `baseline/lib/docscan.mjs` is now
+  shared by the reporter and the repairer so they cannot disagree about what
+  exists again. The build that failed now passes conformance with zero agents.
+
+  **The factory can now notice that something is missing.** It could not before,
+  which is how `workflow-designer` died mid-write, `.filter(Boolean)` discarded
+  the corpse, and the copywriter that reads its document ran against nothing with
+  the run completing healthy. A null agent result now stops its phase by name,
+  and `validate.mjs --docs=a.md,b.md` asserts the registry's promised documents
+  exist and are not stubs. Both stop the run: a restart is cheaper than a build
+  with a hole in it. Xander's call.
+
+  **Findings carry a line number and an anchor.** The cheapest change and the
+  largest measured saving: fixing the workflows doc was 18.9% of the whole run
+  across two rounds, and the fixer spent more effort LOCATING than changing, 56
+  shell commands for 23 edits, because a finding named only its document. The
+  anchor exists because line numbers drift as earlier edits land, so the fixer
+  works highest-line-first and trusts the anchor over the number.
+
+  **One revision round, one audit round.** The registry loop ran up to three
+  rounds but only ENTERED on a surviving `blocker`, so it exited leaving two
+  `important` findings standing, one a Tier-1 data placement breach, caught only
+  because the PM read the findings by hand. It now enters on blocker OR
+  important, runs once, and whatever survives is surfaced at GATE 2. Audit round
+  2 had spent 5.2% of the run to make four edits; it is gone.
+
+  **Two human gates instead of one at the end.** `journey-architect` stops
+  designing a journey, because the journey is standardised, and becomes the
+  proposal writer: `design/build-proposal.md`, about two pages of plain English,
+  the workflows and what each is FOR, the pipeline and which stage-moves are a
+  human's hands, and the open questions. That is GATE 1, and it required
+  splitting `phase12-foundation.mjs` into `phase1-foundation.mjs` and
+  `phase2-registry.mjs`, because a workflow cannot pause for a human. Phase 2
+  carries his decisions verbatim and both the bootstrap and the architect prompt
+  say that where they differ from the document, he wins. Fields and tags are a
+  COUNT plus the surprising few at GATE 1 (Xander's call, option B): the full
+  list would bury the questions. GATE 2 shows the full list instead, from a new
+  `fields_and_tags_for_human`. Registry section 5 was ALWAYS written before the
+  fan-out and always sat behind that gate; the PM simply never displayed it.
+
+  **The two kinds of unknown are separated at both ends.** A VALUE GAP (address,
+  price, alert number) does not change the design and becomes a `{{FILL_*}}`
+  token for the fill guide. A DESIGN QUESTION (deposit? whose diary? course
+  spacing?) changes what gets BUILT and may never be a token: it goes to GATE 1.
+  The proposal classifies them at the source and the fill-guide compiler reports
+  any that reached it as a defect in the run, not a question for the client. On
+  2026-07-28 a build did not know a treatment's course spacing, put a 60-day
+  placeholder in a live timer, and carried on.
+
+  **`phone-compliance` and `domains-deliverability` are opt-in**, both defaulting
+  to skipped, because Xander executes both by hand. 🔴 `golive-checklist` read
+  both by name for its day-1 critical path and its GATED-BY gates, and `voice-ai`
+  read the phone doc for its go-live gating, so both now fall back to registry
+  section 8, which always exists, rather than losing a gate.
+
+  **`07-journey-and-workflows.md` is split into one document per workflow** under
+  `design/workflows/`, so an audit finding loads a small file instead of
+  reloading 73KB on every pass. 🔴 ONE agent still writes them all: 17 agents
+  each paying the ~39.5k floor is exactly the mistake the 24 fixers made. Every
+  file needs a `doc_index` row owned by `workflow-designer` or `ownerOf()`
+  silently drops its fixes, which the architect prompt now says in those words.
+  `isCustomerFacing()` matches the directory, since the basenames are per-client
+  slugs no pattern can catch.
+
+  Also: the compliance auditor stopped hunting em dashes and malformed tokens
+  (both mechanical now, and its em-dash instruction still carried the pre-1.2.1
+  scope, so it manufactured findings against prose the rule no longer covers),
+  and `nurture-copywriter` stopped describing the workflow designer as running in
+  parallel with it, which it has not since the 3b ordering change.
+
+  Baseline suite 13 tests to 21, including a mutation check that the never-delete
+  guarantee actually fails when violated. NOT re-run end to end: a full build is
+  $43, and the spec says test with fixtures and single agents until there is a
+  reason to spend.
+
 - 2026-07-28: **guardrail 2 rescoped to what it is actually for.** It read "no em
   dashes anywhere, in any file, internal or client-visible" and `validate.mjs`
   enforced it on every scanned file. Xander's correction: the rule exists so

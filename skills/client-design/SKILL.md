@@ -160,6 +160,13 @@ Workflow A2 resume or a fresh run, re-gate.
      should agree; trust but verify with ls)
    - residualConflicts from the workflow: confirm each is recorded as a
      precedence note in the fill guide; surface the list to the user
+   - 🔴 `design_questions_found` from the fill-guide compiler. An empty array is
+     the expected result. A non-empty one is a DEFECT IN THE RUN, not a question
+     for the client: it means a token whose answer changes what gets built
+     reached the end of the build, so the docs already contain a placeholder
+     driving real behaviour that nobody agreed to. Report each one to the user
+     by name with what changes, and treat it as work owed, not as a fill-guide
+     row. It should have been caught at GATE 1.
    - blocked modules: re-run individually (see regen) or escalate to the user
 4. Report to the user: deliverables list, fix-loop rounds and counts, residual
    conflicts, blocked modules, the fill guide's sendable client questions

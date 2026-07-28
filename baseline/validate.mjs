@@ -381,6 +381,11 @@ const isCustomerFacing = (f) => {
   if (r.startsWith("lp" + path.sep)) return true;
   if (isClaims(f)) return false;
   if (r.split(path.sep)[0] === "build") return false;
+  // One document per workflow as of 2026-07-28, under design/workflows/. Their
+  // basenames are per-client workflow slugs, so no name pattern can catch them,
+  // but they carry the actual SMS and email copy that used to live in
+  // 07-journey-and-workflows.md and they are checked for the same reason it was.
+  if (r.startsWith(path.join("design", "workflows") + path.sep)) return true;
   return COPY_BEARING.test(path.basename(f));
 };
 
