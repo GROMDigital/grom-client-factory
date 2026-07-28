@@ -21,7 +21,7 @@ const COMMAND_FLAGS = Object.freeze({
   'ingest-review': new Set(['project', 'location', 'run-id', 'response']),
   resume: new Set(['project', 'location', 'run-id', 'vault-key-ref']),
   /*
-   * The analysis cycle, one command per seam. Four stages of expert, and a deterministic command on
+   * The analysis cycle, one command per seam. Five stages of expert, and a deterministic command on
    * both sides of every one of them. See `lib/cycle.mjs` for why the model call can never sit inside
    * the run itself.
    *
@@ -29,11 +29,13 @@ const COMMAND_FLAGS = Object.freeze({
    *   map          stage 1's account map back, stage 2's per-object prompts out
    *   reviews      stage 2's reviews back, stage 3's three lane prompts out
    *   investigate  stage 3's findings back, the investigation out
+   *   plan         stage 5's running order back, the plan out
    */
   briefs: new Set(['project', 'location', 'run-id']),
   map: new Set(['project', 'location', 'run-id', 'map']),
   reviews: new Set(['project', 'location', 'run-id']),
   investigate: new Set(['project', 'location', 'run-id', 'findings']),
+  plan: new Set(['project', 'location', 'run-id', 'plan']),
 });
 const REQUIRED_FLAGS = Object.freeze({
   replay: ['fixture', 'output'],
@@ -45,6 +47,7 @@ const REQUIRED_FLAGS = Object.freeze({
   map: ['project', 'location', 'run-id', 'map'],
   reviews: ['project', 'location', 'run-id'],
   investigate: ['project', 'location', 'run-id', 'findings'],
+  plan: ['project', 'location', 'run-id', 'plan'],
 });
 const LOCATION = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
 
@@ -119,6 +122,7 @@ function safeStatus(value) {
     'briefsHash', 'mapHash', 'analystSetHash', 'investigationHash', 'directory',
     'causeCount', 'corroboratedCauseCount', 'rejectedCount', 'lanes',
     'reviewCount', 'missingCount', 'prompts', 'skipped',
+    'planHash', 'batchCount', 'prerequisiteCount', 'conflictCount', 'workOrderPrompt',
   ]) {
     if (value?.[key] !== undefined) safe[key] = value[key];
   }
@@ -337,6 +341,17 @@ export async function runAuditCli({
         lane, discipline, promptFile, briefFile,
       })),
     };
+  } else if (command === 'plan') {
+    const [{ auditPaths }, { readWorkOrderAnswer, runWorkOrder }] = await Promise.all([
+      import('../lib/paths.mjs'),
+      import('../lib/cycle.mjs'),
+    ]);
+    const summary = runWorkOrder({
+      paths: auditPaths(resolve(flags.project), flags.location),
+      runId: flags['run-id'],
+      plan: readWorkOrderAnswer(resolve(flags.plan)),
+    });
+    result = { status: 'planned', runId: flags['run-id'], ...summary };
   } else if (command === 'investigate') {
     const [{ auditPaths }, { readLaneAnswers, runInvestigation }] = await Promise.all([
       import('../lib/paths.mjs'),

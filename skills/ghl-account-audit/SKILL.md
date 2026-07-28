@@ -106,7 +106,7 @@ path. A public-only or otherwise incomplete evidence run reports
 `complete_partial`. Proposed fixes remain local proposal artifacts for approval
 and are never executed by this skill.
 
-### The analysis cycle (four stages of expert)
+### The analysis cycle (five stages of expert)
 
 `PRODUCT-SPEC.md` is the authority for what this stage is for. Two rules it
 encodes are not negotiable: **the auditor decides what to analyse and is never
@@ -158,6 +158,16 @@ disk, not from a status somebody wrote down.
    name, groups the rest into causes on their anchors, ranks them, and writes
    `INVESTIGATION.md`, `BACKLOG.md`, `investigation.json` and one solution
    package per cause under `audits/ghl/<location>/investigations/<runId>/`.
+
+8. **STAGE 5, one expert.** `audit investigate` also wrote
+   `prompt-work-order.md` into the investigation folder. Dispatch a single
+   subagent with it. It reads every ranked problem and its fix and returns the
+   running order: which problems are one job, what has to land first, and which
+   fixes pull against each other. It may not re-diagnose anything and the contract
+   gives it nowhere to put a new finding.
+9. **`audit plan --project <p> --location <l> --run-id <r> --plan <file>`**
+   validates it (every problem placed exactly once, no invented ids) and writes
+   `PLAN.md`.
 
 The briefs and reviews live under `private/` and quote real message copy, so they
 are evidence and never publication material. Solution packages are for human

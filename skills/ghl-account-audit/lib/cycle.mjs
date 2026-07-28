@@ -3,7 +3,7 @@
  * existed, and nothing called them in sequence, so `audit run` collected 588 real records, measured
  * them, and published an empty report.
  *
- * The chain, end to end. FOUR stages of expert, and a deterministic command on both sides of every
+ * The chain, end to end. FIVE stages of expert, and a deterministic command on both sides of every
  * one of them:
  *
  *   collect -> measure -> buildAnalysisBriefs -> buildAccountMapPrompt
@@ -68,6 +68,7 @@ import { ANALYSTS, buildAllAnalystPrompts } from './lane-analysts.mjs';
 import { buildAgentReviewPrompts, buildWorkflowReviewPrompts } from './object-review.mjs';
 import { compareToHistory, readObservations, recordRun } from './recurrence.mjs';
 import { LANES, investigateRootCause, validateLaneFinding } from './root-cause.mjs';
+import { buildWorkOrderPrompt, renderWorkOrder, validateWorkOrder } from './work-order.mjs';
 import { loadProfile } from '../schemas/v1.mjs';
 
 export const CYCLE_SCHEMA = '1.0.0';
@@ -988,8 +989,23 @@ export function runInvestigation({ paths, runId, answers } = {}) {
     );
   }
 
+  /*
+   * STAGE 5's QUESTION, written here because it is a pure function of the ranked causes and so belongs
+   * on the deterministic side of the seam. The answer comes back through `runWorkOrder`.
+   *
+   * Skipped when there is nothing to plan: a run with no causes needs no running order, and writing a
+   * prompt asking an expert to sequence an empty list wastes an agent and invites it to invent work.
+   */
+  const workOrder = investigation.causes.length > 0
+    ? buildWorkOrderPrompt({ investigation, recurrence })
+    : null;
+  if (workOrder !== null) {
+    writeOnce(join(directory, 'prompt-work-order.md'), `${workOrder.prompt}\n`);
+  }
+
   return {
     directory,
+    workOrderPrompt: workOrder === null ? null : 'prompt-work-order.md',
     briefsHash: index.briefsHash,
     investigationHash: investigation.investigationHash,
     causeCount: investigation.causeCount,
@@ -997,4 +1013,43 @@ export function runInvestigation({ paths, runId, answers } = {}) {
     rejectedCount: rejected.length,
     rejected,
   };
+}
+
+/**
+ * STAGE 5's INGEST. Take the planner's answer back and write the plan a person works from.
+ *
+ * Reads the investigation off disk rather than being handed it, for the same reason every other stage
+ * here reads back rather than recomputing: the plan must be validated against the exact causes that
+ * were ranked, not against a set rebuilt hours later from findings that may have been re-ingested.
+ */
+export function runWorkOrder({ paths, runId, plan: answer } = {}) {
+  const directory = investigationDirectory(paths, runId);
+  const pathname = join(directory, 'investigation.json');
+  if (!existsSync(pathname)) throw codedError('CYCLE_INVESTIGATION_MISSING');
+  const record = readJsonFile(pathname, 'CYCLE_INVESTIGATION_UNREADABLE');
+  const { investigation } = record;
+  if (!isPlainObject(investigation) || !Array.isArray(investigation.causes)) {
+    throw codedError('CYCLE_INVESTIGATION_UNREADABLE');
+  }
+
+  const { plan, planHash } = validateWorkOrder(answer, { investigation });
+  const { index } = readAnalysisArtifacts({ paths, runId });
+  writeOnce(join(directory, 'plan.json'), { schemaVersion: CYCLE_SCHEMA, runId, planHash, plan });
+  writeOnce(join(directory, 'PLAN.md'), renderWorkOrder({ index, plan, investigation }));
+
+  return {
+    directory,
+    planHash,
+    batchCount: plan.batches.length,
+    prerequisiteCount: plan.prerequisites.length,
+    conflictCount: plan.conflicts.length,
+  };
+}
+
+/** Read a stage-5 answer off disk, tolerating a model that wrapped its plan in `{ "plan": ... }`. */
+export function readWorkOrderAnswer(pathname) {
+  const target = resolve(pathname);
+  if (!existsSync(target) || lstatSync(target).isSymbolicLink()) throw codedError('CYCLE_PLAN_MISSING');
+  const value = readJsonFile(target, 'CYCLE_PLAN_UNREADABLE');
+  return isPlainObject(value.plan) ? value.plan : value;
 }
