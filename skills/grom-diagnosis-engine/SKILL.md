@@ -150,7 +150,7 @@ disk, not from a status somebody wrote down.
    ones in the run. The COUNT comes from the account.
 4. **STAGE 2, one expert per object, dispatched in parallel.** Each subagent's
    whole instruction is its `reviews/prompt-*.md`. Add nothing to it. Each sees
-   its object WHOLE: configuration, runtime, every message in full, where it sits
+   its object WHOLE: configuration, runtime WHERE COLLECTED, every message in full, where it sits
    in the account, the KPI edges it should move, and the stage-1 map. Write each
    answer's markdown to the `answerFile` the command named for it.
 5. **`audit reviews --project <p> --location <l> --run-id <r>`** collects them,
@@ -204,6 +204,18 @@ A ledger that cannot be read or written never costs the account its report: the
 comparison is reported as unavailable, which is a different statement from
 "nothing has changed".
 
+
+### 🔴 Runtime coverage is PARTIAL, and must not be described otherwise
+
+A runtime window is requested PER WORKFLOW via `internalAudit.runtimeWorkflowIds`, and it is expensive
+enough that it has never been requested for all of them. Grom UK asked for three. SK Skin asked for
+none. Every workflow without one records `RUNTIME_NOT_REQUESTED`, which is honest, but it means a
+stage-2 expert is usually judging how a workflow is BUILT rather than what it DID.
+
+So: never call a run a whole-account runtime audit, and never let a finding claim a workflow behaved
+a certain way for real contacts unless that workflow actually got a window. The better design, not yet
+built, is for stage 1's map to choose the money-path and booking workflows and collect runtime for
+those, since the map already classifies them and a human should not be maintaining the list.
 
 ## Filing a finished run where the client work lives
 
