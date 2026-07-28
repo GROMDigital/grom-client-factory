@@ -163,6 +163,30 @@ The briefs and reviews live under `private/` and quote real message copy, so the
 are evidence and never publication material. Solution packages are for human
 implementation and approval; nothing in this cycle applies a change.
 
+### Week over week
+
+`audit investigate` records every cause in the account's own ledger and compares
+this run against every run before it, so the backlog carries an **Age** column and
+each problem in the report says whether it is new or has survived since a named
+date. Nothing extra to run: it happens inside step 7.
+
+Identity is derived from the problem, not from what an expert called it: the
+mechanism families plus the discriminating anchors. Experts invent fresh ids every
+week and `causeId` moves with them, so neither can be the join key.
+
+Two rules it will not break:
+
+- **ABSENT IS NOT FIXED.** A cause that stops appearing is listed under "recorded
+  before, absent this week", with the reasons it might have vanished. Nothing in
+  this product verifies a fix yet, so nothing claims one.
+- **A NEAR MISS IS SHOWN, NEVER MATCHED.** Rename a workflow and the fingerprint
+  changes. Rather than loosen identity and risk calling two different problems the
+  same, the report states the overlap and lets the reader judge.
+
+A ledger that cannot be read or written never costs the account its report: the
+comparison is reported as unavailable, which is a different statement from
+"nothing has changed".
+
 ## Boundaries (inherited + plugin)
 
 - GET only, scoped iframe JWT, one location per session, throttle before every

@@ -66,6 +66,7 @@ import { buildAnalysisBriefs } from './analysis-brief.mjs';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { ANALYSTS, buildAllAnalystPrompts } from './lane-analysts.mjs';
 import { buildAgentReviewPrompts, buildWorkflowReviewPrompts } from './object-review.mjs';
+import { compareToHistory, readObservations, recordRun } from './recurrence.mjs';
 import { LANES, investigateRootCause, validateLaneFinding } from './root-cause.mjs';
 import { loadProfile } from '../schemas/v1.mjs';
 
@@ -544,8 +545,9 @@ function sentence(text) {
  * competing explanations nobody ruled out, the strongest evidence against it, and the test that would
  * settle it. That is the difference between a report and a list of assertions.
  */
-export function renderInvestigation({ index, investigation, findings, rejected }) {
+export function renderInvestigation({ index, investigation, findings, rejected, recurrence = null }) {
   const byId = new Map(findings.map((finding) => [`${finding.lane}:${finding.findingId}`, finding]));
+  const history = new Map((recurrence?.causes ?? []).map((entry) => [entry.causeId, entry]));
   const lines = [
     '# Weekly audit: root-cause investigation',
     '',
@@ -600,6 +602,7 @@ export function renderInvestigation({ index, investigation, findings, rejected }
       `· supported by ${cause.corroboratingLanes.length} of 3 lanes `
         + `(${cause.corroboratingLanes.join(', ')})`,
       '',
+      ...causeHistory(history.get(cause.causeId)),
       `**Mechanism:** ${cause.mechanisms.join(', ')}`
         + `${cause.mechanismContested ? ' (the lanes DISAGREE on the family, which is itself information)' : ''}`,
       '',
@@ -676,7 +679,21 @@ export function renderInvestigation({ index, investigation, findings, rejected }
  * Effort and risk are shown next to impact rather than folded away into the score, so the person
  * choosing can override the order for a reason the weights cannot know.
  */
-export function renderBacklog({ index, investigation }) {
+export function renderBacklog({ index, investigation, recurrence = null }) {
+  /*
+   * AGE IS THE COLUMN A READER LOOKS AT SECOND. "Critical, and it was critical three weeks ago" is a
+   * different conversation from "critical, and new this week", and until now the backlog could not
+   * tell them apart.
+   */
+  const byCauseId = new Map((recurrence?.causes ?? []).map((entry) => [entry.causeId, entry]));
+  const age = (causeId) => {
+    const entry = byCauseId.get(causeId);
+    if (!entry) return recurrence?.unavailable ? '?' : 'new';
+    if (entry.status === 'RECURRING') {
+      return `${plural(entry.priorRuns, 'run', 'runs')} before this`;
+    }
+    return entry.nearMatches.length > 0 ? 'new (similar seen before)' : 'new';
+  };
   const rows = investigation.causes.map((cause, position) => {
     /*
      * Highest band across the cause's findings, ordered by SEVERITY and not alphabetically. Sorting
@@ -689,7 +706,8 @@ export function renderBacklog({ index, investigation }) {
         : held
     ), 'NONE');
     return `| ${position + 1} | ${cause.findings[0].title.replaceAll('|', '\\|')} `
-      + `| ${cause.confidence} | ${cause.corroboratingLanes.length}/3 | ${worst('commercialImpact')} `
+      + `| ${age(cause.causeId)} | ${cause.confidence} | ${cause.corroboratingLanes.length}/3 `
+      + `| ${worst('commercialImpact')} `
       + `| ${worst('implementationEffort')} | ${worst('risk')} | ${cause.rankScore} `
       + `| \`${cause.causeId}\` |`;
   });
@@ -699,11 +717,91 @@ export function renderBacklog({ index, investigation }) {
     `Run \`${index.runId}\`, account ${index.locationId}. Ordered by the seven criteria in`,
     'PRODUCT-SPEC.md, with effort and risk counting against.',
     '',
-    '| # | Cause | Confidence | Lanes | Impact | Effort | Risk | Score | Id |',
-    '|---|---|---|---|---|---|---|---|---|',
-    ...(rows.length === 0 ? ['| - | (no causes) | - | - | - | - | - | - | - |'] : rows),
+    ...historyLine(recurrence),
+    '| # | Cause | Age | Confidence | Lanes | Impact | Effort | Risk | Score | Id |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+    ...(rows.length === 0 ? ['| - | (no causes) | - | - | - | - | - | - | - | - |'] : rows),
     '',
+    ...absentSection(recurrence),
   ].join('\n');
+}
+
+/**
+ * How long this exact problem has been on the report.
+ *
+ * A near match is SHOWN rather than treated as a match. Identity is the mechanism plus the
+ * discriminating anchors, so renaming a workflow changes it, and quietly matching across that gap
+ * would let the report claim a problem is recurring when it might be a different one. Stating the
+ * overlap lets a reader make the call the arithmetic cannot.
+ */
+function causeHistory(entry) {
+  if (entry === undefined) return [];
+  if (entry.status === 'RECURRING') {
+    return [
+      `**Seen before.** First recorded ${entry.firstSeenAt}, and it has appeared in `
+        + `${plural(entry.priorRuns, 'earlier run', 'earlier runs')}. It has survived every week since.`,
+      '',
+    ];
+  }
+  if (entry.nearMatches.length === 0) return ['**New this week.**', ''];
+  const [closest] = entry.nearMatches;
+  return [
+    '**New this week, but possibly not.** An earlier run recorded a problem with the same mechanism '
+      + `and ${Math.round(closest.anchorOverlap * 100)}% of the same anchors, first seen `
+      + `${closest.firstSeenAt}. Identity here is the mechanism plus the exact anchors, so a renamed `
+      + 'workflow or a shifted KPI reads as a new problem. Worth checking whether this is that one.',
+    '',
+  ];
+}
+
+/** One line saying what this run could compare itself against. Never silent about having no history. */
+function historyLine(recurrence) {
+  if (recurrence === null) return [];
+  if (recurrence.unavailable) {
+    return [
+      `> The week-over-week comparison could not be made (${recurrence.unavailable}), so every Age`,
+      '> below reads `?`. That is a missing comparison, not a backlog of new problems.',
+      '',
+    ];
+  }
+  if (recurrence.priorRunCount === 0) {
+    return [
+      '> This is the FIRST recorded run for this account, so every problem below is new by',
+      '> definition and Age carries no information yet. From the next run it will.',
+      '',
+    ];
+  }
+  return [
+    `> Compared against ${plural(recurrence.priorRunCount, 'earlier run', 'earlier runs')}: `
+      + `${recurrence.newCount} new, ${recurrence.recurringCount} seen before.`,
+    '',
+  ];
+}
+
+/**
+ * What was here before and is not now. ABSENT, never "fixed".
+ *
+ * A cause can vanish because somebody fixed it, because an expert framed it differently this week,
+ * because its finding was refused, or because the evidence moved. Only a verification would settle it,
+ * and nothing writes one yet. Calling this "resolved" would be the report claiming credit it has not
+ * earned.
+ */
+function absentSection(recurrence) {
+  if (recurrence === null || recurrence.unavailable || (recurrence.absent ?? []).length === 0) return [];
+  return [
+    '## Recorded before, absent this week',
+    '',
+    'This is NOT a list of fixed problems. A cause drops off this report when it is solved, when an',
+    'expert framed it differently, when its finding was refused, or when the evidence moved. Nothing',
+    'here has been verified as fixed.',
+    '',
+    '| Fingerprint | First seen | Last seen | Runs it appeared in |',
+    '|---|---|---|---|',
+    ...recurrence.absent.map(({ fingerprint, firstSeenAt, lastSeenAt, priorRuns }) => (
+      `| \`${fingerprint.slice(0, 12)}\` | ${firstSeenAt} | ${lastSeenAt} | ${priorRuns} |`
+    )),
+    '',
+  ];
 }
 
 /**
@@ -838,6 +936,29 @@ export function runInvestigation({ paths, runId, answers } = {}) {
   const findings = LANES.flatMap((lane) => accepted[lane]);
   const directory = investigationDirectory(paths, runId);
 
+  /*
+   * WEEK OVER WEEK. Read the history BEFORE recording this run, so this run's own observations cannot
+   * make its own causes look recurring.
+   *
+   * Best-effort by design: a ledger that cannot be read or written must not cost the account its
+   * report. `recurrence` becomes null and every renderer says the comparison was unavailable, which is
+   * a different statement from "nothing has changed".
+   */
+  let recurrence = null;
+  try {
+    const observations = readObservations({ paths });
+    recurrence = compareToHistory({ investigation, observations, runId });
+    recordRun({
+      paths,
+      runId,
+      investigation,
+      // The end of the window this evidence covers, never the clock. See `recordRun`.
+      occurredAt: index.collectionWindow?.to ?? briefsIndex.collectionWindow?.to,
+    });
+  } catch (error) {
+    recurrence = { unavailable: error?.code ?? 'RECURRENCE_FAILED' };
+  }
+
   const record = {
     schemaVersion: CYCLE_SCHEMA,
     runId,
@@ -850,14 +971,15 @@ export function runInvestigation({ paths, runId, answers } = {}) {
     reviewsExpected: index.reviewsExpected ?? 0,
     internalRail: index.internalRail,
     rejected,
+    recurrence,
     investigation,
   };
   writeOnce(join(directory, 'investigation.json'), record);
   writeOnce(
     join(directory, 'INVESTIGATION.md'),
-    renderInvestigation({ index, investigation, findings, rejected }),
+    renderInvestigation({ index, investigation, findings, rejected, recurrence }),
   );
-  writeOnce(join(directory, 'BACKLOG.md'), renderBacklog({ index, investigation }));
+  writeOnce(join(directory, 'BACKLOG.md'), renderBacklog({ index, investigation, recurrence }));
   const packages = ensureWithin(paths.auditRoot, join(directory, 'packages'));
   for (const cause of investigation.causes) {
     writeOnce(
