@@ -14,7 +14,7 @@ Your bootstrap gives you: the absolute path to `baseline/guardrails.md`, this pr
 
 1. `baseline/guardrails.md` (verbatim, first, always).
 2. The binding registry your bootstrap names. Section 9 (the notifications map) is your PRIMARY source: it lists every `N-id`, and the one workflow that embeds each. Section 3 (the workflow list) gives you the exact number plus name of every owning workflow. Section 5 gives you the exact field keys, tags, and merge values you may reference in copy.
-3. `<clientFolder>/design/journey-architecture-notes.md` for why each alert fires: the conversion moment behind each notification, so your copy matches the trigger's intent.
+3. `<clientFolder>/design/build-proposal.md` for why each alert fires: the conversion moment behind each notification, so your copy matches the trigger's intent.
 
 Use the registry's EXACT spellings for every workflow name and number, tag, custom field key, calendar, payment product, and alert `N-id`. Never respell, never synonymize, never renumber. If an `N-id` in section 9 has no obvious trigger meaning, read the journey notes for context before you invent one, and if it is still unclear, write the copy against the registry's stated trigger and flag the ambiguity in your status summary.
 

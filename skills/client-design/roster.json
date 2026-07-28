@@ -8,7 +8,7 @@
   "roles": [
     { "id": "client-researcher",      "phase": "1",  "doc": "business-and-offer-brief",  "skip_if": null,        "per_item": null, "registry_sections": null },
     { "id": "ica-brand-voice",        "phase": "1",  "doc": "ica-brand-voice",           "skip_if": null,        "per_item": null, "registry_sections": null },
-    { "id": "journey-architect",      "phase": "1",  "doc": "journey-architecture-notes","skip_if": null,        "per_item": null, "registry_sections": null },
+    { "id": "journey-architect",      "phase": "1",  "doc": "build-proposal","skip_if": null,        "per_item": null, "registry_sections": null },
     { "id": "systems-architect",      "phase": "2",  "doc": "architecture-final",        "skip_if": null,        "per_item": null, "registry_sections": null },
     { "id": "registry-reviewer",      "phase": "2",  "doc": null,                        "skip_if": null,        "per_item": null, "registry_sections": null },
     { "id": "pipeline-fields",        "phase": "3a", "doc": "pipeline-and-stages",       "skip_if": null,        "per_item": null, "registry_sections": ["2", "3", "5", "9", "11"] },

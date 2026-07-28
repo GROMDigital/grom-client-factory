@@ -53,7 +53,7 @@ Applies to NEW builds. Francesca, SK Skin and Alevere do not migrate.
    roles, labeled "final roster is decided by the registry"), and rough agent
    count. Get an explicit user yes. Wrong folder or ambiguity = stop.
 
-## Phase 1-2: foundation + registry (Workflow A)
+## Phase 1: foundation + the build proposal (Workflow A1)
 
 1. Compute version stamps: plugin commit SHA (`git -C <plugin> rev-parse --short HEAD`),
    each dependency's SHA + dirty flag from ~/.grom-factory.json paths.
@@ -61,23 +61,55 @@ Applies to NEW builds. Francesca, SK Skin and Alevere do not migrate.
    copy templates/run-manifest.json in, fill run_date/mode/client_folder/
    plugin_sha/dependency_shas, phase0_intake=done. runDate = today, YYYY-MM-DD.
 3. Launch the Workflow tool with scriptPath
-   `<plugin>/skills/client-design/workflows/phase12-foundation.mjs` and args:
+   `<plugin>/skills/client-design/workflows/phase1-foundation.mjs` and args:
    { runDate, clientFolder, pluginRoot, promptsDir, baselineDir,
      versionStamps, strategyPath, capturePath, materialsInventory }.
 4. On completion: if it returned failed/blocked, surface verbatim and stop.
-   Record the workflow run id in the run manifest (phase12_workflow=done).
-5. THE STOP CONDITIONS ARE NOT ADVISORY. Both workflows can return
-   `failed: '<phase>-agent-died'` (an agent returned nothing, so its document
-   was never written) or `failed: '...-documents-missing'` /
-   `failed: 'closing-check-failed'` (the registry promised a document that is
-   absent or is a stub). Neither is recoverable by carrying on. Report which
-   role and which document, then re-run that role via regen or resume. Do NOT
-   proceed to the next phase, and do NOT report the build as finished. On
-   2026-07-28 `workflow-designer` died mid-write, the dependent copywriter ran
-   against nothing, and the run completed looking healthy; that is the exact
-   outcome these returns exist to prevent.
+   Record the workflow run id in the run manifest (phase1_workflow=done).
 
-## POST-REGISTRY GATE (hard gate, one message)
+## GATE 1: the build proposal (hard gate, added 2026-07-28)
+
+Nothing has been built. This is the cheap moment, and it is the one the factory
+did not have: the 2026-07-28 run put its only approval gate after 53 agents and
+$37 of spend, which is not a conversation, it is a receipt.
+
+Present `<client>/design/build-proposal.md` to the user. Do not summarise it and
+do not paraphrase it: it was written to be read, in about two pages, in plain
+English. Point at it, then surface these three things directly in your message:
+
+1. **The workflow list**, with anything marked `ADDED` or `SKIP?` called out.
+   Cutting a workflow he will never action is free here and expensive later.
+2. 🔴 **`design_questions` from the workflow return, one per line, in full**,
+   each with what changes depending on the answer. THESE MUST BE ANSWERED BEFORE
+   PHASE 2 RUNS. They are forks in the build, not blanks in a document. On
+   2026-07-28 nobody asked how far apart a treatment course's sessions were, so
+   a 60-day placeholder went into a live timer and the build carried on.
+3. **The count of value gaps** (`value_gap_count`). These are NOT for him: they
+   are `{{FILL_*}}` tokens the client answers at the end. Name the count so he
+   knows the fill guide's size, and move on.
+
+Capture his decisions VERBATIM, in his words, as the `gate1Decisions` string.
+Do not tidy them into specification language: phase 2 is told he overrides the
+document wherever they differ, so his exact words are the input. If he cuts a
+workflow, that is a decision, not a suggestion.
+
+## Phase 2: the binding registry (Workflow A2)
+
+Launch scriptPath `<plugin>/skills/client-design/workflows/phase2-registry.mjs`
+with Workflow A1's args plus `{ gate1Decisions }`. The architect writes the
+registry FROM the agreed proposal. Record the run id (phase2_workflow=done).
+
+🔴 THE STOP CONDITIONS ARE NOT ADVISORY, in any of the three workflows. Each can
+return `failed: '<phase>-agent-died'` (an agent returned nothing, so its document
+was never written), `failed: '...-documents-missing'`, or
+`failed: 'closing-check-failed'` (a promised document is absent or is a stub).
+Neither is recoverable by carrying on. Report which role and which document, then
+re-run that role via regen or resume. Do NOT proceed to the next phase, and do
+NOT report the build as finished. On 2026-07-28 `workflow-designer` died
+mid-write, the dependent copywriter ran against nothing, and the run completed
+looking healthy; that is the exact outcome these returns exist to prevent.
+
+## GATE 2: post-registry (hard gate, one message)
 
 Compute registry_hash (`shasum -a 256 <registry file>`), store in run manifest.
 Present to the user: the architect's summary_for_human, the final active
@@ -89,7 +121,16 @@ alerts, the missed-call cooldown, and the deposit chase cadence, that every
 workflow and voice agent will build to), the reviewer's verdict, and the
 validate.mjs floor output. Ask for an explicit go.
 
-🔴 `survivingFindings` from Workflow A is MANDATORY at this gate, quoted in
+🔴 `fields_and_tags_for_human` from the registry summary is MANDATORY at this
+gate. That is registry section 5, the FULL field and tag list in plain English,
+one line each on what it is for and who writes it. It was always written before
+the fan-out and always sat behind this gate; the PM simply never showed it, so
+nobody read it until the build was finished. GATE 1's proposal deliberately
+names only the unusual few, so this is the only place the complete list gets a
+human's eyes before it becomes law. This is why no third gate is needed inside
+phase 3.
+
+🔴 `survivingFindings` from Workflow A2 is MANDATORY at this gate, quoted in
 full, one per line, with its severity. There is one revision pass now and no
 loop, so these are the findings a human is the only remaining backstop for. The
 old three-round loop entered only on a surviving `blocker`, which let two
@@ -98,12 +139,12 @@ breach; it was caught only because the PM happened to read the findings by hand.
 Do not summarise them, do not judge them for the user, and never present a build
 as reviewed-clean while this list is non-empty. This is the last cheap moment to stop; everything after spends
 the fan-out budget. On "no": capture what to change, re-run the architect via
-Workflow A resume or a fresh run, re-gate.
+Workflow A2 resume or a fresh run, re-gate.
 
 ## Phase 3-4: modules + audit (Workflow B)
 
 1. activeRoleIds = roster roles where skip_if is null or falsy in the registry
-   summary. Launch Workflow B (`workflows/phase34-modules.mjs`) with Workflow A's
+   summary. Launch Workflow B (`workflows/phase34-modules.mjs`) with Workflow A2's
    args plus { registryPath, registrySummary, roster (parsed roster.json),
    activeRoleIds }.
 2. On completion, write per-doc entries into the run manifest (docs map with

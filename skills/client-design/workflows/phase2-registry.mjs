@@ -1,13 +1,22 @@
 export const meta = {
-  name: 'client-design-phase12',
-  description: 'Grom client design, phases 1-2: foundation research + binding registry + registry review',
+  name: 'client-design-phase2',
+  description: 'Grom client design, phase 2: the binding registry, written FROM the proposal a human agreed at GATE 1',
   phases: [
-    { title: 'Foundation', detail: '3 parallel researchers' },
-    { title: 'Architecture', detail: 'registry + independent review' },
+    { title: 'Architecture', detail: 'registry + one independent review' },
   ],
 }
 
+// Split out of the old phase12 workflow on 2026-07-28 so GATE 1 can sit in
+// front of it. The architect no longer writes from a machine's proposal: it
+// writes from the version a human corrected, which is the whole point of the
+// gate.
 const A = typeof args === 'string' ? JSON.parse(args) : args
+
+// What the human decided at GATE 1. Free text, in his words, passed straight
+// through. It OVERRIDES the proposal document wherever the two differ, because
+// the document is what he was reacting to.
+const gate1 = (A.gate1Decisions ?? '').trim()
+
 const boot = (roleId, extra) => `You are the "${roleId}" agent in the Grom client-design factory.
 READ FIRST, in this order:
 1. ${A.pluginRoot}/baseline/guardrails.md (binding, verbatim rules)
@@ -18,19 +27,26 @@ Run date: ${A.runDate}
 Strategy doc: ${A.strategyPath}
 Pre-build capture: ${A.capturePath ?? 'none (greenfield account)'}
 Materials inventory: ${A.materialsInventory}
-${extra ?? ''}
+${gate1 ? `
+🔴 GATE 1 DECISIONS. A human read the build proposal at ${A.clientFolder}/design/build-proposal.md and said this. It is binding, and where it differs from the proposal document, HE WINS. Do not re-litigate a decision he has made, do not restore a workflow he cut, and do not treat a question he answered as still open:
+${gate1}
+` : ''}${extra ?? ''}
 Analyze before you write: every choice states its reason grounded in this client's inputs, and any section that could apply to any clinic unchanged is a failure, so adapt it or token it as a question.
 Write your deliverable and claims sidecar exactly where your role prompt says.
-CONFORMANCE IS CHECKED FOR YOU. After you return, ${A.pluginRoot}/baseline/validate.mjs runs over your output and enforces: no em dashes in customer-facing copy and in AI agent instruction text (internal analysis prose is exempt, see guardrail 2), no malformed fill tokens, your sidecar parses, and every {{FILL_*}} in your doc is declared in your sidecar and nothing is declared that is not in the doc. Do NOT spend turns grepping your own output for em dashes, counting tokens, or hand-validating your own JSON. That is measured waste: it costs model calls at your largest context and it is unreliable because it depends on you remembering. Write it correctly, write the sidecar completely, and return. Anything that fails comes back to you as a fix note with exact line numbers.
+CONFORMANCE IS CHECKED FOR YOU. After you return, ${A.pluginRoot}/baseline/validate.mjs runs over your output and enforces: no em dashes in customer-facing copy and in AI agent instruction text (internal analysis prose is exempt, see guardrail 2), no malformed fill tokens, your sidecar parses, and every {{FILL_*}} in your doc is declared in your sidecar and nothing is declared that is not in the doc. Do NOT spend turns grepping your own output for em dashes, counting tokens, or hand-validating your own JSON. That is measured waste: it costs model calls at your largest context and it is unreliable because it depends on you remembering. Write it correctly, write the sidecar completely, and return.
 Your final message is data for the orchestrator, not prose for a human.`
 
-// --- conformance, centralised -------------------------------------------
-// Agents used to enforce guardrails 2 and 3 on themselves by grepping their own
-// output. Measured on the 2026-07-27 baseline that was roughly a quarter of all
-// model calls, made at each agent's LARGEST context, and unreliable: the one
-// agent that skipped its self-check shipped two em dashes. It now runs once per
-// wave, in one cheap call, and routes fixes to a small fixer rather than back
-// through the authoring agent's full context.
+const STATUS = {
+  type: 'object',
+  required: ['doc', 'status', 'summary'],
+  properties: {
+    doc: { type: 'string' },
+    status: { enum: ['done', 'blocked'] },
+    summary: { type: 'string' },
+    fill_tokens_introduced: { type: 'array', items: { type: 'string' } },
+  },
+}
+
 const VIOLATIONS = {
   type: 'object',
   required: ['violations'],
@@ -98,47 +114,6 @@ Read only the named files. Your final message is data, not prose.`,
   return remaining
 }
 
-const STATUS = {
-  type: 'object',
-  required: ['doc', 'status', 'summary'],
-  properties: {
-    doc: { type: 'string' },
-    status: { enum: ['done', 'blocked'] },
-    summary: { type: 'string' },
-    fill_tokens_introduced: { type: 'array', items: { type: 'string' } },
-  },
-}
-
-phase('Foundation')
-const FOUNDATION_ROLES = ['client-researcher', 'ica-brand-voice', 'journey-architect']
-const FOUNDATION_DOCS = [
-  'design/business-and-offer-brief.md',
-  'design/ica-brand-voice.md',
-  'design/journey-architecture-notes.md',
-]
-const foundation = await parallel(FOUNDATION_ROLES.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, schema: STATUS })))
-// A null result is a dead agent, not an absent one. Filtering it out is how
-// 2026-07-28 lost a document and carried on regardless.
-const deadFoundation = FOUNDATION_ROLES.filter((_, i) => !foundation[i])
-if (deadFoundation.length) return { failed: 'foundation-agent-died', dead: deadFoundation, note: 'these agents returned nothing, so their documents were never written' }
-const blocked = foundation.filter((r) => r.status === 'blocked')
-if (blocked.length) return { failed: 'foundation', blocked }
-
-// The foundation set is the architect's only input, so its documents are proved
-// to exist before the architect is paid to read them. There is no separate
-// conformance pass here any more: guardrail 2 exempts internal analysis prose,
-// and a claims defect in a research brief does not change what the architect
-// reads. Conformance now runs once, after the registry.
-const foundationCheck = await conformance('foundation-docs-exist', FOUNDATION_DOCS)
-const foundationMissing = foundationCheck.filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
-if (foundationMissing.length) {
-  return {
-    failed: 'foundation-documents-missing',
-    missingDocs: foundationMissing,
-    note: 'an agent reported success and its document is absent or unfinished; the architect is not run against a hole',
-  }
-}
-
 phase('Architecture')
 const REGISTRY_SUMMARY = {
   type: 'object',
@@ -152,15 +127,25 @@ const REGISTRY_SUMMARY = {
     workflows: { type: 'array', items: { type: 'object', required: ['number', 'name'], properties: { number: { type: 'string' }, name: { type: 'string' } } } },
     doc_index: { type: 'array', items: { type: 'object', required: ['file', 'owner_role'], properties: { file: { type: 'string' }, owner_role: { type: 'string' } } } },
     summary_for_human: { type: 'string' },
+    // 🔴 Section 5 is the full fields and tags list. It was always written
+    // before the fan-out and always sat behind this gate; the PM simply never
+    // showed it, so nobody ever read it until the build was finished. The
+    // proposal at GATE 1 deliberately gives only the unusual ones, so this is
+    // where the complete list gets a human's eyes.
+    fields_and_tags_for_human: {
+      type: 'string',
+      description: 'Registry section 5 restated in plain English: every custom field and tag, one line each on what it is for and who writes it. This is shown to a human at GATE 2.',
+    },
   },
 }
 let registrySummary = await agent(
   boot('systems-architect', `Registry template: ${A.pluginRoot}/skills/client-design/templates/architecture-final.md
 Version stamps to copy into section 13: ${JSON.stringify(A.versionStamps)}
-Write the registry to ${A.clientFolder}/build/${A.runDate}/architecture-final.md`),
+Write the registry to ${A.clientFolder}/build/${A.runDate}/architecture-final.md
+🔴 You are writing FROM an agreed proposal, not from scratch. ${A.clientFolder}/design/build-proposal.md was read and corrected by a human before you ran. Treat its workflow list as decided.`),
   { model: 'sonnet', label: 'systems-architect', schema: REGISTRY_SUMMARY }
 )
-if (!registrySummary) return { failed: 'architect' }
+if (!registrySummary) return { failed: 'architect-agent-died', note: 'the architect returned nothing, so no registry was written' }
 
 const REVIEW = {
   type: 'object',
@@ -174,16 +159,16 @@ let reviewVerdict = await agent(
   boot('registry-reviewer', `Registry to review: ${A.clientFolder}/build/${A.runDate}/architecture-final.md`),
   { model: 'sonnet', label: 'registry-review', schema: REVIEW }
 )
+
 // 🔴 ONE revision pass, and it triggers on `important` as well as `blocker`.
-// The old loop ran up to three rounds but only ever entered on a surviving
-// BLOCKER, so on 2026-07-28 it exited cleanly leaving two `important` findings
-// standing, one of them a Tier-1 data placement breach. It was only fixed
+// The old loop ran up to three rounds but only ever ENTERED on a surviving
+// blocker, so on 2026-07-28 it exited cleanly leaving two `important` findings
+// standing, one of them a Tier-1 data placement breach. It was fixed only
 // because the PM happened to read the findings by hand. A rule the build treats
-// as law is not a matter of severity: if the reviewer says the registry breaches
-// it, the architect revises.
-// The loop is gone as well. Rounds 2 and 3 almost never changed the verdict, and
-// GATE 2 is a human reading this registry before anything is built, which is a
-// better backstop than a third model round.
+// as law is not a matter of severity.
+// The loop is gone too: rounds 2 and 3 almost never changed the verdict, and
+// GATE 2 is a human reading this registry, which is a better backstop than a
+// third model round.
 const needsRevision = (rv) => rv && rv.verdict === 'revise'
   && rv.findings.some((f) => f.severity === 'blocker' || f.severity === 'important')
 
@@ -205,8 +190,6 @@ unfixed goes in front of a human at the gate with your name on it.`),
     { model: 'sonnet', label: 'registry-rereview', schema: REVIEW }
   )
 }
-// Anything still standing is surfaced at GATE 2 rather than looped on. The PM
-// must show it: see SKILL.md, the post-registry gate.
 const survivingFindings = (reviewVerdict?.findings ?? [])
   .filter((f) => f.severity === 'blocker' || f.severity === 'important')
 
@@ -214,7 +197,12 @@ const survivingFindings = (reviewVerdict?.findings ?? [])
 // runs here, before the human gate, over the foundation docs and the registry
 // together. One pass, not one per wave.
 const registryResidual = await fixConformance(
-  await conformance('conformance:registry', [...FOUNDATION_DOCS, `build/${A.runDate}/architecture-final.md`]),
+  await conformance('conformance:registry', [
+    'design/business-and-offer-brief.md',
+    'design/ica-brand-voice.md',
+    'design/build-proposal.md',
+    `build/${A.runDate}/architecture-final.md`,
+  ]),
   'Architecture'
 )
 

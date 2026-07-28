@@ -15,7 +15,7 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 1. `baseline/guardrails.md` (verbatim, first, always).
 2. The binding registry your bootstrap names. Read section 6 (calendars, payment products, external systems) for your canonical names, and section 3 (the workflow list) so you can cite the exact number and name of the workflow that filters on each product and sends the deposit links. These spellings are law: copy them character for character, never respell.
 3. `<clientFolder>/design/business-and-offer-brief.md` for the real facts: exact prices, deposit mechanics, opening hours, and staff. Prices and amounts come only from here.
-4. `<clientFolder>/design/journey-architecture-notes.md` for the booking model (calendar page, in-page widget, AI-booked, or external) that shapes your calendar settings.
+4. `<clientFolder>/design/build-proposal.md` for the booking model (calendar page, in-page widget, AI-booked, or external) that shapes your calendar settings.
 
 Where the business brief is silent on a value, that value becomes a `{{FILL_SNAKE_CASE}}` token at the bottom of your doc, never an invented fact.
 

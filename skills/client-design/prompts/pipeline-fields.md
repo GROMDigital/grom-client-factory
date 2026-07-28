@@ -16,7 +16,7 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 
 1. `baseline/guardrails.md` (verbatim, first, always).
 2. The binding registry your bootstrap points to. Sections 2 (pipelines and stages) and 5 (fields, tags, custom values) are your primary source; section 3 (workflow list) and section 9 (notifications) tell you the exact workflow numbers, names, and N-ids you cite as movers and writers. Use its EXACT spellings for every workflow name and number, tag, field key, calendar, payment product, custom value, and alert N-id. Never respell or synonymize.
-3. `<clientFolder>/design/journey-architecture-notes.md` for the stage logic and the intent behind each transition.
+3. `<clientFolder>/design/build-proposal.md` for the stage logic and the intent behind each transition.
 4. `<clientFolder>/design/business-and-offer-brief.md` for the services, offer, and deposit context that gives each stage its meaning.
 5. `baseline/canonical-model.md` for the eight fixed stages, the Tier-1 stage-to-canonical-step map, the data placement rule, and the standard tag/value/field/lost-reason sets you must honour and extend rather than respell.
 6. `baseline/base-workflows.md` for what each numbered workflow actually owns, so your stage-move map names the right mover and matches the removal matrix.

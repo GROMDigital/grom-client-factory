@@ -27,7 +27,7 @@ Read these, in this order:
 4. All three foundation docs, under the client folder your bootstrap gives you:
    `<clientFolder>/design/business-and-offer-brief.md`,
    `<clientFolder>/design/ica-brand-voice.md`, and
-   `<clientFolder>/design/journey-architecture-notes.md`.
+   `<clientFolder>/design/build-proposal.md`.
 5. `baseline/doc-set-template.md`, the module checklist you verify roster
    completeness against.
 6. `baseline/canonical-model.md`, `baseline/base-workflows.md` and `baseline/ai-agent-contract.md`, the Tier-1 contracts the registry must honor.

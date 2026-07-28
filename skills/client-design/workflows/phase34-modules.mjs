@@ -62,7 +62,7 @@ const STATUS = {
 
 // --- conformance, centralised -------------------------------------------
 // Guardrails 2 and 3 are enforced once per wave by baseline/validate.mjs rather
-// than by every agent grepping its own output. See phase12-foundation.mjs for
+// than by every agent grepping its own output. See phase2-registry.mjs for
 // the measurement that motivated moving it.
 const VIOLATIONS = {
   type: 'object',
