@@ -60,6 +60,21 @@ file staged from captures/. Any exit 1 = stop, sanitize, re-check. Raw files
 are never staged.
 
 
+## The credential, before anything else
+
+The internal rail needs a GoHighLevel JWT that **expires every hour** and can only be captured from a
+real logged-in browser session. Do NOT reimplement that here.
+
+**Run `uxie-ghl-factory:connect`.** That skill owns the capture, and the same plugin owns the
+read-only internal MCP server this engine drives, so the token, the server registration and the
+re-authorize path all live in one place. It writes `<project>/.ghl/uxie-ghl-internal-mcp-tok.txt`,
+which is the path to hand to `--token-file` below.
+
+Check it BEFORE a run, not during: the adapter preflights `auth_status` and refuses to start, and an
+expired credential LATCHES the shared circuit, so the next call on a different tool returns
+`CIRCUIT_OPEN`. On `TOKEN_EXPIRED` or `TOKEN_MISSING`, re-run `uxie-ghl-factory:connect` and retry;
+the server re-reads the file every call, so nothing needs restarting.
+
 ## Setting up an account that has never been audited
 
 ONE command. It reads the account's own `companyId`, `timezone` and name from the location record,
@@ -189,6 +204,42 @@ A ledger that cannot be read or written never costs the account its report: the
 comparison is reported as unavailable, which is a different statement from
 "nothing has changed".
 
+
+## Filing a finished run where the client work lives
+
+A run is PRODUCED in `~/.grom-audit-runs/<label>/`, outside every repo. It is not finished until it
+is filed, because a diagnosis nobody can find is a diagnosis nobody acts on.
+
+```
+node scripts/archive-run.mjs \
+  --project ~/.grom-audit-runs/<label> --location <locationId> --run-id <runId> \
+  --into "/path/to/<client folder>" --account "<Client Name>"
+```
+
+The layout is FIXED for every account and every week, so an agent can be pointed at the folder and
+rely on the shape without being told it. It writes `START-HERE.md` carrying the read order, the
+account's caveats, and what that run could not see.
+
+**The order the deliverables are meant to be used**, and the one to state to anything you point at
+the folder:
+
+| | |
+|---|---|
+| `PLAN.md` | the running order. what to do first, what blocks what. START HERE |
+| `BACKLOG.md` | the ranked problems in one table. the index |
+| `packages/` | one per problem: what to change, how you will know it worked. THE ACTION LIST |
+| `reviews/` | one per workflow and per AI agent. **THE REPLACEMENT COPY LIVES HERE**, message by message |
+| `INVESTIGATION.md` | the full argument, for when you disagree with a finding |
+| `evidence/` | the sealed briefs and every prompt an expert read, so a claim can be traced |
+
+When a package says "rewrite this message", the words are in `reviews/`, not in the package.
+
+**The vault key is deliberately NOT copied.** It is the only thing protecting the raw record of real
+people, and filing it beside the data it protects would defeat it.
+
+The folder is dated by the week the run READ, rendered in the ACCOUNT's timezone. A Sydney account's
+Monday boundary is the previous day in UTC, so using UTC files a Monday run under Sunday and the
+folder names stop agreeing with the evidence inside them.
 
 ## Boundaries (inherited + plugin)
 
