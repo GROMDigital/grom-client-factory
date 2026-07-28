@@ -27,10 +27,10 @@ Read these, in this order:
 4. All three foundation docs, under the client folder your bootstrap gives you:
    `<clientFolder>/design/business-and-offer-brief.md`,
    `<clientFolder>/design/ica-brand-voice.md`, and
-   `<clientFolder>/design/journey-architecture-notes.md`.
+   `<clientFolder>/design/build-proposal.md`.
 5. `baseline/doc-set-template.md`, the module checklist you verify roster
    completeness against.
-6. `baseline/canonical-model.md`, the Tier-1 contracts the registry must honor.
+6. `baseline/canonical-model.md`, `baseline/base-workflows.md` and `baseline/ai-agent-contract.md`, the Tier-1 contracts the registry must honor.
 
 The foundation docs plus `{{FILL_*}}` tokens are the only legitimate origin for a
 load-bearing fact. Anything factual in the registry that traces to neither is an
@@ -42,7 +42,7 @@ You write NO file: no design doc, and no edit to the registry. Your entire outpu
 is the structured verdict returned as your final message, described under "Final
 message" below. Reading and judging is the whole job.
 
-## The seven checks
+## The eight checks
 
 Run every one of these explicitly. Do not stop at the first failure.
 
@@ -78,6 +78,39 @@ Run every one of these explicitly. Do not stop at the first failure.
    cadence each carry an actual number or a `{{FILL_*}}` token. Flag any vague
    policy ("promptly", "a few", "as needed") or any missing mechanism, since the
    workflow and voice agents build to these as binding numbers.
+8. STANDARD BUILD CONFORMANCE. The registry instantiates the Standard Build; it
+   does not redesign it. Check each, and flag any breach as a blocking finding
+   rather than a suggestion:
+   - Every pipeline carries the eight fixed stages from `baseline/canonical-model.md`,
+     spelled exactly and in order. Nothing renamed, reordered or removed. Any
+     appended stage sits after Done and maps to an explicit NULL.
+   - One pipeline per campaign/offer, not one per product or treatment.
+   - Every always-on workflow from `baseline/base-workflows.md` is present on its
+     reserved number; every conditional one matches its stated condition; nothing
+     is renumbered and no reserved number is reused for a different job.
+   - Every ADDED workflow sits at an unused number and names the strategy mechanic
+     that forced it (section 12). An addition with no owning mechanic is a defect.
+   - The removal matrix is reproduced, including that NOTHING removes a contact
+     from the 20-series.
+   - The booking agent is a flow-builder bot, and the availability tag is written
+     immediately BEFORE the booking node. A prompt-based booking agent is a
+     blocking breach: the Booking Started stage cannot exist without it.
+   - Every per-cycle fact an AI captures has a named `stg_` staging slot AND a
+     named copying workflow. A per-cycle value living on a contact field with no
+     staging declaration is a placement-rule breach.
+   - Section 3A fixes the knobs, and `decay_days` exceeds the chase ladder length.
+   - The manifest skeleton (section 10) is `manifest_version: 2`, carries
+     `pipelines[]` with per-pipeline `stage_ids`, and does NOT carry a per-client
+     stage-to-canonical map.
+   - 🔴 **If `booking.model = external`** (04 and 05 not built), check
+     `base-workflows.md` §4A explicitly, because this path is the least
+     exercised in the whole contract: a named SUBSTITUTE writes the Booked stage
+     and carries 04's stage-origin guard, `allowBackward` on the No-Show-origin
+     branch, AND 04's removal row (01, 03, 06, 10); the day-before confirmation
+     ask is resolved to one of §4A.2's three outcomes rather than dropped in
+     silence; `appt:confirmed-yes` is not declared present unless something
+     writes it; and 20's trigger is named for the Booking Started path this
+     client actually uses, since the LP-widget path has no slot-selection event.
 
 ## Claims
 

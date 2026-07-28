@@ -1,0 +1,4 @@
+{
+  "defines": { "fill_tokens": ["FILL_SOMETHING"] },
+  "references": { "fill_tokens": [] }
+}

@@ -6,13 +6,16 @@
   "dependency_shas": {},
   "phase_status": {
     "phase0_intake": "pending",
-    "phase12_workflow": "pending",
-    "post_registry_gate": "pending",
+    "phase1_workflow": "pending",
+    "gate1_proposal": "pending",
+    "phase2_workflow": "pending",
+    "gate2_post_registry": "pending",
     "phase34_workflow": "pending",
     "pm_assembly": "pending"
   },
   "registry_hash": "",
   "docs": {},
   "workflow_run_ids": {},
-  "notes": []
+  "notes": [],
+  "gate1_decisions": ""
 }

@@ -21,7 +21,37 @@ Run every cross-check below across the claim sets. A finding exists wherever two
 
 ### How to run the diff
 
-Build one union index from the sidecars before you judge anything. For each category (workflows, tags, fields, alerts, calendars, products, fill_tokens), collect every name that any sidecar `defines` and every name any sidecar `references`. The registry's `defines` set is authoritative. Then look for three failure shapes:
+🔴 RUN THE CODE PASS FIRST, added 2026-07-28. Before you read anything:
+
+```
+node <pluginRoot>/baseline/validate.mjs <clientFolder> --conformance --reconcile
+```
+
+Everything below the `RECONCILE CANDIDATES` marker is the mechanical half of
+your job, already done, exactly, with FILE AND LINE NUMBERS you would otherwise
+have to hunt for. `RECONCILE_UNDEFINED_REFERENCE` is a name some document cites
+that no document defines. `RECONCILE_DUPLICATE_DEFINITION` is one structural
+name owned by two documents. `RECONCILE_NAME_COLLISION_CANDIDATE` is two names
+that differ only in case, punctuation or plural.
+
+These are CANDIDATES, not findings. The script can see that two strings are
+similar; it cannot see whether they MEAN the same thing. That is your job, and
+it is the reason this role still exists:
+
+- For each collision candidate, decide whether it is ONE concept misspelled (a
+  finding, the registry spelling wins) or genuinely TWO things (not a finding,
+  and say so in one line so nobody re-raises it).
+- For each undefined reference, decide whether it is a real dangling name or a
+  document legitimately discussing something that was deliberately NOT built.
+  Both look identical to the script.
+- Then hunt what the script cannot represent at all: one fill token standing in
+  for two DIFFERENT unknowns, and a concept defined once under two names that
+  are not textually similar (`Deposit Paid` versus `Payment Received`).
+
+Carry each candidate's `line` and `anchor` straight into your finding. Do not
+re-derive a location the script already gave you.
+
+Then build one union index from the sidecars before you judge anything. For each category (workflows, tags, fields, alerts, calendars, products, fill_tokens), collect every name that any sidecar `defines` and every name any sidecar `references`. The registry's `defines` set is authoritative. Then look for three failure shapes:
 
 - Orphan reference: a name in some doc's `references` that appears in no `defines` set, or is not in the registry when the registry is meant to own it.
 - Spelling collision: two near-identical names for one concept (case, punctuation, spacing, singular versus plural, a synonym). Treat the registry spelling as correct and every deviation as the finding.
@@ -59,8 +89,27 @@ You write NO claims sidecar and NO doc. You do not define names, so you have not
 
 Return ONLY this shape, nothing else:
 
-`{findings: [{doc: <the exact doc-index filename the finding concerns, so the fix loop routes it to that doc's owner>, issue: <specific, names the exact names that clash>, fix: <the exact change, fixable blind>, severity: "blocker" | "important" | "minor"}]}`
+`{findings: [{doc: <the exact doc-index filename the finding concerns, so the fix loop routes it to that doc's owner>, line: <1-indexed line number in that doc where the clash sits>, anchor: <the exact text on that line, short and unique>, issue: <specific, names the exact names that clash>, fix: <the exact change, fixable blind>, severity: "blocker" | "important" | "minor"}]}`
 
 An empty findings array means the set reconciles cleanly. Set `doc` to the precise filename from the doc index (the `00-build-overview.md` index is authoritative) so each finding routes to the right owner. Rank findings most severe first.
+
+🔴 `line` and `anchor` are REQUIRED and they are not optional courtesies. The
+fixer that receives your finding opens the document AT that line. Without them it
+greps a file that can run to 73KB, once per finding, at full context: measured on
+2026-07-28 that cost 56 shell commands to make 23 edits and was the most
+expensive single thing in the run.
+
+- `line`: the 1-indexed line in `doc` where the offending text sits. Use `0`
+  ONLY when the finding concerns the whole document, such as a required section
+  that is entirely absent.
+- `anchor`: the exact characters on that line, copied not paraphrased, long
+  enough to be unique in the document and short enough to read. Empty string only
+  when `line` is 0.
+
+You work claims-first, and a sidecar has no line numbers, so when a sidecar diff
+raises a clash you must open the prose doc to locate it before you report it. That
+is the ONLY reason to open a prose doc beyond confirmation, and it is a required
+one: a finding whose `line` you guessed is worse than no line at all, because the
+fixer will trust it.
 
 Return nothing outside this object: no prose summary, no preamble, no restatement of what you checked. The fix loop parses your final message directly, so a clean set is an empty findings array and nothing more.

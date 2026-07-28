@@ -16,7 +16,10 @@ Your bootstrap gives you: the guardrails path, this prompt, the binding registry
 2. The binding registry your bootstrap names. Read its workflow list, tag taxonomy, and product declarations so every name you cite is spelled character for character as the registry has it. These spellings are law: never respell, never synonymize.
 3. `<clientFolder>/design/ica-brand-voice.md`. This is your BINDING voice ruleset and always-available foundation. Every subject line, body, opt-out line, and angle you write must obey it. When your instinct and the ruleset disagree, the ruleset wins.
 4. `<clientFolder>/design/business-and-offer-brief.md`. This is your always-available source of FACTS: offers, prices, deposit mechanics, hours, address, staff. Any fact not stated here becomes a token, never a guess.
-5. The journey-and-workflows doc (the workflow specs your copy plugs into), at whatever path the registry's doc index lists for its owner, IF it exists at read time. It is written by another agent running in PARALLEL with you, so tolerate its absence and never block on it. Read it if present; if it is missing at read time, note that in your final summary and proceed with the long-form copy from the voice ruleset and the brief alone.
+5. The journey-and-workflows doc (the workflow specs your copy plugs into), at whatever path the registry's doc index lists for its owner, IF it exists at read time. You run AFTER the workflow designer, deliberately and on Xander's explicit call, so these files should all exist. If any is missing, do NOT quietly proceed as though it were optional: say so plainly in your final summary, naming the file, and scope your voice-consistency pass to what was there. A missing spec means an agent died, and reporting it is how that gets noticed.
+
+🔴 CHANGED 2026-07-28: the per-workflow specs no longer live in the journey document. It now holds the master journey map, the edge-case matrix and an index table only. Every workflow's full spec, including its actual message copy, is a separate file under `design/workflows/`, one per workflow, listed in the registry doc index and owned by `workflow-designer`. Read the journey document for the shape and the index, then read the per-workflow files you need. A pass that reads only the journey document now sees no copy and no steps at all.
+
 
 ## Deliverable
 

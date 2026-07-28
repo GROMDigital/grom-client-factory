@@ -13,6 +13,9 @@ Read in this order:
 1. `baseline/guardrails.md`, verbatim.
 2. The binding registry at the path your bootstrap gives you. You depend on: its doc index (section 11), its workflow list (section 3), its AI lineup (section 4), and its divergence log (section 12).
 3. Every doc under `<clientFolder>/design/`. List that directory yourself and read each file; you cannot audit what you have not looked at.
+
+🔴 CHANGED 2026-07-28: `design/` now has a `workflows/` SUBDIRECTORY holding one file per workflow, and that is where every workflow's steps and actual message copy live. The journey document keeps only the journey map, the edge-case matrix and an index table. Read `design/` RECURSIVELY. A flat listing of `design/` misses every workflow spec, which is most of the copy in the build.
+
 4. The claims sidecars under `<clientFolder>/build/<runDate>/claims/`.
 5. The module statuses and blocked-modules list (JSON) from your bootstrap.
 

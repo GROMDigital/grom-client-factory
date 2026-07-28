@@ -1,8 +1,45 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Grom client manifest",
+  "description": "One JSON file per client at the client-folder root. manifest_version 2 is the Standard Build shape: pipelines[] replaces the scalar pipeline_id + flat stage_map, because under the Standard Build every pipeline carries the SAME eight stage names and a flat name-keyed map cannot tell two campaigns apart. Version 1 stays valid and readable; Francesca, SK Skin and Alevere do not migrate.",
+
+  "x-standard-stages": [
+    "New Lead", "Engaged", "Booking Started", "Booked",
+    "No Show", "Showed", "Continuing Treatment", "Done"
+  ],
+  "x-standard-stage-canonical": {
+    "New Lead": "lead",
+    "Engaged": "engaged",
+    "Booking Started": "qualified",
+    "Booked": "booked",
+    "No Show": "no_show",
+    "Showed": "showed",
+    "Continuing Treatment": "treatment",
+    "Done": "done"
+  },
+  "x-standard-stage-canonical-note": "At manifest_version 2 the stage names are FIXED, so the stage-to-canonical mapping is known in advance and is NOT recorded per client. This table is the single source for it: the mart seeder derives ghl_stage_map rows by joining pipelines[].stage_ids to this table, which is what removes the hand-written per-client SQL migration. Stages appended after Done are not in this table and map to NULL canonical (kept, excluded from the funnel). 'done' = sort 58, SHIPPED to grom-dashboard production 2026-07-27 (commit 82600ca) and verified on prod; 56, 57 and 59 remain free between treatment (55) and terms_sent (60).",
+
+  "x-standard-lost-reasons": [
+    "price", "location", "timing", "not suitable",
+    "went elsewhere", "no response", "not interested", "duplicate / test"
+  ],
+
   "type": "object",
-  "required": ["manifest_version", "client_key", "label", "status", "ghl_location_id", "market", "currency", "timezone", "stage_map", "tracking", "ids_harvested"],
+  "required": ["manifest_version", "client_key", "label", "status", "ghl_location_id", "market", "currency", "timezone", "tracking", "ids_harvested"],
+
+  "allOf": [
+    {
+      "$comment": "v1 keeps the old contract verbatim.",
+      "if": { "properties": { "manifest_version": { "const": 1 } }, "required": ["manifest_version"] },
+      "then": { "required": ["stage_map"] }
+    },
+    {
+      "$comment": "v2 is the Standard Build. Keys must be PRESENT; values may still be null until harvest.",
+      "if": { "properties": { "manifest_version": { "minimum": 2 } }, "required": ["manifest_version"] },
+      "then": { "required": ["pipelines", "base_workflows", "knobs", "lost_reason_ids", "per_cycle_fields", "booking"] }
+    }
+  ],
+
   "properties": {
     "manifest_version": { "type": "integer", "minimum": 1 },
     "client_key": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
@@ -14,24 +51,180 @@
     "timezone": { "type": "string", "minLength": 3 },
     "ad_account_id": { "type": ["string", "null"], "pattern": "^act_[0-9]+$" },
     "avg_treatment_value": { "type": ["number", "null"] },
-    "pipeline_id": { "type": ["string", "null"] },
     "treatment_field_id": { "type": ["string", "null"] },
+
+    "pipeline_id": {
+      "type": ["string", "null"],
+      "deprecated": true,
+      "$comment": "v1 only. A single scalar cannot express one-pipeline-per-campaign. Superseded by pipelines[]."
+    },
     "stage_map": {
       "type": "object",
+      "deprecated": true,
       "minProperties": 1,
+      "$comment": "v1 only. Flat, keyed by stage NAME, so two Standard Build pipelines (identical names) collapse into one indistinguishable map. Superseded by pipelines[].stage_ids. The canonical enum below is still the authoritative canonical-step vocabulary and is read by validate.mjs.",
       "additionalProperties": {
-        "enum": ["lead", "engaged", "qualified", "booked", "no_show", "showed", "treatment", "terms_sent", "terms_signed", "onboarding", "live", null]
+        "enum": ["lead", "engaged", "qualified", "booked", "no_show", "showed", "treatment", "done", "terms_sent", "terms_signed", "onboarding", "live", null]
       }
     },
+
+    "pipelines": {
+      "type": "array",
+      "minItems": 1,
+      "$comment": "v2. One entry per campaign/offer: its own lead form, landing page and booking calendar. NOT one per product; a fifteen-treatment menu behind one consult funnel is ONE entry.",
+      "items": {
+        "type": "object",
+        "required": ["key", "ghl_pipeline_id", "funnel_slug", "stage_ids"],
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "$comment": "Stable local identifier for this pipeline. Unique within the manifest."
+          },
+          "label": { "type": "string", "minLength": 1 },
+          "ghl_pipeline_id": { "type": ["string", "null"] },
+          "funnel_slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+            "$comment": "The value stamped by 01 as the funnel:<slug> tag, and the join key to LP tracking."
+          },
+          "offer_price": {
+            "type": ["number", "null"],
+            "$comment": "The campaign's advertised offer price, written as the opportunity value at card creation. Number, never a string. Creating at zero is a defect: it makes the pipeline look empty and early drop-off look costless."
+          },
+          "calendar_ids": { "type": "array", "items": { "type": "string" } },
+          "stage_ids": {
+            "type": "object",
+            "$comment": "Stage NAME to GHL stage UUID. The eight keys are fixed and required (values may be null before harvest). Extra keys are permitted ONLY for stages appended after Done; they map to NULL canonical.",
+            "required": ["New Lead", "Engaged", "Booking Started", "Booked", "No Show", "Showed", "Continuing Treatment", "Done"],
+            "properties": {
+              "New Lead": { "type": ["string", "null"] },
+              "Engaged": { "type": ["string", "null"] },
+              "Booking Started": { "type": ["string", "null"] },
+              "Booked": { "type": ["string", "null"] },
+              "No Show": { "type": ["string", "null"] },
+              "Showed": { "type": ["string", "null"] },
+              "Continuing Treatment": { "type": ["string", "null"] },
+              "Done": { "type": ["string", "null"] }
+            },
+            "additionalProperties": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
+
+    "base_workflows": {
+      "type": "object",
+      "$comment": "v2. Reserved numbering: each workflow owns its number for life, same number means the same job at every client, and gaps are information. A key that is ABSENT means that workflow is not built for this client (no deposits, external diary). Client-specific extensions are NOT recorded here; they live in the design docs at unused numbers.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^(0[1-9]|1[0-4]|2[0-2]|25|30|40)$": {
+          "type": "object",
+          "required": ["name", "ghl_workflow_id"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "ghl_workflow_id": { "type": ["string", "null"] },
+            "published": {
+              "type": ["boolean", "null"],
+              "$comment": "Half of the deployment gate. The other half (trigger file non-empty) is asserted against exported workflow JSON, not from here."
+            }
+          }
+        }
+      }
+    },
+
+    "lost_reason_ids": {
+      "type": "object",
+      "$comment": "v2. The eight standard lost reasons, seeded as location-level options, mapped to their GHL ids. Every automated Lost write sets one. Do NOT create a custom lost-reason field; GHL's is native, is a merge tag, and is a filter on the stale-opportunity trigger.",
+      "required": ["price", "location", "timing", "not suitable", "went elsewhere", "no response", "not interested", "duplicate / test"],
+      "additionalProperties": { "type": ["string", "null"] },
+      "properties": {
+        "price": { "type": ["string", "null"] },
+        "location": { "type": ["string", "null"] },
+        "timing": { "type": ["string", "null"] },
+        "not suitable": { "type": ["string", "null"] },
+        "went elsewhere": { "type": ["string", "null"] },
+        "no response": { "type": ["string", "null"] },
+        "not interested": { "type": ["string", "null"] },
+        "duplicate / test": { "type": ["string", "null"] }
+      }
+    },
+
+    "per_cycle_fields": {
+      "type": "array",
+      "$comment": "v2. Facts about THIS cycle, held on the OPPORTUNITY. Replaces the undecidable prose rule 'places a per-cycle value on the contact' with a declaration the validator can check against the account's actual opportunity fields. treatment_interest, cycle_index and amount_paid are always present.",
+      "items": {
+        "type": "object",
+        "required": ["key", "opportunity_field_id"],
+        "additionalProperties": false,
+        "properties": {
+          "key": { "type": "string", "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$" },
+          "opportunity_field_id": { "type": ["string", "null"] },
+          "staging_contact_field_id": {
+            "type": ["string", "null"],
+            "$comment": "The AI staging-slot exception. An AI agent CANNOT write an opportunity field; its only field-write capability is updateContactField. So an AI-captured per-cycle fact lands on a contact field named stg_<key>, and 01 or 03 copies it one-way onto the card. Write-only, not a source of truth, read by nothing else. Null when no AI captures this field."
+          },
+          "enumerated": {
+            "type": "boolean",
+            "$comment": "true for picklists keyed to registry product names (treatment_interest). Free text produces 'botox', 'Botox' and 'anti-wrinkle' within a week."
+          }
+        }
+      }
+    },
+
+    "knobs": {
+      "type": "object",
+      "$comment": "v2. The client-level settings that are machine-checkable. Copy, ladder wording and alert recipients are NOT here; they live in the design docs. The workflow set, its numbering, the removal matrix and the hygiene flags are FIXED and are not knobs at all.",
+      "additionalProperties": false,
+      "properties": {
+        "touch_ceiling": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "$comment": "Per-contact cap across ALL workflows, enforced by a shared counter field and checked before every send. Worst case across 01, 03, 04, 06, 07, 09 and 10 is about 26 touches without one."
+        },
+        "decay_days": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "$comment": "10's opportunity_decay threshold. Validator asserts decay_days > ladder_length_days, so a 7-day decay cannot enrol a lead while 01 still has three touches left."
+        },
+        "ladder_length_days": { "type": ["integer", "null"], "minimum": 0 },
+        "absence_close_days": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "$comment": "13's tail close: no future appointment plus this many days since last attendance sets Done."
+        },
+        "treatment_payment_in_system": {
+          "type": "boolean",
+          "default": false,
+          "$comment": "OFF by default. The pipeline tail is primarily MANUAL because Grom's data ends at booking and the clinic takes treatment payment on its own system. Turn on ONLY for a client who genuinely takes treatment payment inside the system; then 13 also triggers on payment_received, writes amount_paid, and owns the reprice. When off, the card keeps the advertised offer price and reporting must label it as advertised, not realised."
+        },
+        "send_window": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start_hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+            "end_hour": { "type": "integer", "minimum": 0, "maximum": 23 }
+          },
+          "$comment": "Quiet hours. Live sends have been observed at 23:22, 23:47, 02:55 and 03:20."
+        }
+      }
+    },
+
     "booking": {
       "type": "object",
       "properties": {
-        "model": { "enum": ["calendar_page", "in_page_widget", "ai_booked", "external"] },
+        "model": {
+          "enum": ["calendar_page", "in_page_widget", "ai_booked", "external"],
+          "$comment": "external suppresses 04 and 05 and requires 25. Alevere runs Cliniko, which already sends its own confirmations and reminders."
+        },
         "calendar_ids": { "type": "array", "items": { "type": "string" } },
         "payment_product_names": { "type": "array", "items": { "type": "string" } },
         "external_system": { "type": ["string", "null"] }
       }
     },
+
     "phone": {
       "type": "object",
       "properties": {
@@ -39,6 +232,7 @@
         "compliance_status": { "enum": ["not_submitted", "submitted", "approved", "rejected", null] }
       }
     },
+
     "tracking": {
       "type": "object",
       "required": ["client_key_snippet", "worker_url"],
@@ -53,20 +247,28 @@
         "confirmation_page_mode": { "type": "boolean" }
       }
     },
+
     "ai_agents": {
       "type": "object",
       "properties": {
         "chat_primary": { "type": ["string", "null"] },
         "chat_booking": { "type": ["string", "null"] },
+        "chat_booking_flow_workflow_id": {
+          "type": ["string", "null"],
+          "$comment": "v2. The booking agent MUST be a flow-builder bot: its logic IS a workflow, which is the only deterministic way to signal 'showed availability' (an add_contact_tag step immediately BEFORE the booking node). This id is what makes that checkable."
+        },
         "voice_inbound": { "type": ["string", "null"] },
         "voice_outbound": { "type": ["string", "null"] }
       }
     },
+
     "secrets_pointers": {
       "type": "object",
       "properties": { "pit_vault_secret_name": { "type": ["string", "null"] } }
     },
+
     "ids_harvested": { "type": "boolean" },
+
     "version_stamps": {
       "type": "object",
       "properties": {
@@ -75,6 +277,7 @@
         "designed_on": { "type": "string" }
       }
     },
+
     "field_lifecycle": {
       "type": "object",
       "additionalProperties": { "enum": ["design-time", "harvest", "execution-discovered"] }

@@ -41,7 +41,7 @@ Write a claims sidecar to `<clientFolder>/build/<runDate>/claims/ica-brand-voice
 {"defines": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}, "references": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}}
 ```
 
-This role defines NOTHING structural: leave every `defines` array empty except `fill_tokens`. Set `defines.fill_tokens` to every `{{FILL_*}}` token you introduced in the document. If you referenced a token another doc will own, list it under `references.fill_tokens`. Keep the token list and the tokens in the doc identical.
+This role defines NOTHING structural: leave every `defines` array empty except `fill_tokens`. Set `defines.fill_tokens` to every `{{FILL_*}}` token you introduced in the document. If a token you WROTE in your document will be owned by another doc, list it under `references.fill_tokens`. A token you did not write goes in neither list (guardrail 3). Keep the token list and the tokens in the doc identical.
 
 ## Boundaries
 

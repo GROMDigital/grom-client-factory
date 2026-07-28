@@ -23,9 +23,18 @@ All five upstream docs above already exist before you run. If one is missing or 
 
 ## Deliverable
 
-One document, the journey-and-workflows doc. Its filename is whatever the registry's doc index assigns to your doc: find your row by owner role `workflow-designer` and use that exact filename, written into the client folder your bootstrap gave you. Do not invent a filename.
+🔴 CHANGED 2026-07-28. You write MORE THAN ONE FILE, and every one of them is yours.
 
-Write the doc in this order.
+1. **The journey document.** The filename the registry doc index assigns to owner role `workflow-designer` under `design/` (the `journey-and-workflows` slug). It now holds the master journey map and the edge-case matrix ONLY, plus a short index table listing each workflow, its number and name, and the file its spec lives in. It no longer carries the per-workflow specs.
+2. **One file per workflow**, at the exact paths the doc index assigns under `design/workflows/`, typically `design/workflows/<number>-<slug>.md`. One workflow per file, fully specified, to the same standard the single document held before.
+
+Why the split: a single 73KB document was the most expensive artefact in the factory, and almost all of that cost was FIXING it, not writing it. An audit finding against workflow 08 used to reload the whole thing on every pass. Now it loads one small file.
+
+🔴 YOU WRITE THEM ALL. You are one agent and this is one job. Do not treat the split as permission to skimp on any file, and do not assume some other agent is covering the rest: there is no other agent. Every workflow in the registry's section 3 list gets its file, at the path the doc index names, or it does not exist at all and the run will stop for a missing document.
+
+🔴 Use the doc index paths verbatim. Do not invent a filename, do not renumber, do not add a file the index does not list. A file whose path is not in the doc index gets no owner, which means audit findings against it are silently dropped and it is never corrected.
+
+Write the journey document in this order.
 
 ### 1. Master journey map, ad-click to revenue
 
@@ -47,7 +56,7 @@ Author the EDGE-CASE MATRIX with the journey, not as an afterthought, as a table
 
 Specify EVERY workflow in the registry list, and only those. The list is closed: do not invent a workflow that is absent from the registry. If the design genuinely needs a workflow that is not on the list, do not add it silently; record it as an objection in your final status summary and design around the gap with what exists.
 
-You may keep all specs in this one document or group them into companion files, whichever the registry doc index lays out; either way the copy lives in-doc with the workflow it belongs to, and no workflow's copy is duplicated across two documents where it could drift. Specify the silent, internal-only workflows (stage syncs, escalation handlers, takeover switches, outcome syncs) at the same depth as the customer-facing ones: they carry no lead copy but they own stage moves and alerts, and a thin spec there is where leaks hide.
+Each spec goes in ITS OWN file, at the path the doc index assigns under `design/workflows/`, one workflow per file. (This replaced the old single-document layout on 2026-07-28; if any instruction elsewhere suggests you may keep them all in one file, it is stale and this line wins.) The copy lives in-doc with the workflow it belongs to, and no workflow's copy is duplicated across two documents where it could drift. Specify the silent, internal-only workflows (stage syncs, escalation handlers, takeover switches, outcome syncs) at the same depth as the customer-facing ones: they carry no lead copy but they own stage moves and alerts, and a thin spec there is where leaks hide.
 
 Use this exact per-workflow spec structure for each:
 
@@ -68,13 +77,15 @@ Write the CANONICAL STEP COPY IN the spec. The actual SMS and email text a lead 
 
 Open the doc with a one-line scope note and the canonical sources it obeys (pipeline, alert catalog, calendars and payments, brand voice), so a human auditing the account knows exactly what this document is answerable to. Close it with a leak audit: one line per stage naming the workflow that owns it and how a contact exits, plus the token list.
 
-At the bottom of the doc, list every `{{FILL_*}}` token you introduced.
+At the bottom of EACH file, list every `{{FILL_*}}` token that file introduced.
 
-Then write your final message to the caller, exactly this shape: `{doc, status: "done"|"blocked", summary, fill_tokens_introduced: []}`. Set `status` to `blocked` only when a missing upstream input stops you from specifying a workflow at all; otherwise `done` with objections in `summary`. `summary` carries any objections, including any workflow the design needed that the registry did not list, and any stage-move or copy tension you followed the registry through rather than diverging.
+Then write your final message to the caller, exactly this shape: `{doc, status: "done"|"blocked", summary, fill_tokens_introduced: [], files_written: []}`. `doc` is the journey document; `files_written` lists EVERY path you wrote, the journey document and all per-workflow files, so the orchestrator can check them against the doc index. Set `status` to `blocked` only when a missing upstream input stops you from specifying a workflow at all; otherwise `done` with objections in `summary`. `summary` carries any objections, including any workflow the design needed that the registry did not list, and any stage-move or copy tension you followed the registry through rather than diverging.
 
 ## Claims
 
-Write your claims sidecar to `<clientFolder>/build/<runDate>/claims/journey-and-workflows.json` using the client folder and run date from your bootstrap, with exactly this shape:
+🔴 ONE SIDECAR PER FILE YOU WROTE, named after that file's basename. The journey document gets `<clientFolder>/build/<runDate>/claims/journey-and-workflows.json` (prefixed with its number if the doc index numbers it), and each per-workflow file gets `<clientFolder>/build/<runDate>/claims/<that file's basename>.json`. A file carrying `{{FILL_*}}` tokens with no sidecar means those tokens never reach the fill guide and the client is never asked for them.
+
+Every sidecar uses exactly this shape:
 
 `{"defines": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}, "references": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}}`
 
@@ -84,7 +95,7 @@ You originate no structural names. Every workflow, tag, field, alert N-id, calen
 
 The registry is binding. If following it would produce something wrong, do NOT silently diverge: produce your doc following the registry and record the objection in your final status summary.
 
-- All customer-facing copy is voice-doc-bound: tone, banned words, and opt-out handling come from the ica-brand-voice doc. No em dashes, anywhere, ever.
+- All customer-facing copy is voice-doc-bound: tone, banned words, and opt-out handling come from the ica-brand-voice doc. No em dashes in any copy a lead reads. Your files under `design/workflows/` are checked whole, because copy sits inline with your reasoning there and there is no marker separating the two.
 - Never name the platform in anything a lead could see. It is always "the Grom system". Never expose a platform URL in lead-facing copy.
 - Every stage transition your workflows perform matches the pipeline doc's one-owner-per-transition map exactly. One workflow owns each move; you reproduce that ownership, you never split or duplicate it.
 - Payment and deposit links are sent by the ONE workflow the calendars-booking-payments doc designates, and by nothing else. No other workflow, and no AI agent, ever pastes a link.

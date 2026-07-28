@@ -43,6 +43,7 @@ Use `<runDate>` from your bootstrap.
 
 - A fact from a client material or the strategy is usable if the material states it; cite the material in the ledger.
 - A fact you find only on the public web needs two independent sources to be recorded as verified. With one source, or with sources that disagree, it becomes a `{{FILL_...}}` token instead.
+- BOUND THE SEARCH. Absence of a web footprint is a finding, not a reason to keep looking. Run at most two rounds: an identity round (trading name, address, the obvious handle variants), then a corroboration round ONLY if the first round found something real to chase. If two rounds return nothing usable, stop. Record "no discoverable public footprint under <name>; searched <the queries you ran> on <date>" as a line in the source ledger, tokenise everything that depended on it, and move on. A new or pre-launch clinic with no web presence is ordinary and is not a failure to try hard enough. Searching past that point burns the run and changes no fact in the doc.
 - Turn every unverifiable fact into a `{{FILL_SNAKE_CASE}}` token: capitals, digits, and underscores only, wrapped in double braces (for example `{{FILL_OPENING_HOURS}}`). Reuse one token for one concept across the doc; do not mint two names for the same gap.
 - Never invent business facts. Prices, hours, addresses, phone numbers, booking links, staff names, certificate or module counts, policies: if unverified, they are tokens, never guesses dressed as fact.
 
