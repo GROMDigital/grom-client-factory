@@ -164,9 +164,23 @@ for (const file of readdirSync(projectRoot)) {
 const facts = join(SKILL, 'profiles', 'accounts', `${flags.location}.v1.json`);
 copy(facts, join(configOut, `account-facts-${flags.location}.v1.json`), { optional: true });
 
-const caveats = existsSync(facts)
-  ? (JSON.parse(readFileSync(facts, 'utf8')).situation?.knownDataCaveats ?? [])
-  : [];
+/*
+ * Caveats come from the MERGED profile, not from the account overlay alone.
+ *
+ * Reading only the overlay reported "0 recorded caveats" for Grom UK, which was flatly wrong: that
+ * account runs the `grom_internal` profile, whose caveats live in the profile itself and include
+ * things like appointment outcomes being un-automatable. Stating that a run had no caveats when it
+ * had six is the same class of error as having no caveats at all, because the reader trusts it.
+ */
+const { loadProfile } = await import(join(SKILL, 'schemas/v1.mjs'));
+let caveats = [];
+try {
+  caveats = loadProfile(briefIndex.profileId, flags.location).situation?.knownDataCaveats ?? [];
+} catch {
+  caveats = existsSync(facts)
+    ? (JSON.parse(readFileSync(facts, 'utf8')).situation?.knownDataCaveats ?? [])
+    : [];
+}
 const packageCount = readdirSync(join(destination, 'packages')).length;
 const reviewCount = readdirSync(reviewsOut).length;
 const internal = briefIndex.internalRail ?? {};
