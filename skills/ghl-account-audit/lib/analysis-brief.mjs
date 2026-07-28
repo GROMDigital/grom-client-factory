@@ -226,10 +226,23 @@ function collisionMap(workflows) {
       .filter((name) => name.length > 0);
     return {
       name: definition?.name ?? workflow.workflowId,
-      triggers: (workflow?.definition?.data?.triggers ?? [])
+      triggerTypes: (workflow?.definition?.data?.triggers ?? [])
         .map((trigger) => trigger.type)
         .filter((type) => typeof type === 'string')
         .sort(byteOrder),
+      /*
+       * THE WHOLE TRIGGER, filters included, and the reason is a false finding this produced.
+       *
+       * The collector used to keep `trigger.type` alone. `07 Send Contract` and `07.5 Contract Signed`
+       * both have type `proposal_estimate_update`, so the evidence said they listen to the same event
+       * and an expert correctly concluded from it that a signed client could be chased for a signature.
+       * The owner's answer: their FILTERS differ, one fires on sent and the other on signed. The
+       * expert reasoned properly from evidence I had truncated.
+       *
+       * Passed through whole rather than projected onto a guessed field name, so whatever this platform
+       * calls a trigger's conditions, the expert sees them.
+       */
+      triggers: workflow?.definition?.data?.triggers ?? [],
       // What this workflow CREATES that another might trigger on. `internal_create_opportunity`
       // firing while another workflow triggers on `opportunity_created` is a real chain, and it is
       // the one that put two email sequences on the same Grom UK lead at once.
@@ -245,7 +258,7 @@ function collisionMap(workflows) {
 
   const sharedTrigger = new Map();
   for (const row of rows) {
-    for (const trigger of row.triggers) {
+    for (const trigger of row.triggerTypes) {
       if (!sharedTrigger.has(trigger)) sharedTrigger.set(trigger, []);
       sharedTrigger.get(trigger).push(row.name);
     }
@@ -255,9 +268,9 @@ function collisionMap(workflows) {
     for (const consumer of rows) {
       if (producer.name === consumer.name) continue;
       const chained = producer.creates.includes('internal_create_opportunity')
-        && consumer.triggers.includes('opportunity_created');
+        && consumer.triggerTypes.includes('opportunity_created');
       const tagged = producer.creates.includes('add_contact_tag')
-        && consumer.triggers.includes('contact_tag');
+        && consumer.triggerTypes.includes('contact_tag');
       if (chained || tagged) {
         creationChains.push({
           producer: producer.name,
@@ -271,6 +284,12 @@ function collisionMap(workflows) {
   }
   return {
     perWorkflow: rows.sort((left, right) => byteOrder(left.name, right.name)),
+    /*
+     * SHARING A TRIGGER TYPE IS NOT SHARING A TRIGGER. Two workflows on `proposal_estimate_update` may
+     * fire on completely different document states. This lists what can be computed from the type and
+     * says so; the per-workflow `triggers` carry the filters that decide it.
+     */
+    sharedTriggerTypeCaveat: 'These workflows share a trigger TYPE. They may still fire on different events, because a trigger can carry filters. Read the `triggers` on each workflow before calling this a collision.',
     workflowsSharingATrigger: Object.fromEntries(
       [...sharedTrigger.entries()]
         .filter(([, names]) => names.length > 1)
@@ -513,7 +532,7 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
         definitionCode: workflow.definitionCode ?? null,
         stepCount: steps.length,
         stepTypes: tally(steps.map((step) => step.type)),
-        triggers: (workflow?.definition?.data?.triggers ?? []).map((trigger) => trigger.type),
+        triggers: workflow?.definition?.data?.triggers ?? [],
         allowMultiple: definition?.allowMultiple ?? null,
         timezone: definition?.timezone ?? null,
         stopOnResponse: definition?.stopOnResponse ?? null,
@@ -545,7 +564,7 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
       if (messages.length === 0) return null;
       return {
         workflow: definition?.name ?? workflow.workflowId,
-        triggers: (workflow?.definition?.data?.triggers ?? []).map((trigger) => trigger.type),
+        triggers: workflow?.definition?.data?.triggers ?? [],
         stopOnResponse: definition?.stopOnResponse ?? null,
         timezone: definition?.timezone ?? null,
         messageCount: messages.length,
