@@ -93,7 +93,27 @@ the journey holds with no leaks.
 ```
 { findings: [
     { doc: <exact doc-index filename the leak lives in, so the fix routes to its owner>,
+      line: <1-indexed line in that doc where the path breaks>,
+      anchor: <the exact text on that line, short and unique>,
       issue: <the edge case, and exactly where the path breaks: who should catch it and does not, or what double-fires, quoting the workflow number, step id, stage, or agent>,
       fix: <the exact change, fixable blind>,
       severity: "blocker" | "important" | "minor" } ] }
 ```
+
+🔴 `line` and `anchor` are REQUIRED. The fixer opens the document AT that line
+instead of grepping a file that can run to 73KB once per finding: measured on
+2026-07-28 that grepping cost 56 shell commands to make 23 edits and was the
+most expensive single thing in the run.
+
+- `line`: the 1-indexed line in `doc` where the break sits. For a dead-end, the
+  line of the LAST step that does fire, which is where the missing next step
+  belongs. For a double-fire, the line of the second of the two firing steps.
+- `anchor`: the exact characters on that line, copied not paraphrased, unique
+  within the document.
+- Use `line: 0` with an empty anchor ONLY for a leak with no location at all,
+  meaning an edge case no document handles anywhere. That is a real case in this
+  role and you should not force a line number to avoid it: a guessed line is
+  worse than none, because the fixer will trust it.
+
+You are already tracing the specs line by line to walk the journey, so the line
+number is something you have in hand, not extra work.

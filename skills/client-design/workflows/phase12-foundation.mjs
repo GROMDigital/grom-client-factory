@@ -174,21 +174,41 @@ let reviewVerdict = await agent(
   boot('registry-reviewer', `Registry to review: ${A.clientFolder}/build/${A.runDate}/architecture-final.md`),
   { model: 'sonnet', label: 'registry-review', schema: REVIEW }
 )
-// Revise until the reviewer finds no blocker (bounded to 3 rounds). All findings
-// (blockers and importants) go to the reviser; only a surviving blocker loops.
-for (let round = 1; round <= 3 && reviewVerdict && reviewVerdict.verdict === 'revise' && reviewVerdict.findings.some((f) => f.severity === 'blocker'); round++) {
-  log(`registry blocked by reviewer; revision round ${round}`)
+// 🔴 ONE revision pass, and it triggers on `important` as well as `blocker`.
+// The old loop ran up to three rounds but only ever entered on a surviving
+// BLOCKER, so on 2026-07-28 it exited cleanly leaving two `important` findings
+// standing, one of them a Tier-1 data placement breach. It was only fixed
+// because the PM happened to read the findings by hand. A rule the build treats
+// as law is not a matter of severity: if the reviewer says the registry breaches
+// it, the architect revises.
+// The loop is gone as well. Rounds 2 and 3 almost never changed the verdict, and
+// GATE 2 is a human reading this registry before anything is built, which is a
+// better backstop than a third model round.
+const needsRevision = (rv) => rv && rv.verdict === 'revise'
+  && rv.findings.some((f) => f.severity === 'blocker' || f.severity === 'important')
+
+if (needsRevision(reviewVerdict)) {
+  const blockers = reviewVerdict.findings.filter((f) => f.severity === 'blocker').length
+  const importants = reviewVerdict.findings.filter((f) => f.severity === 'important').length
+  log(`registry sent back: ${blockers} blocker(s), ${importants} important(s); one revision pass`)
   const revised = await agent(
-    boot('systems-architect', `REVISION ROUND ${round}. Your registry at ${A.clientFolder}/build/${A.runDate}/architecture-final.md was reviewed with these findings, fix every one of them in place (blockers and importants) and append the changes to section 12:
-${JSON.stringify(reviewVerdict.findings)}`),
-    { model: 'sonnet', label: `architect-revise-${round}`, schema: REGISTRY_SUMMARY }
+    boot('systems-architect', `REVISION. Your registry at ${A.clientFolder}/build/${A.runDate}/architecture-final.md was reviewed with these findings. Fix every one of them in place, blockers and importants alike, and append the changes to section 12:
+${JSON.stringify(reviewVerdict.findings)}
+
+This is the ONLY revision pass. There is no second round: whatever you leave
+unfixed goes in front of a human at the gate with your name on it.`),
+    { model: 'sonnet', label: 'architect-revise', schema: REGISTRY_SUMMARY }
   )
   if (revised) registrySummary = revised
   reviewVerdict = await agent(
-    boot('registry-reviewer', `Re-review after revision round ${round}: ${A.clientFolder}/build/${A.runDate}/architecture-final.md. Prior findings: ${JSON.stringify(reviewVerdict.findings)}`),
-    { model: 'sonnet', label: `registry-rereview-${round}`, schema: REVIEW }
+    boot('registry-reviewer', `Re-review after the revision: ${A.clientFolder}/build/${A.runDate}/architecture-final.md. Prior findings: ${JSON.stringify(reviewVerdict.findings)}. This verdict is final and goes straight to a human, so report exactly what still stands.`),
+    { model: 'sonnet', label: 'registry-rereview', schema: REVIEW }
   )
 }
+// Anything still standing is surfaced at GATE 2 rather than looped on. The PM
+// must show it: see SKILL.md, the post-registry gate.
+const survivingFindings = (reviewVerdict?.findings ?? [])
+  .filter((f) => f.severity === 'blocker' || f.severity === 'important')
 
 // The registry is the most consequential artefact in the run, so conformance
 // runs here, before the human gate, over the foundation docs and the registry
@@ -208,6 +228,9 @@ No other commentary.`,
 return {
   registrySummary,
   reviewVerdict,
+  // 🔴 The PM must surface these at GATE 2. They are what the old loop used to
+  // swallow, and one of them was a Tier-1 breach.
+  survivingFindings,
   validateOutput,
   conformanceResidual: registryResidual,
 }

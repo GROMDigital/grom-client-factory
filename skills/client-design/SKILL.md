@@ -86,9 +86,17 @@ the doc index, the Mechanism policies
 section (3A) from the registry file surfaced line by line (the concrete
 speed-to-lead actions and retry cap, the day-before confirmation timing and its
 alerts, the missed-call cooldown, and the deposit chase cadence, that every
-workflow and voice agent will build to), the reviewer's verdict and any
-non-blocker findings, and the validate.mjs floor output. Ask for an
-explicit go. This is the last cheap moment to stop; everything after spends
+workflow and voice agent will build to), the reviewer's verdict, and the
+validate.mjs floor output. Ask for an explicit go.
+
+🔴 `survivingFindings` from Workflow A is MANDATORY at this gate, quoted in
+full, one per line, with its severity. There is one revision pass now and no
+loop, so these are the findings a human is the only remaining backstop for. The
+old three-round loop entered only on a surviving `blocker`, which let two
+`important` findings through on 2026-07-28, one of them a Tier-1 data placement
+breach; it was caught only because the PM happened to read the findings by hand.
+Do not summarise them, do not judge them for the user, and never present a build
+as reviewed-clean while this list is non-empty. This is the last cheap moment to stop; everything after spends
 the fan-out budget. On "no": capture what to change, re-run the architect via
 Workflow A resume or a fresh run, re-gate.
 

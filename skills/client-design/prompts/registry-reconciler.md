@@ -59,8 +59,27 @@ You write NO claims sidecar and NO doc. You do not define names, so you have not
 
 Return ONLY this shape, nothing else:
 
-`{findings: [{doc: <the exact doc-index filename the finding concerns, so the fix loop routes it to that doc's owner>, issue: <specific, names the exact names that clash>, fix: <the exact change, fixable blind>, severity: "blocker" | "important" | "minor"}]}`
+`{findings: [{doc: <the exact doc-index filename the finding concerns, so the fix loop routes it to that doc's owner>, line: <1-indexed line number in that doc where the clash sits>, anchor: <the exact text on that line, short and unique>, issue: <specific, names the exact names that clash>, fix: <the exact change, fixable blind>, severity: "blocker" | "important" | "minor"}]}`
 
 An empty findings array means the set reconciles cleanly. Set `doc` to the precise filename from the doc index (the `00-build-overview.md` index is authoritative) so each finding routes to the right owner. Rank findings most severe first.
+
+🔴 `line` and `anchor` are REQUIRED and they are not optional courtesies. The
+fixer that receives your finding opens the document AT that line. Without them it
+greps a file that can run to 73KB, once per finding, at full context: measured on
+2026-07-28 that cost 56 shell commands to make 23 edits and was the most
+expensive single thing in the run.
+
+- `line`: the 1-indexed line in `doc` where the offending text sits. Use `0`
+  ONLY when the finding concerns the whole document, such as a required section
+  that is entirely absent.
+- `anchor`: the exact characters on that line, copied not paraphrased, long
+  enough to be unique in the document and short enough to read. Empty string only
+  when `line` is 0.
+
+You work claims-first, and a sidecar has no line numbers, so when a sidecar diff
+raises a clash you must open the prose doc to locate it before you report it. That
+is the ONLY reason to open a prose doc beyond confirmation, and it is a required
+one: a finding whose `line` you guessed is worse than no line at all, because the
+fixer will trust it.
 
 Return nothing outside this object: no prose summary, no preamble, no restatement of what you checked. The fix loop parses your final message directly, so a clean set is an empty findings array and nothing more.

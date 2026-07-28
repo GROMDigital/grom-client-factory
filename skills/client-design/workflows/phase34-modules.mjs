@@ -195,35 +195,81 @@ if (missingDocs.length) {
 const conformanceResidual = await fixConformance(moduleViolations, 'Audit')
 
 phase('Audit')
+// 🔴 `line` and `anchor` are REQUIRED, and they are the single cheapest change
+// in this factory. Measured on 2026-07-28: fixing the workflows doc cost 18.9%
+// of the entire run across two rounds, and the fixer spent more effort LOCATING
+// than changing, 56 shell commands to make 23 edits, because a finding said
+// only which document it was in. Every one of those greps ran a 73KB file at
+// full context.
+// `anchor` exists because `line` drifts: a fix round applies several edits to
+// one document, and every edit above a later finding moves it. The anchor is
+// the exact text to match; the line is where to start looking.
 const FINDINGS = {
   type: 'object',
   required: ['findings'],
   properties: {
-    findings: { type: 'array', items: { type: 'object', required: ['doc', 'issue', 'fix', 'severity'], properties: { doc: { type: 'string' }, issue: { type: 'string' }, fix: { type: 'string' }, severity: { enum: ['blocker', 'important', 'minor'] } } } },
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['doc', 'line', 'anchor', 'issue', 'fix', 'severity'],
+        properties: {
+          doc: { type: 'string' },
+          line: { type: 'integer', description: '1-indexed line the finding sits on. 0 only when it concerns the whole document, such as a section that is absent.' },
+          anchor: { type: 'string', description: 'Exact text copied from that line, short enough to be unique. Empty only when line is 0.' },
+          issue: { type: 'string' },
+          fix: { type: 'string' },
+          severity: { enum: ['blocker', 'important', 'minor'] },
+        },
+      },
+    },
   },
 }
 const auditorIds = ['registry-reconciler', 'journey-leak-auditor', 'compliance-brand-auditor']
-let auditRounds = []
-let findings = (await parallel(auditorIds.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, phase: 'Audit', schema: FINDINGS }))))
-  .filter(Boolean).flatMap((r) => r.findings)
-auditRounds.push(findings.length)
+const auditResults = await parallel(auditorIds.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, phase: 'Audit', schema: FINDINGS })))
+const deadAuditors = auditorIds.filter((_, i) => !auditResults[i])
+if (deadAuditors.length) log(`audit: ${deadAuditors.join(', ')} returned nothing, so those lenses did NOT run on this build`)
+let findings = auditResults.filter(Boolean).flatMap((r) => r.findings)
 
+// 🔴 ONE fix round, and no recheck round. Measured on 2026-07-28: round 2 spent
+// 5.2% of the entire run to make four edits, and the recheck that justified it
+// cost a full registry-reconciler pass each time. Findings that survive one
+// pass are reported to the human instead of being chased by a third model.
 let residualConflicts = []
-for (let round = 1; round <= 2 && findings.length > 0; round++) {
+const unroutable = []
+{
   const byDoc = new Map()
   for (const f of findings) { if (!byDoc.has(f.doc)) byDoc.set(f.doc, []); byDoc.get(f.doc).push(f) }
   const ownerOf = (docFile) => (R.doc_index.find((d) => d.file === docFile) || {}).owner_role
   await parallel([...byDoc.entries()].map(([docFile, fs]) => () => {
     const owner = ownerOf(docFile)
-    if (!owner) return Promise.resolve(null)
-    return agent(boot(owner, `FIX ROUND ${round}. Your doc ${docFile} received these audit fix-notes. Apply them in place, update your claims sidecar, change nothing else:
-${JSON.stringify(fs)}`), { model: 'sonnet', label: `fix:${docFile}`, phase: 'Audit', schema: STATUS })
+    // 🔴 No owner means ownerOf() found no doc_index entry, and the fix is
+    // silently dropped. That is a real failure mode: every document the factory
+    // writes needs a doc_index entry or its findings go nowhere. Collect them
+    // so they reach the human instead of vanishing.
+    if (!owner) { unroutable.push(...fs); return Promise.resolve(null) }
+    return agent(boot(owner, `FIX. Your doc ${docFile} received these audit fix-notes. Apply them in place, update your claims sidecar, change nothing else:
+${JSON.stringify(fs)}
+
+🔴 Every finding carries "line" and "anchor". USE THEM. Read the document around
+that line and match the anchor text; do not grep the whole file for each target
+and do not re-read the document end to end. The last time this step ran without
+line numbers it took 56 shell commands to make 23 edits, at full context, and it
+was the single most expensive thing in the run.
+Work from the HIGHEST line number down to the lowest, so that applying one edit
+does not move the line every later finding refers to. If an anchor is not on its
+stated line, it has drifted: search for the anchor text, not for the issue.
+A finding with line 0 concerns the whole document and has no anchor.`), { model: 'sonnet', label: `fix:${docFile}`, phase: 'Audit', schema: STATUS })
   }))
-  const recheck = await agent(boot('registry-reconciler', `RE-CHECK ROUND ${round}. Only re-verify the docs that just changed: ${[...byDoc.keys()].join(', ')}. Report remaining or newly introduced findings only.`), { model: 'sonnet', label: `recheck-${round}`, phase: 'Audit', schema: FINDINGS })
-  findings = recheck ? recheck.findings : []
-  auditRounds.push(findings.length)
+  log(`audit: ${findings.length} finding(s) across ${byDoc.size} doc(s), one fix round, no recheck`)
+  if (unroutable.length) {
+    log(`audit: ${unroutable.length} finding(s) had no doc_index owner and could NOT be applied`)
+  }
 }
-residualConflicts = findings
+// Unroutable findings are the only ones known to survive: nothing was dispatched
+// for them. They become precedence notes in the fill guide and are reported to
+// the human, rather than being quietly dropped as they were before.
+residualConflicts = unroutable
 
 phase('Close')
 const fillGuide = await agent(boot('fill-guide-compiler', `Residual conflicts to record as precedence notes: ${JSON.stringify(residualConflicts)}`), { model: 'sonnet', label: 'fill-guide', phase: 'Close', schema: STATUS })
@@ -254,7 +300,9 @@ if (deadClose.length || closingMissing.length) {
 return {
   moduleStatuses,
   blockedModules,
-  fixLoopReport: { roundsFindingCounts: auditRounds },
+  // One round now, so this reports what was found and what could not be routed,
+  // not a per-round count.
+  fixLoopReport: { findingsFound: findings.length, unroutable: unroutable.length, deadAuditors },
   residualConflicts,
   conformanceResidual,
   closingViolations,
