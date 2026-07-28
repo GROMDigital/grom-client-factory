@@ -169,7 +169,7 @@ test("documents at the client-folder root are scanned, and their sidecars live i
   // Three fixer agents believed that and deleted five sidecars.
   const r = run(fixture("root-and-pattern"), "--conformance");
   assert.equal(r.code, 0, r.out);
-  assert.doesNotMatch(r.out, /CLAIMS_(ORPHAN_SIDECAR|SIDECAR_MISSING)/);
+  assert.doesNotMatch(r.out, /CLAIMS_(ORPHAN_SIDECAR|SIDECAR_MISSING)/, r.out);
 });
 
 test("prose describing the token pattern is not a malformed token", () => {
@@ -182,6 +182,17 @@ test("prose describing the token pattern is not a malformed token", () => {
   // The real rule still bites: a lower-case token is still malformed.
   const real = run(fixture("invalid"));
   assert.match(real.out, /^MALFORMED_FILL_TOKEN\t/m);
+});
+
+test("a pattern literal does not hide a real malformed token later on the same line", () => {
+  // The exemption was matched non-globally, so the FIRST match won the line. The
+  // one file guaranteed to put a literal and a real token on one line is the
+  // fill guide's own explanatory text, which is the file the exemption exists
+  // for, so the check could not fire exactly where it mattered.
+  const r = run(fixture("mixed-token-line"), "--conformance");
+  assert.match(r.out, /^MALFORMED_FILL_TOKEN\tdesign\/mixed-line\.md\t.*FILL_lower_case/m, r.out);
+  // the literal on the same line is still not itself a violation
+  assert.doesNotMatch(r.out, /MALFORMED_FILL_TOKEN.*\{\{FILL_\*\}\}/, r.out);
 });
 
 test("--docs catches a document that was promised and never written", () => {

@@ -83,7 +83,13 @@ const VIOLATIONS = {
 // the roles that have actually run by the time the check fires, or a doc the
 // Close phase has not written yet reads as a document that went missing.
 const promisedDocs = (phases) => {
-  const owners = new Set((A.roster?.roles ?? []).filter((r) => phases.includes(r.phase)).map((r) => r.id))
+  // 🔴 activeIds, not just phase. phone-compliance and domains-deliverability
+  // are opt-in and default to SKIPPED, so filtering by phase alone promises a
+  // document whose owning agent was deliberately never run and halts the whole
+  // run on the default configuration.
+  const owners = new Set((A.roster?.roles ?? [])
+    .filter((r) => phases.includes(r.phase) && activeIds.has(r.id))
+    .map((r) => r.id))
   return (R.doc_index ?? [])
     .filter((d) => owners.has(d.owner_role) && /\.(md|html)$/i.test(d.file ?? ''))
     .map((d) => d.file)
@@ -104,7 +110,13 @@ The first repairs what is mechanically repairable and prints one action per line
 Return the SECOND command's violations in the schema, an empty array when it passes. Parse only; fix nothing yourself, read nothing else, add no commentary.`,
     { model: 'sonnet', label, effort: 'low', schema: VIOLATIONS }
   )
-  return r?.violations ?? []
+  // 🔴 NULL IS NOT "NO VIOLATIONS". This helper is the sensor behind every
+  // safety property in the factory: the dead-agent stop, the promised-document
+  // stop and the closing check all read its output. Returning [] when the
+  // checker itself died would convert "I do not know" into "everything is
+  // fine", which is the factory's named disease wearing a lab coat. Callers
+  // must treat null as fatal.
+  return r ? (r.violations ?? []) : null
 }
 
 // What survives code repair needs judgement, and there is exactly one such rule
@@ -139,6 +151,7 @@ Read only the named files. Your final message is data, not prose.`,
     { model: 'sonnet', label: 'fix-conformance', phase: phaseLabel, effort: 'low', schema: STATUS }
   )
   const remaining = await conformance(`conformance-recheck:${phaseLabel}`)
+  if (remaining === null) return null
   if (remaining.length) log(`conformance: ${remaining.length} violation(s) survived the fixer`)
   return remaining
 }
@@ -164,7 +177,22 @@ phase('Wave 3b')
 const wave3bRoles = rolesIn('3b')
 // nurture-copywriter's voice-consistency pass reads the workflow-designer doc, so it runs AFTER the rest of 3b, not alongside it.
 const main3bRoles = wave3bRoles.filter((r) => r.id !== 'nurture-copywriter')
-const wave3bMain = await parallel(main3bRoles.map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: STATUS })))
+// workflow-designer writes MANY files now, so it reports every path it wrote.
+// Under plain STATUS that field was dropped and nothing could compare its
+// output against the doc index.
+const MULTI_DOC_STATUS = {
+  type: 'object',
+  required: ['doc', 'status', 'summary', 'files_written'],
+  properties: {
+    doc: { type: 'string' },
+    status: { enum: ['done', 'blocked'] },
+    summary: { type: 'string' },
+    fill_tokens_introduced: { type: 'array', items: { type: 'string' } },
+    files_written: { type: 'array', items: { type: 'string' }, description: 'every path written, client-folder relative' },
+  },
+}
+const schemaFor = (roleId) => (roleId === 'workflow-designer' ? MULTI_DOC_STATUS : STATUS)
+const wave3bMain = await parallel(main3bRoles.map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: schemaFor(r.id) })))
 const dead3b = deadIn(wave3bMain, main3bRoles.map((r) => r.id))
 // Checked BEFORE the copywriter runs, because the copywriter reads the workflow
 // designer's document and 2026-07-28 proved it will happily read nothing.
@@ -183,7 +211,11 @@ const blockedModules = moduleStatuses.filter((m) => m.status === 'blocked')
 // on em dashes a script can find for a fraction of the cost. The same call
 // asserts that every document the registry promised for these waves is on disk
 // and is not a stub.
-const moduleViolations = await conformance('conformance:modules', promisedDocs(['3a', '3b']))
+const moduleCheck = await conformance('conformance:modules', promisedDocs(['3a', '3b']))
+if (!moduleCheck) {
+  return { failed: 'conformance-checker-died', note: 'the conformance and document-existence checker returned nothing, so the module doc set is UNVERIFIED; rerun rather than auditing an unchecked set' }
+}
+const moduleViolations = moduleCheck
 const missingDocs = moduleViolations.filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
 if (missingDocs.length) {
   return {
@@ -192,7 +224,7 @@ if (missingDocs.length) {
     note: 'the registry doc index promised these and they are absent or unfinished; the run stops here rather than auditing a doc set with a hole in it',
   }
 }
-const conformanceResidual = await fixConformance(moduleViolations, 'Audit')
+const conformanceResidual = await fixConformance(moduleViolations, 'Audit') ?? []
 
 phase('Audit')
 // 🔴 `line` and `anchor` are REQUIRED, and they are the single cheapest change
@@ -225,6 +257,26 @@ const FINDINGS = {
     },
   },
 }
+// What a fix agent did, not what it was asked to do. See the fix round below.
+const FIX_RESULT = {
+  type: 'object',
+  required: ['doc', 'status', 'summary', 'applied'],
+  properties: {
+    doc: { type: 'string' },
+    status: { enum: ['done', 'blocked'] },
+    summary: { type: 'string' },
+    applied: { type: 'array', items: { type: 'string' }, description: 'anchor of each finding actually changed in the file' },
+    skipped: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['anchor', 'why'],
+        properties: { anchor: { type: 'string' }, why: { type: 'string' } },
+      },
+    },
+  },
+}
+
 const auditorIds = ['registry-reconciler', 'journey-leak-auditor', 'compliance-brand-auditor']
 const auditResults = await parallel(auditorIds.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, phase: 'Audit', schema: FINDINGS })))
 const deadAuditors = auditorIds.filter((_, i) => !auditResults[i])
@@ -236,12 +288,23 @@ let findings = auditResults.filter(Boolean).flatMap((r) => r.findings)
 // cost a full registry-reconciler pass each time. Findings that survive one
 // pass are reported to the human instead of being chased by a third model.
 let residualConflicts = []
+let fixOutcome = { dispatched: 0, applied: 0, skipped: [], deadFixerDocs: [] }
 const unroutable = []
 {
   const byDoc = new Map()
   for (const f of findings) { if (!byDoc.has(f.doc)) byDoc.set(f.doc, []); byDoc.get(f.doc).push(f) }
-  const ownerOf = (docFile) => (R.doc_index.find((d) => d.file === docFile) || {}).owner_role
-  await parallel([...byDoc.entries()].map(([docFile, fs]) => () => {
+  // 🔴 Match on basename, not on the raw string. The architect writes doc-index
+  // rows as PATHS (`design/07-journey-and-workflows.md`); the auditor prompts
+  // ask for the doc-index "filename". Those two differ, `===` drops the finding,
+  // and ownerOf returns undefined with no error. Splitting the workflows doc
+  // turned one possible mismatch into eighteen.
+  const base = (f) => String(f ?? '').split('/').pop()
+  const ownerOf = (docFile) => {
+    const idx = R.doc_index ?? []
+    const hit = idx.find((d) => d.file === docFile) || idx.find((d) => base(d.file) === base(docFile))
+    return hit?.owner_role
+  }
+  const fixResults = await parallel([...byDoc.entries()].map(([docFile, fs]) => () => {
     const owner = ownerOf(docFile)
     // 🔴 No owner means ownerOf() found no doc_index entry, and the fix is
     // silently dropped. That is a real failure mode: every document the factory
@@ -259,12 +322,34 @@ was the single most expensive thing in the run.
 Work from the HIGHEST line number down to the lowest, so that applying one edit
 does not move the line every later finding refers to. If an anchor is not on its
 stated line, it has drifted: search for the anchor text, not for the issue.
-A finding with line 0 concerns the whole document and has no anchor.`), { model: 'sonnet', label: `fix:${docFile}`, phase: 'Audit', schema: STATUS })
+A finding with line 0 concerns the whole document and has no anchor.
+
+Return "applied" listing every finding you actually changed, by its anchor, and
+"skipped" for any you did not, with the reason. Do NOT report a finding as
+applied unless you changed the file. An honest skip is useful; a false applied
+is how an unfixed blocker gets reported to a human as resolved.`), {
+      model: 'sonnet', label: `fix:${docFile}`, phase: 'Audit', schema: FIX_RESULT,
+    })
   }))
-  log(`audit: ${findings.length} finding(s) across ${byDoc.size} doc(s), one fix round, no recheck`)
-  if (unroutable.length) {
-    log(`audit: ${unroutable.length} finding(s) had no doc_index owner and could NOT be applied`)
-  }
+
+  // 🔴 There is no recheck round any more, so this is the ONLY evidence the
+  // fixes landed. Without it a fixer that died, or one that ignored a blocker,
+  // is indistinguishable from one that worked, and the run reports the audit as
+  // clean either way. Counting outcomes costs nothing: no extra agent, no extra
+  // round, just refusing to assume.
+  // fixResults is index-aligned with byDoc's entries. A null is either a doc
+  // with no owner (already counted as unroutable) or a fixer that died.
+  const docKeys = [...byDoc.keys()]
+  const dead = docKeys.filter((d, i) => ownerOf(d) && !fixResults[i])
+  const results = fixResults.filter(Boolean)
+  const applied = results.reduce((n, r) => n + (r.applied?.length ?? 0), 0)
+  const skipped = results.flatMap((r) => (r.skipped ?? []).map((s) => ({ doc: r.doc, ...s })))
+
+  log(`audit: ${findings.length} finding(s) across ${byDoc.size} doc(s); ${applied} applied, ${skipped.length} skipped by the fixer, ${unroutable.length} unroutable`)
+  if (unroutable.length) log(`audit: ${unroutable.length} finding(s) had no doc_index owner and could NOT be applied`)
+  if (dead.length) log(`audit: the fixer for ${dead.join(', ')} returned nothing, so NONE of its findings were applied`)
+
+  fixOutcome = { dispatched: findings.length - unroutable.length, applied, skipped, deadFixerDocs: dead }
 }
 // Unroutable findings are the only ones known to survive: nothing was dispatched
 // for them. They become precedence notes in the fill guide and are reported to
@@ -272,7 +357,29 @@ A finding with line 0 concerns the whole document and has no anchor.`), { model:
 residualConflicts = unroutable
 
 phase('Close')
-const fillGuide = await agent(boot('fill-guide-compiler', `Residual conflicts to record as precedence notes: ${JSON.stringify(residualConflicts)}`), { model: 'sonnet', label: 'fill-guide', phase: 'Close', schema: STATUS })
+// 🔴 Its own schema, not STATUS. The compiler is asked to report tokens that
+// are really design decisions, and SKILL.md makes the PM treat a non-empty list
+// as a defect in the run. Under STATUS the field is not in the schema, so it is
+// dropped: the guard against another 60-day placeholder had no way to fire.
+const FILL_GUIDE_STATUS = {
+  type: 'object',
+  required: ['doc', 'status', 'summary', 'design_questions_found'],
+  properties: {
+    doc: { type: 'string' },
+    status: { enum: ['done', 'blocked'] },
+    summary: { type: 'string' },
+    fill_tokens_introduced: { type: 'array', items: { type: 'string' } },
+    design_questions_found: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['token', 'doc', 'what_changes'],
+        properties: { token: { type: 'string' }, doc: { type: 'string' }, what_changes: { type: 'string' } },
+      },
+    },
+  },
+}
+const fillGuide = await agent(boot('fill-guide-compiler', `Residual conflicts to record as precedence notes: ${JSON.stringify(residualConflicts)}`), { model: 'sonnet', label: 'fill-guide', phase: 'Close', schema: FILL_GUIDE_STATUS })
 const overview = await agent(boot('assembler', `Module statuses: ${JSON.stringify(moduleStatuses.map((m) => ({ doc: m.doc, status: m.status })))}. Blocked modules: ${JSON.stringify(blockedModules)}.`), { model: 'sonnet', label: 'assembler', phase: 'Close', schema: STATUS })
 const guide = await agent(boot('system-guide'), { model: 'sonnet', label: 'system-guide', phase: 'Close', schema: STATUS })
 
@@ -282,7 +389,16 @@ const deadClose = [['fill-guide-compiler', fillGuide], ['assembler', overview], 
 // The closing check covers the WHOLE promised set, including the documents the
 // Close phase itself just wrote. This is the last chance to notice a hole
 // before the PM reports a finished build.
-const closingViolations = await conformance('conformance:closing', promisedDocs(['1', '2', '3a', '3b', '4']))
+const closingCheck = await conformance('conformance:closing', promisedDocs(['1', '2', '3a', '3b', '4']))
+if (!closingCheck) {
+  return { failed: 'conformance-checker-died', note: 'the closing checker returned nothing, so the finished set is UNVERIFIED; do not report this run as finished' }
+}
+// 🔴 REPAIR, not just detect. The audit fix round rewrote customer-facing copy
+// across every doc with findings, so an em dash introduced there is caught here
+// and, before this line existed, never fixed. The PM then runs the full
+// validate.mjs and it FAILS, which is exactly the closing-validate defect this
+// rebuild was written about, reintroduced from the other end.
+const closingViolations = await fixConformance(closingCheck, 'Close') ?? closingCheck
 const closingMissing = closingViolations.filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
 
 if (deadClose.length || closingMissing.length) {
@@ -302,7 +418,7 @@ return {
   blockedModules,
   // One round now, so this reports what was found and what could not be routed,
   // not a per-round count.
-  fixLoopReport: { findingsFound: findings.length, unroutable: unroutable.length, deadAuditors },
+  fixLoopReport: { findingsFound: findings.length, unroutable: unroutable.length, deadAuditors, ...fixOutcome },
   residualConflicts,
   conformanceResidual,
   closingViolations,

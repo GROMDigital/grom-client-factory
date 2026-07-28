@@ -3,6 +3,71 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-28: **adversarial review of the lean redesign, and the eight defects it
+  found.** An independent reviewer traced the rebuilt orchestration end to end.
+  Every finding below was verified in the code before it was fixed.
+
+  🔴 **The sensor read silence as PASS.** The dead-agent stop, the
+  promised-document stop and the closing check are all enforced by one small
+  agent that runs a command and reports what it saw, and its result handler said
+  `?? []`: if the CHECKER died, zero violations, run continues. The cure for
+  "the factory has no notion of something that should exist does not" had been
+  installed with a silent bypass on its only sensor. A null is now a hard
+  `failed: 'conformance-checker-died'` / `'docs-checker-died'`.
+
+  🔴 **`design_questions_found` could never arrive.** The fill-guide compiler is
+  told to report tokens that are really design decisions, and SKILL.md makes the
+  PM treat a non-empty list as a defect in the run, but the agent was handed the
+  generic STATUS schema, which does not contain the field. The guard against
+  another 60-day placeholder had no way to fire at either end. Same bug on
+  `files_written` from `workflow-designer`. Both now have their own schemas.
+
+  **The opt-in docs would have halted runs on their DEFAULT setting.**
+  `promisedDocs()` filtered the roster by phase but not by `activeRoleIds`, so
+  skipping `phone-compliance` promised a document whose owning agent was
+  deliberately never run, and the missing-document stop fired on it. Item 7
+  breaking item 1. The architect prompt now also states, at the point of use,
+  that a skipped role gets no filename in the doc index and why.
+
+  **Audit findings could fail to route at all.** The architect writes doc-index
+  rows as PATHS; the auditor prompts ask for the doc-index "filename"; they were
+  compared with `===`. Pre-existing, but splitting one workflows doc into
+  eighteen turned one possible mismatch into eighteen. `ownerOf()` now falls back
+  to a basename match.
+
+  **Nothing verified the audit fixes landed.** Dropping the recheck round was
+  agreed; also discarding the fixers' results was not. A fixer that died or
+  ignored a blocker was indistinguishable from one that worked. Fix agents now
+  return `applied` and `skipped`, code diffs that against what was dispatched,
+  and `fixLoopReport` carries `dispatched`/`applied`/`skipped`/`unroutable`/
+  `deadFixerDocs`. No extra agents, no extra round.
+
+  **The closing pass detected and never repaired.** It called `conformance()`
+  without `fixConformance()`, so an em dash introduced by the audit fix round was
+  found at the end and left there, and the PM's closing `validate.mjs` failed:
+  the same closing-validate defect this rebuild was written about, reintroduced
+  from the other end.
+
+  **One pattern literal masked every real malformed token on its line.**
+  `malformedTokenOn` matched non-globally, so `{{FILL_*}}` early in a line hid a
+  genuinely malformed token after it, in the one file the exemption exists for.
+
+  **`workflow-designer` still had permission to keep everything in one file**, a
+  line left from before the split, which would have written 1 file where the doc
+  index promised 18 and halted the run after the expensive part.
+
+  Also: `compliance-brand-auditor` and `assembler` were never told about
+  `design/workflows/`, and the compliance auditor is the one that owns medical
+  claims and opt-out lines, which now live entirely in there; `voice-ai` and
+  `golive-checklist` were not scoped to registry section 8, the fallback the
+  opt-in change makes them depend on; and the spec's conditional roles
+  (`calendars-booking`, `tracking-pixel`) were never implemented, so no client
+  was ever the "7 agents on a simple client" the spec describes.
+
+  Baseline suite 21 tests to 22, with a mutation check on the masking fix.
+  Lesson worth keeping: the redesign was sound and the seams were not. Every one
+  of these was in wiring added the same day, none in the agreed design.
+
 - 2026-07-28: **the factory lean redesign, built.** Agreed with Xander line by
   line after measuring the Better By Ati standard-path run: 53 agents against an
   estimate of 18, $43.40 against $15-20, and a closing `validate.mjs` that

@@ -76,7 +76,13 @@ The first repairs what is mechanically repairable and prints one action per line
 Return the SECOND command's violations in the schema, an empty array when it passes. Parse only; fix nothing yourself, read nothing else, add no commentary.`,
     { model: 'sonnet', label, effort: 'low', schema: VIOLATIONS }
   )
-  return r?.violations ?? []
+  // 🔴 NULL IS NOT "NO VIOLATIONS". This helper is the sensor behind every
+  // safety property in the factory: the dead-agent stop, the promised-document
+  // stop and the closing check all read its output. Returning [] when the
+  // checker itself died would convert "I do not know" into "everything is
+  // fine", which is the factory's named disease wearing a lab coat. Callers
+  // must treat null as fatal.
+  return r ? (r.violations ?? []) : null
 }
 
 // What survives code repair needs judgement, and one agent takes all of it,
@@ -110,6 +116,7 @@ Read only the named files. Your final message is data, not prose.`,
     { model: 'sonnet', label: 'fix-conformance', phase: phaseLabel, effort: 'low', schema: STATUS }
   )
   const remaining = await conformance(`conformance-recheck:${phaseLabel}`)
+  if (remaining === null) return null
   if (remaining.length) log(`conformance: ${remaining.length} violation(s) survived the fixer`)
   return remaining
 }
@@ -117,7 +124,7 @@ Read only the named files. Your final message is data, not prose.`,
 phase('Architecture')
 const REGISTRY_SUMMARY = {
   type: 'object',
-  required: ['client_key', 'no_lps', 'no_voice', 'no_chat_ai', 'no_phone_compliance', 'no_domains_deliverability', 'lps', 'workflows', 'doc_index', 'summary_for_human', 'fields_and_tags_for_human'],
+  required: ['client_key', 'no_lps', 'no_voice', 'no_chat_ai', 'no_calendars', 'no_phone_compliance', 'no_domains_deliverability', 'lps', 'workflows', 'doc_index', 'summary_for_human', 'fields_and_tags_for_human'],
   properties: {
     client_key: { type: 'string' },
     no_lps: { type: 'boolean' },
@@ -126,6 +133,10 @@ const REGISTRY_SUMMARY = {
     // Opt-in as of 2026-07-28: Grom executes phone compliance and domain setup
     // by hand, so both default to skipped. Their content still exists in
     // registry section 8, which golive-checklist and voice-ai fall back to.
+    // no_calendars suppresses calendars-booking (no calendar, no deposit),
+    // no_lps suppresses tracking-pixel. Both are spec Step 3's conditional
+    // roles: 9 agents on a full client, 7 on a simple one.
+    no_calendars: { type: 'boolean' },
     no_phone_compliance: { type: 'boolean' },
     no_domains_deliverability: { type: 'boolean' },
     lps: { type: 'array', items: { type: 'object', required: ['slug', 'purpose'], properties: { slug: { type: 'string' }, purpose: { type: 'string' } } } },
@@ -201,15 +212,16 @@ const survivingFindings = (reviewVerdict?.findings ?? [])
 // The registry is the most consequential artefact in the run, so conformance
 // runs here, before the human gate, over the foundation docs and the registry
 // together. One pass, not one per wave.
-const registryResidual = await fixConformance(
-  await conformance('conformance:registry', [
+const registryCheck = await conformance('conformance:registry', [
     'design/business-and-offer-brief.md',
     'design/ica-brand-voice.md',
     'design/build-proposal.md',
     `build/${A.runDate}/architecture-final.md`,
-  ]),
-  'Architecture'
-)
+  ])
+if (!registryCheck) {
+  return { failed: 'conformance-checker-died', note: 'the conformance checker returned nothing, so the registry is UNVERIFIED; rerun rather than gating a human on an unchecked registry' }
+}
+const registryResidual = await fixConformance(registryCheck, 'Architecture') ?? []
 
 const validateOutput = await agent(
   `Run this exact command and return its full output verbatim as your final message:

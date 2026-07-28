@@ -117,7 +117,13 @@ The second command's stdout is either the single line "validate: PASS" or one vi
 Return the SECOND command's violations in the schema, an empty array when it passes. Parse only; fix nothing yourself, read nothing else, add no commentary.`,
   { model: 'sonnet', label: 'foundation-docs-exist', effort: 'low', schema: VIOLATIONS }
 )
-const missingDocs = (docsCheck?.violations ?? []).filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
+// 🔴 A null here means the CHECKER died, not that the documents are fine.
+// Treating it as an empty violation list would silently disarm the only check
+// that can catch an agent dying mid-write.
+if (!docsCheck) {
+  return { failed: 'docs-checker-died', note: 'the document-existence checker returned nothing, so the foundation set is UNVERIFIED; rerun rather than trusting it' }
+}
+const missingDocs = (docsCheck.violations ?? []).filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
 if (missingDocs.length) {
   return {
     failed: 'foundation-documents-missing',

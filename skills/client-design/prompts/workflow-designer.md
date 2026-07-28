@@ -56,7 +56,7 @@ Author the EDGE-CASE MATRIX with the journey, not as an afterthought, as a table
 
 Specify EVERY workflow in the registry list, and only those. The list is closed: do not invent a workflow that is absent from the registry. If the design genuinely needs a workflow that is not on the list, do not add it silently; record it as an objection in your final status summary and design around the gap with what exists.
 
-You may keep all specs in this one document or group them into companion files, whichever the registry doc index lays out; either way the copy lives in-doc with the workflow it belongs to, and no workflow's copy is duplicated across two documents where it could drift. Specify the silent, internal-only workflows (stage syncs, escalation handlers, takeover switches, outcome syncs) at the same depth as the customer-facing ones: they carry no lead copy but they own stage moves and alerts, and a thin spec there is where leaks hide.
+Each spec goes in ITS OWN file, at the path the doc index assigns under `design/workflows/`, one workflow per file. (This replaced the old single-document layout on 2026-07-28; if any instruction elsewhere suggests you may keep them all in one file, it is stale and this line wins.) The copy lives in-doc with the workflow it belongs to, and no workflow's copy is duplicated across two documents where it could drift. Specify the silent, internal-only workflows (stage syncs, escalation handlers, takeover switches, outcome syncs) at the same depth as the customer-facing ones: they carry no lead copy but they own stage moves and alerts, and a thin spec there is where leaks hide.
 
 Use this exact per-workflow spec structure for each:
 
@@ -77,7 +77,7 @@ Write the CANONICAL STEP COPY IN the spec. The actual SMS and email text a lead 
 
 Open the doc with a one-line scope note and the canonical sources it obeys (pipeline, alert catalog, calendars and payments, brand voice), so a human auditing the account knows exactly what this document is answerable to. Close it with a leak audit: one line per stage naming the workflow that owns it and how a contact exits, plus the token list.
 
-At the bottom of the doc, list every `{{FILL_*}}` token you introduced.
+At the bottom of EACH file, list every `{{FILL_*}}` token that file introduced.
 
 Then write your final message to the caller, exactly this shape: `{doc, status: "done"|"blocked", summary, fill_tokens_introduced: [], files_written: []}`. `doc` is the journey document; `files_written` lists EVERY path you wrote, the journey document and all per-workflow files, so the orchestrator can check them against the doc index. Set `status` to `blocked` only when a missing upstream input stops you from specifying a workflow at all; otherwise `done` with objections in `summary`. `summary` carries any objections, including any workflow the design needed that the registry did not list, and any stage-move or copy tension you followed the registry through rather than diverging.
 

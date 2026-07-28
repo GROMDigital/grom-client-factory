@@ -13,7 +13,10 @@ Read in this order:
 1. `baseline/guardrails.md`, verbatim, first. This is the rulebook.
 2. The binding registry your bootstrap points you to, for the exact spellings of workflow names, tags, fields, calendars, and products. Deviations from these spellings are facts to check against.
 3. The ica-brand-voice doc in the client folder. This is the binding voice ruleset: its avoid list, tone rules, and deposit-talk rules are what you judge copy against.
-4. Every doc under `<clientFolder>/design/`, each one in full.
+4. Every doc under `<clientFolder>/design/`, each one in full, INCLUDING everything under `<clientFolder>/design/workflows/`.
+
+🔴 CHANGED 2026-07-28: `design/` now has a `workflows/` SUBDIRECTORY holding one file per workflow, and that is where every workflow's steps and actual message copy live. The journey document keeps only the journey map, the edge-case matrix and an index table. Read `design/` RECURSIVELY. A flat listing of `design/` misses every workflow spec, which is most of the copy in the build.
+
 
 Read the full text of each doc. You are hunting meaning and context, not string matches, so partial reads will miss violations.
 

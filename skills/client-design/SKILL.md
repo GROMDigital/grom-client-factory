@@ -101,9 +101,12 @@ registry FROM the agreed proposal. Record the run id (phase2_workflow=done).
 
 🔴 THE STOP CONDITIONS ARE NOT ADVISORY, in any of the three workflows. Each can
 return `failed: '<phase>-agent-died'` (an agent returned nothing, so its document
-was never written), `failed: '...-documents-missing'`, or
-`failed: 'closing-check-failed'` (a promised document is absent or is a stub).
-Neither is recoverable by carrying on. Report which role and which document, then
+was never written), `failed: '...-documents-missing'`,
+`failed: 'closing-check-failed'` (a promised document is absent or is a stub), or
+`failed: 'conformance-checker-died'` / `failed: 'docs-checker-died'` (the CHECKER
+itself returned nothing, so the doc set is unverified rather than clean, and the
+correct response is to rerun the check, never to assume it passed).
+None of these is recoverable by carrying on. Report which role and which document, then
 re-run that role via regen or resume. Do NOT proceed to the next phase, and do
 NOT report the build as finished. On 2026-07-28 `workflow-designer` died
 mid-write, the dependent copywriter ran against nothing, and the run completed
@@ -160,6 +163,17 @@ Workflow A2 resume or a fresh run, re-gate.
      should agree; trust but verify with ls)
    - residualConflicts from the workflow: confirm each is recorded as a
      precedence note in the fill guide; surface the list to the user
+   - 🔴 `fixLoopReport`, in full. There is no audit recheck round any more, so
+     this is the ONLY evidence the audit fixes landed: `dispatched` versus
+     `applied`, plus `skipped` (findings a fixer consciously did not apply, with
+     its reason), `unroutable` (findings whose doc had no doc_index owner, so
+     nothing was even attempted) and `deadFixerDocs` (a fixer that returned
+     nothing, meaning NONE of that document's findings were applied). Any of the
+     last three non-empty means the audit did not finish, whatever the doc set
+     looks like. Report them; do not average them into a pass.
+   - 🔴 `deadAuditors`. An audit that did not run and an audit that found nothing
+     produce the same empty findings list. If this is non-empty, say which lens
+     never ran rather than reporting a clean audit.
    - 🔴 `design_questions_found` from the fill-guide compiler. An empty array is
      the expected result. A non-empty one is a DEFECT IN THE RUN, not a question
      for the client: it means a token whose answer changes what gets built

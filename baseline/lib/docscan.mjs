@@ -80,14 +80,18 @@ export const bareToken = (t) => String(t).replace(/^\{\{|\}\}$/g, "").trim();
 // documentation, it is not a token, and flagging it burned a fixer agent on
 // three consecutive runs with a violation no fixer could ever clear.
 export const PATTERN_LITERAL = /^\{\{FILL_(\*|\.\.\.|<[A-Za-z_]+>)\}\}$/;
-export const MALFORMED_TOKEN = /\{\{FILL_(?![A-Z0-9_]+\}\})[^}]*\}\}/;
+export const MALFORMED_TOKEN = /\{\{FILL_(?![A-Z0-9_]+\}\})[^}]*\}\}/g;
 export const REAL_TOKEN = /\{\{(FILL_[A-Z0-9_]+)\}\}/g;
 
+// Scans the WHOLE line, not just its first match. A single non-global match
+// meant one pattern literal early in a line hid every real malformed token
+// after it, and the file guaranteed to put both on one line is the fill guide's
+// own explanatory text, which is the exact file the exemption was added for.
 export const malformedTokenOn = (line) => {
-  const m = line.match(MALFORMED_TOKEN);
-  if (!m) return null;
-  if (PATTERN_LITERAL.test(m[0])) return null;
-  return m[0];
+  for (const m of line.matchAll(MALFORMED_TOKEN)) {
+    if (!PATTERN_LITERAL.test(m[0])) return m[0];
+  }
+  return null;
 };
 
 // key -> { files: [abs paths], tokens: Set }. The key is the basename without
