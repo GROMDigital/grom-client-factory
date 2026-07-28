@@ -14,7 +14,9 @@
  *     window (see `internal-audit-session.mjs`, which will launch no other artefact).
  *  2. Refuse anything that came back bound to a different sub-account. Mixing two clients' data is
  *     the one unrecoverable mistake this tool could make.
- *  3. Keep names, emails, phone numbers and message bodies out of anything written down.
+ *  3. Hand the account's own content onward WHOLE. There is no PII redaction: this is an
+ *     internal tool reading accounts we administer, and a redacted body is indistinguishable from
+ *     an empty one to whoever reads it next. See the block above `normalizeForEvidence`.
  *  4. Speak the CURRENT contract, per tool, with every fact below observed from the real server
  *     rather than read off its source.
  *
@@ -80,73 +82,41 @@ export const LATCHING_CODES = Object.freeze(new Set([
 
 /**
  * ---------------------------------------------------------------------------------------------
- * WHY THIS IS TWO LISTS AND A CONTEXT TEST, RATHER THAN ONE LIST OF KEY NAMES.
+ * THERE IS NO PII REDACTION HERE, DELIBERATELY. IT WAS REMOVED ON 2026-07-28.
  *
- * The first version of this was a single deny list containing `name`, and the first live read
- * proved it the wrong KIND of check: it redacted all 27 WORKFLOW NAMES. A workflow name is a
- * business label the detectors have to read -- "this nurture never asks a human to step in" is not
- * a sentence you can write about `[redacted]` -- while a contact's name is exactly what must never
- * be written down. The same field name means different things on different records, so no list
- * keyed on the name alone can be right about both.
+ * This auditor is PURELY INTERNAL. It reads sub-accounts Grom already owns and administers, on
+ * behalf of the people who administer them, and its output never leaves the agency. Redacting a
+ * client's own data from the client's own operator protects nobody.
  *
- * So the decision comes from the RECORD's own shape:
+ * The version that existed before this was not merely useless, it was HARMFUL, and the first full
+ * live run proved it. It matched any URL anywhere in a string and replaced the entire string, so 14
+ * of 81 email bodies reached the copywriting analyst as `[redacted]`. The analyst then had to reason
+ * around a hole we had manufactured, and a hole in the evidence is indistinguishable from a hole in
+ * the account. That is the real cost: a redaction does not read as "we chose not to look", it reads
+ * as "there is nothing there", and an analyst that cannot tell those apart draws a confident wrong
+ * conclusion. An earlier version had already redacted all 27 workflow NAMES for the same reason.
  *
- *   ALWAYS_PERSONAL          unambiguous on any record. `email`, `phone`, `firstName`, an address.
- *   PERSONAL_IN_PERSON_RECORD  ambiguous, and redacted only when the enclosing record carries a
- *                            person marker. `name`, `title`, `city`, `companyName`.
- *   PERSON_MARKERS           what makes a record a person: `email`, `phone`, `contactId`,
- *                            `contactName`, `firstName`, `lastName`, `fullName`, `dateOfBirth`.
+ * The owner's decision, and it is the right one: do not scrub anything. Missing knowledge causes
+ * worse errors than present knowledge.
  *
- * A workflow record carries `locationId`, `status`, `version` and no person marker, so its `name`
- * survives. An appointment carries `contactId`, so its `title` ("<person> and GROM Digital") does
- * not. An enrollment row carries `contactId`, so its `name` does not.
+ * WHAT SURVIVES, AND WHY IT IS NOT A SCRUB.
  *
- * Two compensating controls remain, because a context test can be fooled by a record shape nobody
- * anticipated: any STRING that looks like an email, an international phone number, a URL or a
- * bearer credential is redacted wherever it appears whatever its key, and a personal SUBTREE goes
- * whole rather than leaf by leaf.
+ * Exactly two key RENAMES, and one credential value dropped. None of them is about privacy:
+ *
+ *   1. `lib/kernel.mjs:124` refuses any collected object carrying an `authorization` key or a
+ *      `method` key whose value is a write verb, because that is how a read-only audit proves it
+ *      never captured a write it performed. A GHL account's own configuration contains both shapes
+ *      as ordinary content -- voice-AI actions and `custom_webhook` steps describing requests the
+ *      ACCOUNT makes. Renaming them is what lets true evidence past a rule that is right to exist.
+ *      The FACT is preserved in both cases; only the label changes.
+ *
+ *   2. The `authorization` VALUE is dropped rather than carried, and this is credential hygiene, not
+ *      privacy. On some accounts that field holds a live bearer token, and it would otherwise be
+ *      written to a brief in plaintext and handed to a model. It carries no analytical information
+ *      whatsoever -- `authorizationConfigured: true` says everything an analyst needs -- so unlike a
+ *      redacted email body, dropping it creates no hole in anybody's reasoning.
  * ---------------------------------------------------------------------------------------------
  */
-const ALWAYS_PERSONAL = Object.freeze(new Set([
-  'additionalemails',
-  'additionalphones',
-  'address',
-  'dateofbirth',
-  'email',
-  'firstname',
-  'firstnamelowercase',
-  'fullname',
-  'lastmessagebody',
-  'lastname',
-  'lastnamelowercase',
-  'phone',
-  'phonelabel',
-  'postalcode',
-]));
-const PERSONAL_IN_PERSON_RECORD = Object.freeze(new Set([
-  'city',
-  'companyname',
-  'contactname',
-  'name',
-  'state',
-  'title',
-  'website',
-]));
-const PERSON_MARKERS = Object.freeze(new Set([
-  'contactid',
-  'contactname',
-  'dateofbirth',
-  'email',
-  'firstname',
-  'fullname',
-  'lastname',
-  'phone',
-]));
-
-/** An email, an international phone number, a URL, or a bearer credential, anywhere. */
-const PERSONAL_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+\d[\d\s().-]{7,}\d|https?:\/\/|Bearer\s+\S+)/iu;
-
-const REDACTED = '[redacted]';
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -156,18 +126,6 @@ function isPlainObject(value) {
 
 function normalizeKey(key) {
   return String(key).toLowerCase().replaceAll(/[^a-z]/gu, '');
-}
-
-/**
- * Replace personal values with a marker, in place of a copy, and never DROP the key: a missing key
- * and a redacted one mean different things, and a detector that cannot tell "this contact has no
- * email" from "we refused to write the email down" would report a data-quality defect that is not
- * there.
- */
-/** Does this record identify a PERSON? Decided from its own field names, not from where it sits. */
-function looksLikePersonRecord(record) {
-  if (!isPlainObject(record)) return false;
-  return Object.keys(record).some((key) => PERSON_MARKERS.has(normalizeKey(key)));
 }
 
 /** HTTP verbs `lib/kernel.mjs` treats as evidence that a WRITE was performed. */
@@ -221,35 +179,26 @@ function hasContent(value) {
   return value !== null && value !== undefined && value !== false;
 }
 
-export function scrubPersonal(value, key = '', seen = new WeakSet(), inPersonRecord = false) {
-  const normalized = normalizeKey(key);
-  const personal = ALWAYS_PERSONAL.has(normalized)
-    || (inPersonRecord && PERSONAL_IN_PERSON_RECORD.has(normalized));
-  if (typeof value === 'string') {
-    if (personal || PERSONAL_PATTERN.test(value)) return REDACTED;
-    return value;
-  }
+/**
+ * Walk the response, renaming only the two shapes the kernel's write-trace scanner refuses.
+ *
+ * Formerly `scrubPersonal`. It no longer redacts anything: see the block above for why the PII
+ * redaction was removed rather than narrowed. What is left is a structural pass, so the evidence
+ * that reaches an analyst is the account's own content, whole.
+ */
+export function normalizeForEvidence(value, key = '', seen = new WeakSet()) {
+  if (typeof value === 'string') return value;
   if (value === null || ['number', 'boolean'].includes(typeof value)) return value;
   if (typeof value === 'bigint') return value.toString();
   if (!value || typeof value !== 'object') return null;
   if (seen.has(value)) throw codedError('INTERNAL_AUDIT_RESPONSE_CYCLE');
   seen.add(value);
   try {
-    if (Array.isArray(value)) {
-      // The KEY and the person context both travel into the elements, so
-      // `additionalEmails: ["a@b.c"]` is redacted by name and not only by the pattern below it,
-      // and a list of contact rows is judged row by row on its own shape.
-      return value.map((entry) => scrubPersonal(entry, key, seen, inPersonRecord));
-    }
-    if (personal) return REDACTED;
-    // A record decides for its OWN children, and the flag does not travel back up. A workflow
-    // holding a list of enrollments does not become a person record, and an enrollment inside it
-    // does not stop being one.
-    const childContext = looksLikePersonRecord(value);
+    if (Array.isArray(value)) return value.map((entry) => normalizeForEvidence(entry, key, seen));
     return Object.fromEntries(
       Object.entries(value).map(([childKey, child]) => {
         const [safeKey, safeChild] = describeOutboundCall(childKey, child);
-        return [safeKey, scrubPersonal(safeChild, safeKey, seen, childContext)];
+        return [safeKey, normalizeForEvidence(safeChild, safeKey, seen)];
       }),
     );
   } finally {
@@ -381,8 +330,8 @@ export function createInternalAuditAdapter({
       ok: true,
       code: null,
       latching: false,
-      // Scrubbed at the boundary, once, so no later caller has to remember to do it.
-      data: scrubPersonal(body),
+      // Normalised at the boundary, once. No redaction: see the block above.
+      data: normalizeForEvidence(body),
     });
   }
 

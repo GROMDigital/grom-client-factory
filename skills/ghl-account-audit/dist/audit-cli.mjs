@@ -41898,10 +41898,6 @@ function isPlainObject12(value) {
 function normalizeKey(key) {
   return String(key).toLowerCase().replaceAll(/[^a-z]/gu, "");
 }
-function looksLikePersonRecord(record2) {
-  if (!isPlainObject12(record2)) return false;
-  return Object.keys(record2).some((key) => PERSON_MARKERS.has(normalizeKey(key)));
-}
 function describeOutboundCall(key, value) {
   const normalized = normalizeKey(key);
   if (normalized === "authorization") return ["authorizationConfigured", hasContent(value)];
@@ -41914,28 +41910,19 @@ function hasContent(value) {
   if (typeof value === "string") return value.trim().length > 0;
   return value !== null && value !== void 0 && value !== false;
 }
-function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet(), inPersonRecord = false) {
-  const normalized = normalizeKey(key);
-  const personal = ALWAYS_PERSONAL.has(normalized) || inPersonRecord && PERSONAL_IN_PERSON_RECORD.has(normalized);
-  if (typeof value === "string") {
-    if (personal || PERSONAL_PATTERN.test(value)) return REDACTED;
-    return value;
-  }
+function normalizeForEvidence(value, key = "", seen = /* @__PURE__ */ new WeakSet()) {
+  if (typeof value === "string") return value;
   if (value === null || ["number", "boolean"].includes(typeof value)) return value;
   if (typeof value === "bigint") return value.toString();
   if (!value || typeof value !== "object") return null;
   if (seen.has(value)) throw codedError("INTERNAL_AUDIT_RESPONSE_CYCLE");
   seen.add(value);
   try {
-    if (Array.isArray(value)) {
-      return value.map((entry) => scrubPersonal(entry, key, seen, inPersonRecord));
-    }
-    if (personal) return REDACTED;
-    const childContext = looksLikePersonRecord(value);
+    if (Array.isArray(value)) return value.map((entry) => normalizeForEvidence(entry, key, seen));
     return Object.fromEntries(
       Object.entries(value).map(([childKey, child]) => {
         const [safeKey, safeChild] = describeOutboundCall(childKey, child);
-        return [safeKey, scrubPersonal(safeChild, safeKey, seen, childContext)];
+        return [safeKey, normalizeForEvidence(safeChild, safeKey, seen)];
       })
     );
   } finally {
@@ -42015,8 +42002,8 @@ function createInternalAuditAdapter({
       ok: true,
       code: null,
       latching: false,
-      // Scrubbed at the boundary, once, so no later caller has to remember to do it.
-      data: scrubPersonal(body)
+      // Normalised at the boundary, once. No redaction: see the block above.
+      data: normalizeForEvidence(body)
     });
   }
   return {
@@ -42112,7 +42099,7 @@ function createInternalAuditAdapter({
     }
   };
 }
-var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, ALWAYS_PERSONAL, PERSONAL_IN_PERSON_RECORD, PERSON_MARKERS, PERSONAL_PATTERN, REDACTED, WRITE_METHODS2;
+var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, WRITE_METHODS2;
 var init_internal_audit = __esm({
   "lib/adapters/internal-audit.mjs"() {
     init_collection();
@@ -42127,43 +42114,6 @@ var init_internal_audit = __esm({
       "RATE_LIMITED",
       "TRANSPORT_FAILED"
     ]));
-    ALWAYS_PERSONAL = Object.freeze(/* @__PURE__ */ new Set([
-      "additionalemails",
-      "additionalphones",
-      "address",
-      "dateofbirth",
-      "email",
-      "firstname",
-      "firstnamelowercase",
-      "fullname",
-      "lastmessagebody",
-      "lastname",
-      "lastnamelowercase",
-      "phone",
-      "phonelabel",
-      "postalcode"
-    ]));
-    PERSONAL_IN_PERSON_RECORD = Object.freeze(/* @__PURE__ */ new Set([
-      "city",
-      "companyname",
-      "contactname",
-      "name",
-      "state",
-      "title",
-      "website"
-    ]));
-    PERSON_MARKERS = Object.freeze(/* @__PURE__ */ new Set([
-      "contactid",
-      "contactname",
-      "dateofbirth",
-      "email",
-      "firstname",
-      "fullname",
-      "lastname",
-      "phone"
-    ]));
-    PERSONAL_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+\d[\d\s().-]{7,}\d|https?:\/\/|Bearer\s+\S+)/iu;
-    REDACTED = "[redacted]";
     WRITE_METHODS2 = Object.freeze(/* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]));
   }
 });

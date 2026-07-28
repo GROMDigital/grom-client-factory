@@ -19,7 +19,7 @@ import {
   EXPECTED_CONTRACT_VERSIONS,
   createInternalAuditAdapter,
   readEnvelope,
-  scrubPersonal,
+  normalizeForEvidence,
 } from '../lib/adapters/internal-audit.mjs';
 import {
   INTERNAL_AUDIT_TOOLS,
@@ -297,44 +297,41 @@ test('the credential is preflighted, and an expired one is named as such', async
   assert.equal(mixed.agencyTokenUsable, false);
 });
 
-test('personal values never survive the boundary, by key OR by pattern', () => {
-  // Shaped on a REAL contact row from the UK account, with every value replaced.
-  const scrubbed = scrubPersonal({
+test('the account content reaches the analyst WHOLE, with nothing redacted', () => {
+  /*
+   * The inverse of the test that used to live here. PII redaction was removed on 2026-07-28: this
+   * is an internal tool reading accounts we administer, so redacting the operator's own data
+   * protects nobody, and the first full live run showed the real cost. Any URL in a string
+   * replaced the WHOLE string, so 14 of 81 email bodies reached the copywriter as `[redacted]` and
+   * it had to reason around a hole we manufactured. A hole in the evidence is indistinguishable
+   * from a hole in the account.
+   */
+  const out = normalizeForEvidence({
     id: 'contact-1',
     firstName: 'Firstname',
     email: 'someone@example.test',
     phone: '+447000000000',
-    additionalEmails: ['other@example.test'],
-    tags: ['lead', 'bristol'],
-    dateAdded: '2026-07-26T23:58:34.623Z',
-    attributionSource: { utmSource: 'facebook', campaign: 'Grom || Lead || Bristol' },
     notes: 'reach me at hidden@example.test',
     address: { line1: '1 Somewhere', postalCode: 'AB1 2CD' },
+    // The case that actually mattered: marketing copy with a link in it.
+    emailBody: 'Hi {{contact.first_name}}, book here: https://grom.example/book',
+    tags: ['lead', 'bristol'],
     monetaryValue: 0,
     dnd: false,
   });
 
-  assert.equal(scrubbed.firstName, '[redacted]');
-  assert.equal(scrubbed.email, '[redacted]');
-  assert.equal(scrubbed.phone, '[redacted]');
-  assert.deepEqual(scrubbed.additionalEmails, ['[redacted]']);
-  // Redacted by PATTERN under a key no deny list would think to name.
-  assert.equal(scrubbed.notes, '[redacted]');
-  // A whole personal SUBTREE goes, not just its leaves.
-  assert.equal(scrubbed.address, '[redacted]');
+  assert.equal(out.firstName, 'Firstname');
+  assert.equal(out.email, 'someone@example.test');
+  assert.equal(out.phone, '+447000000000');
+  assert.equal(out.notes, 'reach me at hidden@example.test');
+  assert.deepEqual(out.address, { line1: '1 Somewhere', postalCode: 'AB1 2CD' });
+  assert.match(out.emailBody, /book here: https:\/\/grom\.example\/book/u);
+  assert.ok(!JSON.stringify(out).includes('[redacted]'));
 
-  // And everything a detector actually needs survives untouched.
-  assert.equal(scrubbed.id, 'contact-1');
-  assert.deepEqual(scrubbed.tags, ['lead', 'bristol']);
-  assert.equal(scrubbed.dateAdded, '2026-07-26T23:58:34.623Z');
-  assert.equal(scrubbed.attributionSource.utmSource, 'facebook');
-  assert.equal(scrubbed.monetaryValue, 0);
-  assert.equal(scrubbed.dnd, false);
-
-  // A key is REDACTED, never deleted. "This contact has no email" and "we refused to write the
-  // email down" are different facts, and a data-quality detector that confused them would report
-  // a defect that is not there.
-  assert.equal(Object.hasOwn(scrubbed, 'email'), true);
+  // And the structural pass still carries everything else through unchanged.
+  assert.deepEqual(out.tags, ['lead', 'bristol']);
+  assert.equal(out.monetaryValue, 0);
+  assert.equal(out.dnd, false);
 });
 
 test('a provider transport record carries three keys and none of them is a secret', () => {
@@ -362,7 +359,7 @@ test('the account describing an outbound call is not us making one', () => {
    * custom_webhook step. Every live run with the internal rail on died on them right after
    * `collecting_internal` checkpointed, so no such run ever reached the briefs.
    */
-  const scrubbed = scrubPersonal({
+  const scrubbed = normalizeForEvidence({
     workflow: {
       name: '01 Onboarding Ready',
       steps: [{
@@ -399,7 +396,7 @@ test('the scrubbed evidence passes the kernel safety scanner that used to quaran
       walk(child, `${path}.${key}`);
     }
   };
-  walk(scrubPersonal({
+  walk(normalizeForEvidence({
     actions: [{ apiDetails: { method: 'DELETE', authorization: 'Bearer nope' } }],
     customActions: [{ apiDetails: { method: 'PUT' } }],
   }), 'root');

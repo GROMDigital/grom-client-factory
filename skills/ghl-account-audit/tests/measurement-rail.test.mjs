@@ -1020,15 +1020,18 @@ test('audit run reads workflows when the config asks, and stays honestly partial
     assert.equal(double.calls[0].name, 'auth_status');
 
     /*
-     * The scrub tells a CONTACT's name from a WORKFLOW's, which is the correction the first live
-     * read forced. A flat deny list on the key `name` redacted all 27 real workflow names, and
-     * "this nurture never asks a human to step in" is not a sentence anyone can write about
-     * `[redacted]`.
+     * NOTHING IS REDACTED, and that is the decision rather than an oversight. PII scrubbing was
+     * removed on 2026-07-28: this is an internal tool reading accounts Grom administers, so
+     * redacting the operator's own data protects nobody, and the first full live run showed the
+     * cost. Any URL in a string replaced the WHOLE string, so 14 of 81 email bodies reached the
+     * copywriting analyst as `[redacted]` and it had to reason around a hole we manufactured. A
+     * hole in the evidence is indistinguishable from a hole in the account.
      */
     const serialised = JSON.stringify(internal.internalEvidence);
-    assert.equal(serialised.includes('owner@example.test'), false, 'an email survived');
-    assert.equal(serialised.includes('A Person'), false, 'a contact name survived');
-    assert.ok(serialised.includes('Nurture wf-1'), 'the workflow name was redacted, so no detector can read it');
+    assert.ok(serialised.includes('owner@example.test'), 'the account content must arrive whole');
+    assert.ok(serialised.includes('A Person'), 'the account content must arrive whole');
+    assert.ok(serialised.includes('Nurture wf-1'), 'a workflow name is what every detector reads');
+    assert.ok(!serialised.includes('[redacted]'), 'nothing is redacted any more');
 
     /*
      * STILL `complete_partial`, and that is the correct answer rather than a shortfall. The
