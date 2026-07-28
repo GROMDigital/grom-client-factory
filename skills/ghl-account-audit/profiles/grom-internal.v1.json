@@ -46,7 +46,8 @@
       "This pipeline marks an opportunity `won` ONLY once the client PAYS. There is no stage for closed-and-trialing, so signed clients sit in `open` indefinitely. A zero win count NEVER means nothing closed, and `showed_to_decision` reading zero is the same artefact.",
       "The 11 KPIs from `won_to_internal_handoff` onward describe the client DELIVERY journey, which happens in a separate onboarding portal and not in this system. They read UNKNOWN forever on this evidence and are not findings.",
       "Nothing records the moment a lead becomes qualified, so `contacted_to_qualified` and `qualified_to_strategy_call` have no signal at all.",
-      "This system is DESIGNED to handle leads with automation and AI, and its AI books more appointments than any other route. Inserting a human is not a generic fix here and must be argued from the evidence if argued at all."
+      "This system is DESIGNED to handle leads with automation and AI, and its AI books more appointments than any other route. Inserting a human is not a generic fix here and must be argued from the evidence if argued at all.",
+      "The Voice AI agent named VOKI, business name Voksica, is a TEST agent and is not part of this business. Owner confirmed 2026-07-28. Its script, its Make.com webhook actions and its physiotherapy framing are all deliberate scratch work, so none of that is a finding. What WOULD be a finding is VOKI having inbound calling switched on, or a workflow or calendar routing real contacts to it: check isInboundActive before dismissing anything about it."
     ],
     "targets": [
       {
