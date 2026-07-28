@@ -315,9 +315,6 @@ export function ingestAccountMap({ paths, runId, map: answer } = {}) {
     briefsHash: index.briefsHash,
     mapHash,
     reviewCount: written.length,
-    // Workflows deliberately NOT reviewed, with the reason. "We chose not to look" and "this does
-    // not exist" are different facts and only one of them is true.
-    skipped: workflows.skipped,
     rubricHashes: { workflow: workflows.rubricHash, agent: agents.rubricHash },
     setHash: sha256(written.map(({ promptHash }) => promptHash)),
     reviews: written,

@@ -121,7 +121,7 @@ function safeStatus(value) {
     // workflows they are. No message copy, no contact, no credential ever reaches this line.
     'briefsHash', 'mapHash', 'analystSetHash', 'investigationHash', 'directory',
     'causeCount', 'corroboratedCauseCount', 'rejectedCount', 'lanes',
-    'reviewCount', 'missingCount', 'prompts', 'skipped',
+    'reviewCount', 'missingCount', 'prompts',
     'planHash', 'batchCount', 'prerequisiteCount', 'conflictCount', 'workOrderPrompt', 'reportPage',
   ]) {
     if (value?.[key] !== undefined) safe[key] = value[key];
@@ -317,8 +317,6 @@ export async function runAuditCli({
       prompts: index.reviews.map(({ kind, object, promptFile, answerFile }) => ({
         stage: `${kind}_review`, object, promptFile, answerFile,
       })),
-      // Named, never silently dropped. A workflow nobody reviewed is a fact about the audit.
-      skipped: index.skipped.map(({ workflow, reason }) => ({ object: workflow, reason })),
     };
   } else if (command === 'reviews') {
     const [{ auditPaths }, { ingestObjectReviews }] = await Promise.all([

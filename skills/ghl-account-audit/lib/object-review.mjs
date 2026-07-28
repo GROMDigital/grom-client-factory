@@ -82,25 +82,28 @@ export function objectSlug(name) {
 }
 
 /**
- * WHICH WORKFLOWS ARE WORTH AN EXPERT, AND WHY THE MAP DECIDES IT.
+ * EVERY WORKFLOW GETS AN EXPERT. There is no gate any more, and removing it was the owner's call.
  *
- * A one-message "sequence" is a single transactional notification: there is no arc, and reviewing it
- * costs an agent and returns a paragraph. But a single-message workflow that stage 1 put ON THE
- * MONEY PATH is a different object entirely, and the count of experts should come from the account
- * rather than from a rule written for one account. So the gate reads the derived map.
+ * There WAS one: two or more messages bought you a review, one message did not unless the map put you
+ * on the money path. It was justified as "a single message has no arc, so there is no sequence to
+ * read", which is true and was never the real reason. The real reason was cost: fifteen experts on
+ * this account instead of twenty-seven.
  *
- * Everything excluded is LISTED with its reason. "We chose not to review this" and "this does not
- * exist" are different facts, and the second one is a lie.
+ * It failed on its own terms in two ways.
+ *
+ * A single-message workflow still has SETTINGS, RUNTIME, A PLACE IN THE ACCOUNT and one message. This
+ * stage looks at six things and the gate skipped all six because one of them was thin.
+ *
+ * And it hid a whole rail. This account's delivery side is deliberately built as single-message stage
+ * notifications, so seven consecutive onboarding workflows were each correctly judged to have no arc
+ * and the onboarding experience went unread. The client does not receive them one at a time.
+ *
+ * Above all it contradicted the rule the product is built on: the auditor decides what it looks at and
+ * is never told. An auditor that skips twelve of twenty-seven workflows is not auditing the account.
+ *
+ * The cost is smaller than it sounds, because prompt size tracks message count: the workflows this
+ * used to skip are the cheapest ones in the run.
  */
-const MINIMUM_MESSAGES = 2;
-
-function shouldReview({ messageCount, role }) {
-  if (messageCount >= MINIMUM_MESSAGES) return { review: true };
-  if (messageCount === 1 && role === 'money_path') return { review: true };
-  if (messageCount === 0) return { review: false, reason: 'NO_CUSTOMER_FACING_MESSAGES' };
-  return { review: false, reason: 'SINGLE_MESSAGE_NO_ARC' };
-}
-
 /** Where this workflow sits: what shares its triggers, what chains into it, what it removes. */
 function placeOf({ collisions, name, mapContext }) {
   const row = (collisions?.perWorkflow ?? []).find((entry) => entry.name === name) ?? null;
@@ -187,18 +190,12 @@ export function buildWorkflowReviewPrompts({ briefs, map } = {}) {
   const sequences = new Map(copy.sequences.map((sequence) => [sequence.workflow, sequence]));
 
   const reviewed = [];
-  const skipped = [];
   for (const workflow of automation.workflows ?? []) {
     const { name } = workflow;
     const sequence = sequences.get(name) ?? null;
     const messageCount = sequence?.messageCount ?? 0;
     const mapContext = mapContextFor(map, name);
     const role = mapContext.thisWorkflow?.role ?? null;
-    const gate = shouldReview({ messageCount, role });
-    if (!gate.review) {
-      skipped.push({ workflow: name, messageCount, role, reason: gate.reason });
-      continue;
-    }
 
     const evidence = {
       workflow: name,
@@ -291,7 +288,6 @@ export function buildWorkflowReviewPrompts({ briefs, map } = {}) {
     rubricFile: RUBRIC,
     rubricHash: sha256(rubric),
     reviewCount: reviewed.length,
-    skipped: skipped.sort((left, right) => byteOrder(left.workflow, right.workflow)),
     setHash: sha256(reviewed.map(({ promptHash }) => promptHash)),
     reviews: reviewed,
   };

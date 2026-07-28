@@ -138,9 +138,10 @@ disk, not from a status somebody wrote down.
    its JSON answer to a file.
 3. **`audit map --project <p> --location <l> --run-id <r> --map <file>`**
    validates the map (every workflow covered exactly once, no invented workflow
-   or KPI edge) and writes one prompt per object under `reviews/`. The COUNT
-   comes from the account: roughly fourteen workflows plus every AI agent on a
-   Grom-sized location, fewer on a smaller one.
+   or KPI edge) and writes one prompt per object under `reviews/`. EVERY workflow
+   and EVERY AI agent, with no gate: an auditor that skips a workflow is not
+   auditing the account, and the workflows a gate would skip are the cheapest
+   ones in the run. The COUNT comes from the account.
 4. **STAGE 2, one expert per object, dispatched in parallel.** Each subagent's
    whole instruction is its `reviews/prompt-*.md`. Add nothing to it. Each sees
    its object WHOLE: configuration, runtime, every message in full, where it sits

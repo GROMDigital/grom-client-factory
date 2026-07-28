@@ -191,31 +191,39 @@ test('the situation and the stated limits travel with every workflow', () => {
   assert.match(built.reviews[0].prompt, /a stated limit/u);
 });
 
-test('THE MAP decides who gets an expert, and every exclusion is named with its reason', () => {
+test('EVERY workflow gets an expert, including the one-message ones', () => {
+  /*
+   * There was a gate: two or more messages bought a review. It was justified as "one message has no
+   * arc" and the real reason was cost. It hid this account's entire delivery rail, which is built as
+   * seven consecutive single-message stage notifications, and it contradicted the rule the product
+   * runs on: the auditor decides what it looks at and is never told.
+   */
   const built = buildWorkflowReviewPrompts({
     briefs: briefs({
       workflows: [workflow('10 Live'), workflow('11 Receipt'), workflow('12 Tagger'), workflow('05 No-Show Recovery')],
       sequences: [
-        // One message, on the money path: still worth an expert.
         sequence('10 Live', [message(0, 'email', 'You are live.')]),
-        // One message, delivery: not worth one.
         sequence('11 Receipt', [message(0, 'email', 'Your receipt.')]),
         sequence('05 No-Show Recovery', [message(0, 'sms', 'a'), message(1, 'sms', 'b')]),
       ],
     }),
     map: mapFor([
-      { name: '10 Live', role: 'money_path' },
+      { name: '10 Live', role: 'delivery' },
       { name: '11 Receipt', role: 'delivery' },
       { name: '12 Tagger', role: 'data_hygiene' },
       { name: '05 No-Show Recovery', role: 'money_path' },
     ]),
   });
 
-  assert.deepEqual(built.reviews.map(({ workflow: name }) => name).sort(), ['05 No-Show Recovery', '10 Live']);
-  assert.deepEqual(built.skipped, [
-    { workflow: '11 Receipt', messageCount: 1, role: 'delivery', reason: 'SINGLE_MESSAGE_NO_ARC' },
-    { workflow: '12 Tagger', messageCount: 0, role: 'data_hygiene', reason: 'NO_CUSTOMER_FACING_MESSAGES' },
-  ]);
+  assert.equal(built.reviewCount, 4, 'all four, including the two single-message and the silent one');
+  assert.deepEqual(
+    built.reviews.map(({ workflow: name }) => name).sort(),
+    ['05 No-Show Recovery', '10 Live', '11 Receipt', '12 Tagger'],
+  );
+  // A workflow that sends nothing still gets its settings, runtime and place read, and the prompt
+  // says plainly that there is no copy rather than leaving an empty section.
+  const silent = built.reviews.find(({ workflow: name }) => name === '12 Tagger');
+  assert.match(silent.prompt, /sends no customer-facing message/u);
 });
 
 test('the money path comes first, and the order is stable', () => {
