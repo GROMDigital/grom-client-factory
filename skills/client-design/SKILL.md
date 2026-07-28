@@ -66,6 +66,16 @@ Applies to NEW builds. Francesca, SK Skin and Alevere do not migrate.
      versionStamps, strategyPath, capturePath, materialsInventory }.
 4. On completion: if it returned failed/blocked, surface verbatim and stop.
    Record the workflow run id in the run manifest (phase12_workflow=done).
+5. THE STOP CONDITIONS ARE NOT ADVISORY. Both workflows can return
+   `failed: '<phase>-agent-died'` (an agent returned nothing, so its document
+   was never written) or `failed: '...-documents-missing'` /
+   `failed: 'closing-check-failed'` (the registry promised a document that is
+   absent or is a stub). Neither is recoverable by carrying on. Report which
+   role and which document, then re-run that role via regen or resume. Do NOT
+   proceed to the next phase, and do NOT report the build as finished. On
+   2026-07-28 `workflow-designer` died mid-write, the dependent copywriter ran
+   against nothing, and the run completed looking healthy; that is the exact
+   outcome these returns exist to prevent.
 
 ## POST-REGISTRY GATE (hard gate, one message)
 
@@ -159,11 +169,22 @@ Workflow A resume or a fresh run, re-gate.
 - Costs are real: no fan-out before the post-registry gate is confirmed.
 - All workflow agents run Sonnet (the scripts set model: "sonnet"; do not
   override upward without the user asking).
-- Mechanical conformance is NOT an agent's job. Em dashes, malformed fill
-  tokens, and claims-sidecar consistency are enforced by
-  `baseline/validate.mjs --conformance`, run once per wave inside the workflow
-  scripts, with failures routed to a small fixer. Measured on the 2026-07-27
-  baseline, agents self-checking these with grep accounted for roughly a
-  quarter of all model calls, made at each agent's largest context, and it was
-  unreliable: the one agent that skipped its self-check shipped two em dashes.
-  If you add a new mechanical rule, add it to the validator, not to a prompt.
+- Mechanical conformance is NOT an agent's job, and since 2026-07-28 it is not
+  an agent's job to FIX either. `baseline/validate.mjs --conformance` reports;
+  `baseline/conformance_fix.mjs` repairs. The repair is code because it is
+  deterministic: renaming a sidecar whose name drifted from its document,
+  creating a missing one, declaring a token that is in the document, dropping
+  one that is not. Only an em dash inside customer-facing copy needs judgement,
+  so exactly ONE agent handles those, and only when there are any. This runs
+  once per workflow, not once per wave.
+  🔴 `conformance_fix.mjs` never deletes a file, and neither may any fixer
+  prompt. On 2026-07-28 the factory dispatched 24 fixer agents; three met a rule
+  their prompt did not cover, improvised, and deleted five claims sidecars
+  carrying 25 fill tokens. The system built to guarantee every token reaches the
+  client destroyed that guarantee for five documents. Leaving something for a
+  human to look at is always the correct worst case.
+  If you add a new mechanical rule, add it to the validator, and its repair to
+  `conformance_fix.mjs`. Never to a prompt.
+- The doc index is a promise, and it is checked. `validate.mjs --docs=a.md,b.md`
+  fails with DOC_MISSING or DOC_STUB, which is the only check that can catch an
+  agent dying mid-write, because every other check reads what was written.

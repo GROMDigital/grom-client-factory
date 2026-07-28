@@ -79,48 +79,82 @@ const VIOLATIONS = {
   },
 }
 
-const conformance = async (label) => {
+// Documents the registry PROMISED, so their absence is detectable. Filtered to
+// the roles that have actually run by the time the check fires, or a doc the
+// Close phase has not written yet reads as a document that went missing.
+const promisedDocs = (phases) => {
+  const owners = new Set((A.roster?.roles ?? []).filter((r) => phases.includes(r.phase)).map((r) => r.id))
+  return (R.doc_index ?? [])
+    .filter((d) => owners.has(d.owner_role) && /\.(md|html)$/i.test(d.file ?? ''))
+    .map((d) => d.file)
+}
+
+// One cheap call: repair everything mechanical in CODE, then report what is
+// left. conformance_fix.mjs replaces the 24 fixer agents the 2026-07-28 run
+// spawned, three of which improvised on a rule their prompt did not cover and
+// deleted five claims sidecars carrying 25 fill tokens. Code renames
+// deterministically and never deletes.
+const conformance = async (label, expectDocs = []) => {
+  const docsFlag = expectDocs.length ? ` "--docs=${expectDocs.join(',')}"` : ''
   const r = await agent(
-    `Run this exact command:
-cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/validate.mjs" "${A.clientFolder}" --conformance
-Its stdout is either the single line "validate: PASS" or one violation per line, TAB separated as rule, file, detail.
-Return the violations in the schema, an empty array when it passes. Parse only; fix nothing, read nothing else, add no commentary.`,
+    `Run these two commands in order, and do not stop if the first prints actions:
+cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/conformance_fix.mjs" "${A.clientFolder}"
+cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/validate.mjs" "${A.clientFolder}" --conformance${docsFlag}
+The first repairs what is mechanically repairable and prints one action per line. The second re-checks: its stdout is either the single line "validate: PASS" or one violation per line, TAB separated as rule, file, detail.
+Return the SECOND command's violations in the schema, an empty array when it passes. Parse only; fix nothing yourself, read nothing else, add no commentary.`,
     { model: 'sonnet', label, effort: 'low', schema: VIOLATIONS }
   )
   return r?.violations ?? []
 }
 
+// What survives code repair needs judgement, and there is exactly one such rule
+// left: an em dash inside customer-facing copy, where the replacement depends on
+// what the sentence is doing. ONE agent takes all of them, across all files.
+// One agent per file is the mistake that made this phase 24 agents wide.
+const JUDGEMENT_RULES = new Set(['EM_DASH', 'MALFORMED_FILL_TOKEN'])
 const fixConformance = async (violations, phaseLabel) => {
   if (!violations.length) return []
-  const byFile = new Map()
-  for (const x of violations) {
-    if (!byFile.has(x.file)) byFile.set(x.file, [])
-    byFile.get(x.file).push(x)
+  const judgement = violations.filter((x) => JUDGEMENT_RULES.has(x.rule))
+  const mechanical = violations.filter((x) => !JUDGEMENT_RULES.has(x.rule))
+  if (mechanical.length) {
+    log(`conformance: ${mechanical.length} violation(s) code repair could not clear; surfacing rather than guessing`)
   }
-  log(`conformance: ${violations.length} violation(s) across ${byFile.size} file(s); dispatching fixers`)
-  await parallel([...byFile.entries()].map(([file, list]) => () => agent(
-    `Fix these conformance violations in ${A.clientFolder}/${file}. Change nothing else, and change no meaning.
-${JSON.stringify(list, null, 2)}
+  if (!judgement.length) return violations
+  log(`conformance: ${judgement.length} judgement violation(s) across ${new Set(judgement.map((x) => x.file)).size} file(s); one fixer`)
+  await agent(
+    `Fix these conformance violations. Change nothing else, and change no meaning. Paths are relative to ${A.clientFolder}.
+${JSON.stringify(judgement, null, 2)}
 
 How to fix each rule:
-- EM_DASH: replace the em dash with a comma, a colon, or the word "to", whichever reads correctly. Never leave one.
-- MALFORMED_FILL_TOKEN: a token must be exactly {{FILL_SNAKE_CASE}} in capitals, digits and underscores. If the text is prose ABOUT tokens rather than a real token, rewrite the prose so it does not contain a literal brace pair.
-- CLAIMS_TOKEN_UNDECLARED: add the token to the claims sidecar for that doc, under defines.fill_tokens if this doc introduced it, references.fill_tokens if it only cites it.
-- CLAIMS_TOKEN_PHANTOM: the sidecar claims a token the doc does not contain. Remove it from the sidecar, unless the doc should have used it, in which case leave the sidecar and say so in your summary.
-- CLAIMS_INVALID_JSON: repair the JSON without inventing entries.
-- CLAIMS_SIDECAR_MISSING: create the sidecar with the shape {"defines":{...},"references":{...}} and list the doc's tokens under defines.fill_tokens.
+- EM_DASH: replace the em dash with a comma, a colon, or the word "to", whichever reads correctly in that sentence. Never leave one.
+- MALFORMED_FILL_TOKEN: a real token is exactly {{FILL_SNAKE_CASE}} in capitals, digits and underscores. Correct the token's spelling. If the text is prose ABOUT the token pattern rather than a token, leave it alone and say so: the validator already exempts {{FILL_*}} and {{FILL_...}}, so a third form has appeared and a human should name it.
+
+🔴 You must NEVER delete a file, and never remove a claims sidecar or an entry
+from one. A fixer agent deleting files it did not understand is the defect this
+whole step was rebuilt to prevent. If a fix seems to require a deletion, do not
+do it: leave the file untouched and report it in your summary.
 
 The registry's exact spellings are law: never respell a workflow name, tag, field, calendar, product or alert id while fixing.
-Read only the named file (and its sidecar where the rule concerns one). Your final message is data, not prose.`,
-    { model: 'sonnet', label: `fix-conformance:${file.split('/').pop()}`, phase: phaseLabel, effort: 'low', schema: STATUS }
-  )))
+Read only the named files. Your final message is data, not prose.`,
+    { model: 'sonnet', label: 'fix-conformance', phase: phaseLabel, effort: 'low', schema: STATUS }
+  )
   const remaining = await conformance(`conformance-recheck:${phaseLabel}`)
   if (remaining.length) log(`conformance: ${remaining.length} violation(s) survived the fixer`)
   return remaining
 }
 
+// A wave whose agent returned null lost that agent: it died, or the user
+// skipped it. Both used to be swallowed by .filter(Boolean). On 2026-07-28
+// workflow-designer died mid-write, its corpse was filtered out, and the
+// copywriter that reads its document ran anyway and found nothing. Nothing in
+// the run noticed. A dead agent now stops the phase.
+const deadIn = (results, roleIds) => roleIds.filter((_, i) => !results[i])
+
 phase('Wave 3a')
-const wave3a = await parallel(rolesIn('3a').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3a', schema: STATUS })))
+const roles3a = rolesIn('3a')
+const wave3a = await parallel(roles3a.map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3a', schema: STATUS })))
+const dead3a = deadIn(wave3a, roles3a.map((r) => r.id))
+if (dead3a.length) return { failed: 'wave3a-agent-died', dead: dead3a, note: 'these agents returned nothing, so their documents were never written' }
 
 // Landing pages are NOT built by this factory. The funnel's LP(s) are designed and built
 // separately (Grom design), so there is no LP role and no LP chain here. The tracking-pixel
@@ -129,9 +163,16 @@ const wave3a = await parallel(rolesIn('3a').map((r) => () => agent(boot(r.id), {
 phase('Wave 3b')
 const wave3bRoles = rolesIn('3b')
 // nurture-copywriter's voice-consistency pass reads the workflow-designer doc, so it runs AFTER the rest of 3b, not alongside it.
-const wave3bMain = await parallel(wave3bRoles.filter((r) => r.id !== 'nurture-copywriter').map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: STATUS })))
+const main3bRoles = wave3bRoles.filter((r) => r.id !== 'nurture-copywriter')
+const wave3bMain = await parallel(main3bRoles.map((r) => () => agent(boot(r.id), { model: 'sonnet', label: r.id, phase: 'Wave 3b', schema: STATUS })))
+const dead3b = deadIn(wave3bMain, main3bRoles.map((r) => r.id))
+// Checked BEFORE the copywriter runs, because the copywriter reads the workflow
+// designer's document and 2026-07-28 proved it will happily read nothing.
+if (dead3b.length) return { failed: 'wave3b-agent-died', dead: dead3b, note: 'these agents returned nothing, so their documents were never written' }
+
 const nurtureActive = wave3bRoles.some((r) => r.id === 'nurture-copywriter')
 const nurtureResult = nurtureActive ? await agent(boot('nurture-copywriter'), { model: 'sonnet', label: 'nurture-copywriter', phase: 'Wave 3b', schema: STATUS }) : null
+if (nurtureActive && !nurtureResult) return { failed: 'wave3b-agent-died', dead: ['nurture-copywriter'], note: 'the agent returned nothing, so its document was never written' }
 const wave3b = [...wave3bMain, ...(nurtureResult ? [nurtureResult] : [])]
 
 const moduleStatuses = [...wave3a, ...wave3b].filter(Boolean)
@@ -139,8 +180,19 @@ const blockedModules = moduleStatuses.filter((m) => m.status === 'blocked')
 
 // Sweep the whole doc set for mechanical conformance BEFORE the auditors run,
 // so their rounds are spent on judgement (leaks, precedence, brand) rather than
-// on em dashes a script can find for a fraction of the cost.
-const conformanceResidual = await fixConformance(await conformance('conformance:modules'), 'Audit')
+// on em dashes a script can find for a fraction of the cost. The same call
+// asserts that every document the registry promised for these waves is on disk
+// and is not a stub.
+const moduleViolations = await conformance('conformance:modules', promisedDocs(['3a', '3b']))
+const missingDocs = moduleViolations.filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
+if (missingDocs.length) {
+  return {
+    failed: 'promised-documents-missing',
+    missingDocs,
+    note: 'the registry doc index promised these and they are absent or unfinished; the run stops here rather than auditing a doc set with a hole in it',
+  }
+}
+const conformanceResidual = await fixConformance(moduleViolations, 'Audit')
 
 phase('Audit')
 const FINDINGS = {
@@ -178,11 +230,33 @@ const fillGuide = await agent(boot('fill-guide-compiler', `Residual conflicts to
 const overview = await agent(boot('assembler', `Module statuses: ${JSON.stringify(moduleStatuses.map((m) => ({ doc: m.doc, status: m.status })))}. Blocked modules: ${JSON.stringify(blockedModules)}.`), { model: 'sonnet', label: 'assembler', phase: 'Close', schema: STATUS })
 const guide = await agent(boot('system-guide'), { model: 'sonnet', label: 'system-guide', phase: 'Close', schema: STATUS })
 
+const deadClose = [['fill-guide-compiler', fillGuide], ['assembler', overview], ['system-guide', guide]]
+  .filter(([, r]) => !r).map(([id]) => id)
+
+// The closing check covers the WHOLE promised set, including the documents the
+// Close phase itself just wrote. This is the last chance to notice a hole
+// before the PM reports a finished build.
+const closingViolations = await conformance('conformance:closing', promisedDocs(['1', '2', '3a', '3b', '4']))
+const closingMissing = closingViolations.filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
+
+if (deadClose.length || closingMissing.length) {
+  return {
+    failed: 'closing-check-failed',
+    dead: deadClose,
+    missingDocs: closingMissing,
+    moduleStatuses,
+    blockedModules,
+    residualConflicts,
+    note: 'the build produced documents but the promised set is incomplete; do not report this run as finished',
+  }
+}
+
 return {
   moduleStatuses,
   blockedModules,
   fixLoopReport: { roundsFindingCounts: auditRounds },
   residualConflicts,
   conformanceResidual,
+  closingViolations,
   deliverables: [fillGuide, overview, guide].filter(Boolean),
 }

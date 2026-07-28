@@ -2,16 +2,31 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const validator = path.join(here, "..", "validate.mjs");
+const fixer = path.join(here, "..", "conformance_fix.mjs");
 const fixture = (name) => path.join(here, "fixtures", name);
 
 function run(folder, ...flags) {
   const r = spawnSync("node", [validator, folder, ...flags], { encoding: "utf8" });
   // stdout carries the machine-readable violations; stderr carries the coverage report.
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
+}
+
+function runFixer(folder, ...flags) {
+  const r = spawnSync("node", [fixer, folder, ...flags], { encoding: "utf8" });
+  return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
+}
+
+// The fixer mutates, so it never runs against the fixture itself.
+function scratch(name) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "grom-fix-"));
+  fs.cpSync(fixture(name), dir, { recursive: true });
+  return dir;
 }
 
 test("valid client folder passes", () => {
@@ -140,6 +155,103 @@ test("--conformance skips the manifest pass rather than failing on it", () => {
 test("a folder with no sidecars says the claims checks were no-ops", () => {
   const r = run(fixture("valid"));
   assert.match(r.err, /0 claims sidecars found/);
+});
+
+// --- what the 2026-07-28 run proved was broken ---------------------------
+// All four of the tests below reproduce a defect that cost real work: the
+// closing validate of that build FAILED, and every one of its nine violations
+// was the validator's own fault rather than the build's.
+
+test("documents at the client-folder root are scanned, and their sidecars live in design/claims", () => {
+  // go-live-checklist.md and post-launch-onboarding.md sit at the client root by
+  // registry decree. The validator walked design/, lp/ and build/ only, so those
+  // two were never scanned and their sidecars looked orphaned BY CONSTRUCTION.
+  // Three fixer agents believed that and deleted five sidecars.
+  const r = run(fixture("root-and-pattern"), "--conformance");
+  assert.equal(r.code, 0, r.out);
+  assert.doesNotMatch(r.out, /CLAIMS_(ORPHAN_SIDECAR|SIDECAR_MISSING)/);
+});
+
+test("prose describing the token pattern is not a malformed token", () => {
+  // {{FILL_*}} and {{FILL_...}} in the fill guide's own explanatory text flagged
+  // on three consecutive runs. No fixer could ever clear it, so files were
+  // "fixed" twice and the violation survived both times.
+  const r = run(fixture("root-and-pattern"), "--conformance");
+  assert.doesNotMatch(r.out, /MALFORMED_FILL_TOKEN/, r.out);
+
+  // The real rule still bites: a lower-case token is still malformed.
+  const real = run(fixture("invalid"));
+  assert.match(real.out, /^MALFORMED_FILL_TOKEN\t/m);
+});
+
+test("--docs catches a document that was promised and never written", () => {
+  // The only check in the factory that can detect an agent dying mid-write,
+  // because every other check reads what WAS written.
+  const r = run(fixture("valid"), `--docs=design/01-brief.md,design/never-written.md`);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /^DOC_MISSING\tdesign\/never-written\.md\t/m, r.out);
+  assert.doesNotMatch(r.out, /^DOC_MISSING\tdesign\/01-brief\.md/m);
+  assert.match(r.err, /inspected \d+ promised documents/);
+});
+
+test("--docs catches a document that was started and abandoned", () => {
+  const dir = scratch("valid");
+  fs.writeFileSync(path.join(dir, "design", "stub.md"), "# Workflows\n\nTODO\n");
+  const r = run(dir, `--docs=design/stub.md`);
+  assert.equal(r.code, 1);
+  assert.match(r.out, /^DOC_STUB\tdesign\/stub\.md\t.*bytes/m, r.out);
+});
+
+// --- the code repair that replaced 24 fixer agents ------------------------
+
+test("code repair clears every mechanical claims defect", () => {
+  const dir = scratch("fixer-repair");
+  const fix = runFixer(dir);
+  assert.equal(fix.code, 0, fix.out);
+
+  // numbering drift is a rename, not an orphan
+  assert.match(fix.out, /^RENAMED_SIDECAR\t.*thing\.json\t-> 01-thing\.json/m, fix.out);
+  assert.ok(fs.existsSync(path.join(dir, "build/2026-07-27/claims/01-thing.json")));
+  // a doc with tokens and no sidecar gets one
+  assert.match(fix.out, /^CREATED_SIDECAR\t.*02-other\.json/m, fix.out);
+  // a token the doc does not contain stops being claimed
+  assert.match(fix.out, /^DROPPED_PHANTOMS\t.*FILL_GHOST_TOKEN/m, fix.out);
+  // an undeclared token gets declared
+  assert.match(fix.out, /^DECLARED_TOKENS\t.*FILL_ADDRESS/m, fix.out);
+
+  const after = run(dir, "--conformance");
+  const rules = after.out.split("\n").map((l) => l.split("\t")[0]);
+  assert.deepEqual(
+    [...new Set(rules)].filter((r) => r.startsWith("CLAIMS_")),
+    ["CLAIMS_ORPHAN_SIDECAR"],
+    `only the unresolvable orphan should survive:\n${after.out}`,
+  );
+});
+
+test("code repair NEVER deletes a file it cannot resolve", () => {
+  // This is the whole reason the repair moved out of an agent. On 2026-07-28
+  // three fixer agents hit a rule their prompt did not cover, improvised, and
+  // deleted five sidecars carrying 25 fill tokens between them.
+  const dir = scratch("fixer-repair");
+  const before = fs.readdirSync(path.join(dir, "build/2026-07-27/claims")).length;
+  const fix = runFixer(dir);
+  const orphan = path.join(dir, "build/2026-07-27/claims/zzz-no-such-doc.json");
+
+  assert.ok(fs.existsSync(orphan), "an unresolvable sidecar must be left on disk, never removed");
+  assert.match(fix.out, /^UNFIXABLE\t.*zzz-no-such-doc\.json\t.*NOT deleted/m, fix.out);
+  assert.ok(fs.readdirSync(path.join(dir, "build/2026-07-27/claims")).length >= before,
+    "the repair must never reduce the number of sidecars");
+});
+
+test("--dry-run reports the same actions and writes nothing", () => {
+  const dir = scratch("fixer-repair");
+  const snapshot = () => fs.readdirSync(path.join(dir, "build/2026-07-27/claims")).sort().join(",");
+  const before = snapshot();
+  const dry = runFixer(dir, "--dry-run");
+  assert.match(dry.err, /dry run, nothing written/);
+  assert.equal(snapshot(), before, "dry run must not touch the filesystem");
+  // and it must not double-report a rename target as also needing creation
+  assert.doesNotMatch(dry.out, /^CREATED_SIDECAR\t.*01-thing\.json/m, dry.out);
 });
 
 test("coverage is reported, so a check that inspected nothing cannot hide", () => {

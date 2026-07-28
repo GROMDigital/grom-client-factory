@@ -10,6 +10,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  AUTHORED_EXT, bareToken, claimsDirs as claimsDirsFor, docTokenIndex,
+  isClaimsPath, malformedTokenOn, scannedFiles,
+} from "./lib/docscan.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(fs.readFileSync(path.join(here, "client-manifest.schema.json"), "utf8"));
@@ -52,9 +56,24 @@ const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
 const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const CONFORMANCE_ONLY = flags.has("--conformance");
 
+// --docs=<comma separated client-relative paths> asserts that documents the
+// registry's doc index promised actually exist. The factory had no notion of
+// "something that should exist does not": workflow-designer died mid-write on
+// 2026-07-28, wrote nothing, and the copywriter that depends on its document
+// ran anyway and found nothing to read. Nothing noticed. This is the notice.
+const EXPECTED_DOCS = [...flags]
+  .filter((f) => f.startsWith("--docs="))
+  .flatMap((f) => f.slice("--docs=".length).split(","))
+  .map((s) => s.trim())
+  .filter(Boolean);
+// Under this many bytes a design document is a stub, not a deliverable. The
+// real ones run to tens of KB; the failure mode being caught is a header and
+// nothing under it, written by an agent that ran out of room or gave up.
+const DOC_STUB_BYTES = 400;
+
 const root = positional[0];
 if (!root || !fs.existsSync(root)) {
-  console.error("usage: validate.mjs <client-folder> [--conformance]");
+  console.error("usage: validate.mjs <client-folder> [--conformance] [--docs=a.md,b.md]");
   process.exit(2);
 }
 const violations = [];
@@ -337,17 +356,16 @@ for (const { wid, dir, wfFile } of captures) {
 }
 
 // ------------------------------------------------------------- 3. Text scans
-const walk = (dir) => fs.existsSync(dir)
-  ? fs.readdirSync(dir, { withFileTypes: true, recursive: true })
-      .filter((d) => d.isFile()).map((d) => path.join(d.parentPath ?? d.path, d.name))
-  : [];
 const rel = (f) => path.relative(root, f);
 
 // Tokens actually present in each authored doc, keyed by basename without
 // extension, which is also the claims sidecar's basename. Claims files are
 // excluded: a sidecar listing a token is a declaration, not an occurrence.
-const docTokens = new Map();
-const isClaims = (f) => rel(f).split(path.sep).includes("claims");
+// Scanning (and the claims-directory set below) comes from lib/docscan.mjs so
+// the repair tool cannot ever disagree with this file about what exists.
+const docIndex = docTokenIndex(root);
+const docTokens = new Map([...docIndex].map(([k, e]) => [k, e.tokens]));
+const isClaims = (f) => isClaimsPath(root, f);
 
 // Guardrail 2 is scoped to what a lead, caller or client can see, plus the
 // instruction text of the live AI agents so they never emit an em dash. It is
@@ -366,7 +384,7 @@ const isCustomerFacing = (f) => {
   return COPY_BEARING.test(path.basename(f));
 };
 
-for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp")), ...walk(path.join(root, "build"))]) {
+for (const f of scannedFiles(root)) {
   if (!/\.(md|html|json|txt)$/i.test(f)) continue;
   const text = fs.readFileSync(f, "utf8");
   const lines = text.split("\n");
@@ -375,15 +393,9 @@ for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp
   if (customerFacing) saw("customer-facing files checked for em dashes");
   lines.forEach((line, i) => {
     if (customerFacing && line.includes("\u2014")) v("EM_DASH", rel(f), `line ${i + 1}`);
-    const badToken = line.match(/\{\{FILL_(?![A-Z0-9_]+\}\})[^}]*\}\}/);
-    if (badToken) v("MALFORMED_FILL_TOKEN", rel(f), `line ${i + 1}: ${badToken[0]}`);
+    const badToken = malformedTokenOn(line);
+    if (badToken) v("MALFORMED_FILL_TOKEN", rel(f), `line ${i + 1}: ${badToken}`);
   });
-  if (/\.(md|html)$/i.test(f) && !isClaims(f)) {
-    const key = path.basename(f).replace(/\.(md|html)$/i, "");
-    const set = docTokens.get(key) ?? new Set();
-    for (const m of text.matchAll(/\{\{(FILL_[A-Z0-9_]+)\}\}/g)) set.add(m[1]);
-    docTokens.set(key, set);
-  }
   if (rel(f).startsWith("lp" + path.sep)) {
     lines.forEach((line, i) => {
       if (PLATFORM.test(line)) v("PLATFORM_NAME_IN_LP", rel(f), `line ${i + 1}`);
@@ -398,13 +410,11 @@ for (const f of [...walk(path.join(root, "design")), ...walk(path.join(root, "lp
 // sidecar. Agents were each enforcing this on themselves by grepping their own
 // output and hand-validating their own JSON, which cost model calls at peak
 // context and could be forgotten. Here it always runs.
-const claimsDirs = dirs(path.join(root, "build"))
-  .map((d) => path.join(root, "build", d, "claims"))
-  .filter((d) => fs.existsSync(d));
+const claimsDirs = claimsDirsFor(root);
 
 // Sidecars are written with and without braces depending on the agent, so both
 // forms normalise to the bare name before comparison.
-const bare = (t) => String(t).replace(/^\{\{|\}\}$/g, "").trim();
+const bare = bareToken;
 
 for (const cdir of claimsDirs) {
   for (const file of fs.readdirSync(cdir).filter((f) => f.endsWith(".json"))) {
@@ -445,12 +455,38 @@ for (const cdir of claimsDirs) {
 
 // A doc carrying tokens with no sidecar at all is the same defect as an
 // undeclared token, one level up.
-for (const [key, tokens] of docTokens) {
-  if (!tokens.size) continue;
+// system-guide.html and anything else rendered to the client-folder root as
+// HTML is DERIVED: every token in it is a copy of a token some design doc
+// already defines and already declares. Demanding its own sidecar would ask the
+// client the same 46 questions twice.
+const isDerivedRender = (entry) =>
+  entry.files.every((f) => path.resolve(path.dirname(f)) === path.resolve(root) && /\.html$/i.test(f));
+
+for (const [key, entry] of docIndex) {
+  const tokens = entry.tokens;
+  if (!tokens.size || isDerivedRender(entry)) continue;
   const hasSidecar = claimsDirs.some((d) => fs.existsSync(path.join(d, `${key}.json`)));
   if (!hasSidecar && claimsDirs.length) {
     v("CLAIMS_SIDECAR_MISSING", key,
       `${tokens.size} fill token(s) and no claims/${key}.json, so none of them reach the fill guide`);
+  }
+}
+
+// ------------------------------------------- 3c. Promised documents exist
+// The doc index is a promise. This is the only check in the factory that can
+// catch an agent dying mid-write, because every other check reads what WAS
+// written and a dead agent writes nothing at all.
+for (const d of EXPECTED_DOCS) {
+  if (!AUTHORED_EXT.test(d)) continue; // doc-index rows like "voice AI | Not this client"
+  saw("promised documents");
+  const full = path.join(root, d);
+  if (!fs.existsSync(full)) {
+    v("DOC_MISSING", d, "the registry doc index promises this document and it is not on disk");
+    continue;
+  }
+  const size = fs.statSync(full).size;
+  if (size < DOC_STUB_BYTES) {
+    v("DOC_STUB", d, `only ${size} bytes, so it was started and not finished`);
   }
 }
 

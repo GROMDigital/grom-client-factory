@@ -46,44 +46,53 @@ const VIOLATIONS = {
   },
 }
 
-const conformance = async (label) => {
+// One cheap call: repair everything mechanical in CODE, then report what is
+// left. conformance_fix.mjs renames, creates and reconciles sidecars
+// deterministically and never deletes a file. Agents doing that by hand on
+// 2026-07-28 deleted five sidecars carrying 25 fill tokens.
+const conformance = async (label, expectDocs = []) => {
+  const docsFlag = expectDocs.length ? ` "--docs=${expectDocs.join(',')}"` : ''
   const r = await agent(
-    `Run this exact command:
-cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/validate.mjs" "${A.clientFolder}" --conformance
-Its stdout is either the single line "validate: PASS" or one violation per line, TAB separated as rule, file, detail.
-Return the violations in the schema, an empty array when it passes. Parse only; fix nothing, read nothing else, add no commentary.`,
+    `Run these two commands in order, and do not stop if the first prints actions:
+cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/conformance_fix.mjs" "${A.clientFolder}"
+cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/validate.mjs" "${A.clientFolder}" --conformance${docsFlag}
+The first repairs what is mechanically repairable and prints one action per line. The second re-checks: its stdout is either the single line "validate: PASS" or one violation per line, TAB separated as rule, file, detail.
+Return the SECOND command's violations in the schema, an empty array when it passes. Parse only; fix nothing yourself, read nothing else, add no commentary.`,
     { model: 'sonnet', label, effort: 'low', schema: VIOLATIONS }
   )
   return r?.violations ?? []
 }
 
-// Every rule the conformance pass raises is mechanically fixable, so the fixer
-// gets the file and the violation list and nothing else. It deliberately does
-// NOT load the role prompt, the strategy, or the baseline: re-running the
-// authoring agent to delete an em dash is what made this expensive.
+// What survives code repair needs judgement, and one agent takes all of it,
+// across every file. It deliberately does NOT load the role prompt, the
+// strategy, or the baseline: re-running an authoring agent to delete an em dash
+// is what made this expensive.
+const JUDGEMENT_RULES = new Set(['EM_DASH', 'MALFORMED_FILL_TOKEN'])
 const fixConformance = async (violations, phaseLabel) => {
   if (!violations.length) return []
-  const byFile = new Map()
-  for (const x of violations) {
-    if (!byFile.has(x.file)) byFile.set(x.file, [])
-    byFile.get(x.file).push(x)
+  const judgement = violations.filter((x) => JUDGEMENT_RULES.has(x.rule))
+  const mechanical = violations.filter((x) => !JUDGEMENT_RULES.has(x.rule))
+  if (mechanical.length) {
+    log(`conformance: ${mechanical.length} violation(s) code repair could not clear; surfacing rather than guessing`)
   }
-  log(`conformance: ${violations.length} violation(s) across ${byFile.size} file(s); dispatching fixers`)
-  await parallel([...byFile.entries()].map(([file, list]) => () => agent(
-    `Fix these conformance violations in ${A.clientFolder}/${file}. Change nothing else, and change no meaning.
-${JSON.stringify(list, null, 2)}
+  if (!judgement.length) return violations
+  log(`conformance: ${judgement.length} judgement violation(s); one fixer`)
+  await agent(
+    `Fix these conformance violations. Change nothing else, and change no meaning. Paths are relative to ${A.clientFolder}.
+${JSON.stringify(judgement, null, 2)}
 
 How to fix each rule:
-- EM_DASH: replace the em dash with a comma, a colon, or the word "to", whichever reads correctly. Never leave one.
-- MALFORMED_FILL_TOKEN: a token must be exactly {{FILL_SNAKE_CASE}} in capitals, digits and underscores. If the text is prose ABOUT tokens rather than a real token, rewrite the prose so it does not contain a literal brace pair.
-- CLAIMS_TOKEN_UNDECLARED: add the token to the claims sidecar for that doc, under defines.fill_tokens if this doc introduced it, references.fill_tokens if it only cites it.
-- CLAIMS_TOKEN_PHANTOM: the sidecar claims a token the doc does not contain. Remove it from the sidecar, unless the doc should have used it, in which case leave the sidecar and say so in your summary.
-- CLAIMS_INVALID_JSON: repair the JSON without inventing entries.
-- CLAIMS_SIDECAR_MISSING: create the sidecar with the shape {"defines":{...},"references":{...}} and list the doc's tokens under defines.fill_tokens.
+- EM_DASH: replace the em dash with a comma, a colon, or the word "to", whichever reads correctly in that sentence. Never leave one.
+- MALFORMED_FILL_TOKEN: a real token is exactly {{FILL_SNAKE_CASE}} in capitals, digits and underscores. Correct the token's spelling. If the text is prose ABOUT the token pattern rather than a token, leave it alone and say so: the validator already exempts {{FILL_*}} and {{FILL_...}}, so a third form has appeared and a human should name it.
 
-Read only the named file (and its sidecar where the rule concerns one). Your final message is data, not prose.`,
-    { model: 'sonnet', label: `fix-conformance:${file.split('/').pop()}`, phase: phaseLabel, effort: 'low', schema: STATUS }
-  )))
+🔴 You must NEVER delete a file, and never remove a claims sidecar or an entry
+from one. A fixer agent deleting files it did not understand is the defect this
+whole step was rebuilt to prevent. If a fix seems to require a deletion, do not
+do it: leave the file untouched and report it in your summary.
+
+Read only the named files. Your final message is data, not prose.`,
+    { model: 'sonnet', label: 'fix-conformance', phase: phaseLabel, effort: 'low', schema: STATUS }
+  )
   const remaining = await conformance(`conformance-recheck:${phaseLabel}`)
   if (remaining.length) log(`conformance: ${remaining.length} violation(s) survived the fixer`)
   return remaining
@@ -101,17 +110,34 @@ const STATUS = {
 }
 
 phase('Foundation')
-const foundation = await parallel([
-  () => agent(boot('client-researcher'), { model: 'sonnet', label: 'research', schema: STATUS }),
-  () => agent(boot('ica-brand-voice'), { model: 'sonnet', label: 'ica-voice', schema: STATUS }),
-  () => agent(boot('journey-architect'), { model: 'sonnet', label: 'journey', schema: STATUS }),
-])
-const blocked = foundation.filter(Boolean).filter((r) => r.status === 'blocked')
+const FOUNDATION_ROLES = ['client-researcher', 'ica-brand-voice', 'journey-architect']
+const FOUNDATION_DOCS = [
+  'design/business-and-offer-brief.md',
+  'design/ica-brand-voice.md',
+  'design/journey-architecture-notes.md',
+]
+const foundation = await parallel(FOUNDATION_ROLES.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, schema: STATUS })))
+// A null result is a dead agent, not an absent one. Filtering it out is how
+// 2026-07-28 lost a document and carried on regardless.
+const deadFoundation = FOUNDATION_ROLES.filter((_, i) => !foundation[i])
+if (deadFoundation.length) return { failed: 'foundation-agent-died', dead: deadFoundation, note: 'these agents returned nothing, so their documents were never written' }
+const blocked = foundation.filter((r) => r.status === 'blocked')
 if (blocked.length) return { failed: 'foundation', blocked }
 
-// Clean the foundation docs before the architect reads them, so it does not
-// inherit and propagate a defect.
-const foundationResidual = await fixConformance(await conformance('conformance:foundation'), 'Foundation')
+// The foundation set is the architect's only input, so its documents are proved
+// to exist before the architect is paid to read them. There is no separate
+// conformance pass here any more: guardrail 2 exempts internal analysis prose,
+// and a claims defect in a research brief does not change what the architect
+// reads. Conformance now runs once, after the registry.
+const foundationCheck = await conformance('foundation-docs-exist', FOUNDATION_DOCS)
+const foundationMissing = foundationCheck.filter((x) => x.rule === 'DOC_MISSING' || x.rule === 'DOC_STUB')
+if (foundationMissing.length) {
+  return {
+    failed: 'foundation-documents-missing',
+    missingDocs: foundationMissing,
+    note: 'an agent reported success and its document is absent or unfinished; the architect is not run against a hole',
+  }
+}
 
 phase('Architecture')
 const REGISTRY_SUMMARY = {
@@ -164,9 +190,13 @@ ${JSON.stringify(reviewVerdict.findings)}`),
   )
 }
 
-// The registry is the most consequential artefact in the run, so it gets its
-// own conformance pass before the human gate rather than waiting for assembly.
-const registryResidual = await fixConformance(await conformance('conformance:registry'), 'Architecture')
+// The registry is the most consequential artefact in the run, so conformance
+// runs here, before the human gate, over the foundation docs and the registry
+// together. One pass, not one per wave.
+const registryResidual = await fixConformance(
+  await conformance('conformance:registry', [...FOUNDATION_DOCS, `build/${A.runDate}/architecture-final.md`]),
+  'Architecture'
+)
 
 const validateOutput = await agent(
   `Run this exact command and return its full output verbatim as your final message:
@@ -179,5 +209,5 @@ return {
   registrySummary,
   reviewVerdict,
   validateOutput,
-  conformanceResidual: [...foundationResidual, ...registryResidual],
+  conformanceResidual: registryResidual,
 }
