@@ -9577,7 +9577,7 @@ function byteOrder(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 function plainText(html) {
-  return String(html ?? "").replaceAll(/<br\s*\/?>/giu, "\n").replaceAll(/<\/(?:p|div|tr|h[1-6])>/giu, "\n").replaceAll(/<[^>]+>/gu, "").replaceAll("&nbsp;", " ").replaceAll("&amp;", "&").replaceAll("&#39;", "'").replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll(/\n{3,}/gu, "\n\n").replaceAll(/[ \t]{2,}/gu, " ").trim();
+  return String(html ?? "").replaceAll(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/giu, " ").replaceAll(/<!--[\s\S]*?-->/gu, " ").replaceAll(/<br\s*\/?>/giu, "\n").replaceAll(/<\/(?:p|div|tr|h[1-6])>/giu, "\n").replaceAll(/<[^>]+>/gu, "").replaceAll("&nbsp;", " ").replaceAll("&amp;", "&").replaceAll("&#39;", "'").replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll(/\n{3,}/gu, "\n\n").replaceAll(/[ \t]{2,}/gu, " ").trim();
 }
 function observation(surfaces, capability, observationId) {
   const surface = (surfaces ?? []).find((entry) => entry.capability === capability);
@@ -29121,6 +29121,12 @@ function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
     return Object.freeze({
       async callTool(request, options) {
         if (!isPlainObject8(request) || request.name !== "execute_action" || !isPlainObject8(request.arguments) || !isPlainObject8(request.arguments.params)) throw fail("GHL_TRANSLATION_REQUEST_INVALID");
+        if (PASSTHROUGH_ACTIONS.has(request.arguments.action)) {
+          return delegate.callTool(
+            upstreamToolRequest(request.arguments.action, request.arguments.params),
+            options
+          );
+        }
         const structured = await translateScope({
           // INBOUND: our own dialect, `arguments.action`. See the module header for why the two
           // names are different and where the boundary between them is.
@@ -29144,7 +29150,7 @@ function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
     });
   };
 }
-var UPSTREAM_PAGE_LIMIT, CALENDAR_CHUNK_DAYS, DAY_MS, DEADLINE_FRACTION, MINIMUM_DEADLINE_MS, MAXIMUM_TRACE_IDS, CREATED_FIELDS, UPDATED_FIELDS, QUALITY_KEY, PLANS, NOT_COLLECTABLE_IN_THIS_SHAPE, NOT_TRANSLATED;
+var UPSTREAM_PAGE_LIMIT, CALENDAR_CHUNK_DAYS, DAY_MS, DEADLINE_FRACTION, MINIMUM_DEADLINE_MS, MAXIMUM_TRACE_IDS, CREATED_FIELDS, UPDATED_FIELDS, QUALITY_KEY, PLANS, NOT_COLLECTABLE_IN_THIS_SHAPE, NOT_TRANSLATED, PASSTHROUGH_ACTIONS;
 var init_ghl_public_translator = __esm({
   "lib/adapters/ghl-public-translator.mjs"() {
     init_canonical();
@@ -29392,6 +29398,7 @@ var init_ghl_public_translator = __esm({
       "payments-v3__list-orders": "payments is never authoritative for revenue; the canonical basis is opportunity monetaryValue",
       "payments-v3__list-transactions": "payments is never authoritative for revenue; the canonical basis is opportunity monetaryValue"
     });
+    PASSTHROUGH_ACTIONS = /* @__PURE__ */ new Set(["emails__fetch-template"]);
   }
 });
 
@@ -42220,12 +42227,16 @@ async function fetchBodyOverHttps(url2, { timeoutMs, maxBytes, signal }) {
     signal?.removeEventListener?.("abort", onAbort);
   }
 }
-function listRequest(capability, locationId, limit, offset) {
+function listRequest(capability, locationId, limit, offset, dialect) {
+  const params = { locationId, limit, offset };
+  if (dialect === "native") {
+    return { name: "execute_action", arguments: { action_id: EMAIL_TEMPLATE_ACTION, params } };
+  }
   return {
     name: "execute_action",
     arguments: {
       action: EMAIL_TEMPLATE_ACTION,
-      params: { locationId, limit, offset },
+      params,
       policy: {
         actionId: capability.actionId,
         method: capability.method,
@@ -42241,8 +42252,10 @@ function listRequest(capability, locationId, limit, offset) {
   };
 }
 function bodyOf(response) {
-  const value = response?.structuredContent ?? response?.data ?? response;
-  return isPlainObject13(value) ? value : null;
+  const outer = response?.structuredContent ?? response;
+  if (!isPlainObject13(outer)) return null;
+  if (isPlainObject13(outer.data) && Array.isArray(outer.data.builders)) return outer.data;
+  return isPlainObject13(outer) ? outer : null;
 }
 function templateRecord(entry) {
   if (!isPlainObject13(entry) || typeof entry.id !== "string" || !OBJECT_ID.test(entry.id)) return null;
@@ -42259,10 +42272,14 @@ function createEmailCopyCollector({
   client,
   capability,
   boundLocationId,
+  // Which request contract the supplied client speaks. `native` is the worker's own
+  // `{action_id, params}`; `bounded` is this repo's normalised `{action, params, policy}`. See
+  // `listRequest`: sending the wrong one is a live-only failure, and it happened on the first run.
+  dialect = "bounded",
   budgets = {},
   fetchBody = fetchBodyOverHttps
 } = {}) {
-  if (typeof client?.callTool !== "function" || !isPlainObject13(capability) || capability.actionId !== EMAIL_TEMPLATE_ACTION || typeof boundLocationId !== "string" || boundLocationId.length === 0) throw codedError11("EMAIL_COPY_CONFIG_INVALID", TypeError);
+  if (typeof client?.callTool !== "function" || !isPlainObject13(capability) || capability.actionId !== EMAIL_TEMPLATE_ACTION || typeof boundLocationId !== "string" || boundLocationId.length === 0 || dialect !== "native" && dialect !== "bounded") throw codedError11("EMAIL_COPY_CONFIG_INVALID", TypeError);
   const limits = { ...DEFAULT_BUDGETS2, ...budgets };
   return {
     async collectEmailCopy({ workflows, signal } = {}) {
@@ -42285,7 +42302,7 @@ function createEmailCopyCollector({
       try {
         for (; pages < limits.maxListPages; pages += 1) {
           const response = await client.callTool(
-            listRequest(capability, boundLocationId, limits.listPageLimit, pages * limits.listPageLimit),
+            listRequest(capability, boundLocationId, limits.listPageLimit, pages * limits.listPageLimit, dialect),
             { signal }
           );
           const body = bodyOf(response);
@@ -49255,9 +49272,6 @@ function buildInternalAuditAdapter({
       return {
         ...evidence,
         emailCopy,
-        // The bundle's own completeness must account for the copy, or a partial copy collection
-        // would be published inside a run calling itself complete.
-        complete: evidence.complete === true && emailCopy.complete === true,
         limitations: [
           ...evidence.limitations ?? [],
           ...emailCopy.complete === true ? [] : ["EMAIL_COPY_INCOMPLETE"]

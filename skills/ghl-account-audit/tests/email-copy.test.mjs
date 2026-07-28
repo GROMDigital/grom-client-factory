@@ -60,16 +60,26 @@ const capability = Object.freeze({
   capabilityManifestHash: 'c'.repeat(64),
 });
 
-/** A worker double returning the OBSERVED envelope. */
+/**
+ * A worker double returning the OBSERVED envelope.
+ *
+ * The worker answers `{ok, status, data, ...}` and the GHL body is at `.data`. The first live run
+ * read one level too shallow and reported EMAIL_TEMPLATE_LIST_SHAPE against a perfectly good 200,
+ * because this double was flat. It is now the real envelope.
+ */
 function listClient(builders, { total = builders.length, calls = [] } = {}) {
   return {
     callTool: async (request) => {
       calls.push(request);
       return {
         structuredContent: {
-          builders,
-          // OBSERVED: an ARRAY holding one object, not a number.
-          total: [{ total }],
+          ok: true,
+          status: 200,
+          data: {
+            builders,
+            // OBSERVED: an ARRAY holding one object, not a number.
+            total: [{ total }],
+          },
         },
       };
     },
@@ -313,4 +323,56 @@ test('a misconfigured collector refuses to exist rather than reading something e
     () => createEmailCopyCollector({ client: {}, capability, boundLocationId: LOCATION }),
     /EMAIL_COPY_CONFIG_INVALID/u,
   );
+});
+
+test('a native transport gets the worker dialect, and a bounded one gets the policy envelope', async () => {
+  /*
+   * THE LIVE-ONLY BUG THIS TEST EXISTS FOR. The first real run sent the bounded envelope down a
+   * NATIVE wire, where the journey translator sits in front of the worker and refuses every action
+   * that is not one of the seven journey reads. It refused this one by name and the copy came back
+   * empty with MCP_TOOL_CALL_FAILED. No hermetic double caught it because both dialects look
+   * plausible to a double that answers either.
+   */
+  const nativeCalls = [];
+  await createEmailCopyCollector({
+    client: listClient([builder(TEMPLATE, 'T')], { calls: nativeCalls }),
+    capability,
+    boundLocationId: LOCATION,
+    dialect: 'native',
+    fetchBody: async () => '<p>x</p>',
+  }).collectEmailCopy({ workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])] });
+
+  assert.equal(nativeCalls[0].arguments.action_id, 'emails__fetch-template', 'the worker requires action_id');
+  assert.equal(nativeCalls[0].arguments.action, undefined);
+  assert.equal(nativeCalls[0].arguments.policy, undefined);
+
+  const boundedCalls = [];
+  await collector(listClient([builder(TEMPLATE, 'T')], { calls: boundedCalls })).collectEmailCopy({
+    workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])],
+  });
+  assert.equal(boundedCalls[0].arguments.action, 'emails__fetch-template');
+  assert.equal(boundedCalls[0].arguments.action_id, undefined);
+  assert.ok(boundedCalls[0].arguments.policy);
+});
+
+test('an unknown dialect is refused rather than defaulted', () => {
+  assert.throws(
+    () => createEmailCopyCollector({ client: { callTool() {} }, capability, boundLocationId: LOCATION, dialect: 'guess' }),
+    /EMAIL_COPY_CONFIG_INVALID/u,
+  );
+});
+
+test('the worker envelope is unwrapped, and a flat body still works', async () => {
+  // The live shape: the GHL body sits at `.data` inside the worker's `{ok,status,data}` envelope.
+  const enveloped = await collector({
+    callTool: async () => ({ structuredContent: { ok: true, status: 200, data: { builders: [builder(TEMPLATE, 'A')], total: [{ total: 59 }] } } }),
+  }).collectEmailCopy({ workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])] });
+  assert.equal(enveloped.complete, true);
+  assert.equal(enveloped.libraryTotal, 59);
+
+  // A host that injects an already-unwrapped delegate is still served.
+  const flat = await collector({
+    callTool: async () => ({ structuredContent: { builders: [builder(TEMPLATE, 'A')], total: [{ total: 59 }] } }),
+  }).collectEmailCopy({ workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])] });
+  assert.equal(flat.complete, true);
 });

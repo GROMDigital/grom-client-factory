@@ -791,6 +791,16 @@ export function upstreamToolRequest(actionId, params) {
   return { name: 'execute_action', arguments: { action_id: actionId, params } };
 }
 
+/**
+ * Approved reads carried to the worker verbatim, without a journey plan.
+ *
+ * Membership here does NOT make an action collectable as journey evidence: it stays listed in
+ * `NOT_COLLECTABLE_IN_THIS_SHAPE` and out of `translatedActionIds()`, so the journey preflight
+ * still refuses it. The two facts are separate and both are true: it may be called, and it may not
+ * be collected as a scope.
+ */
+export const PASSTHROUGH_ACTIONS = new Set(['emails__fetch-template']);
+
 export function translatedActionIds() {
   return Object.freeze(Object.keys(PLANS).sort());
 }
@@ -1092,6 +1102,28 @@ export function createGhlTranslatingConnect({ connect, runtime = {} } = {}) {
           || !isPlainObject(request.arguments)
           || !isPlainObject(request.arguments.params)
         ) throw fail('GHL_TRANSLATION_REQUEST_INVALID');
+        /*
+         * THE ONE NON-JOURNEY PASSTHROUGH, and it is deliberately not a plan.
+         *
+         * `lib/adapters/mcp-transport.mjs` requires the bounded envelope on every call: it checks
+         * `arguments.policy` against the trusted policy and refuses anything without one. So the
+         * bounded dialect is mandatory on the wire, and this translator is the ONLY thing that
+         * converts bounded into the worker's `{action_id, params}`. An approved read that is not a
+         * journey read therefore still has to pass through here, or it cannot be called at all --
+         * which is exactly what happened on the first live run of the email-copy rail
+         * (`ACTION_NOT_ALLOWED`, after `MCP_TOOL_CALL_FAILED` before it).
+         *
+         * It is a PASSTHROUGH and not a `PLANS` entry on purpose. It is absent from
+         * `translatedActionIds()`, so `assertTranslatableCapabilities` still refuses it as a
+         * journey capability and it can never be collected as a scope, windowed, or projected. All
+         * this does is carry an already-approved read to the worker in the worker's own dialect.
+         */
+        if (PASSTHROUGH_ACTIONS.has(request.arguments.action)) {
+          return delegate.callTool(
+            upstreamToolRequest(request.arguments.action, request.arguments.params),
+            options,
+          );
+        }
         const structured = await translateScope({
           // INBOUND: our own dialect, `arguments.action`. See the module header for why the two
           // names are different and where the boundary between them is.

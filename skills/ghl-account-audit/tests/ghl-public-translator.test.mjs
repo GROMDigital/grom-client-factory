@@ -27,6 +27,7 @@ import {
   calendarEventChunks,
   createGhlTranslatingConnect,
   translatedActionIds,
+  PASSTHROUGH_ACTIONS,
 } from '../lib/adapters/ghl-public-translator.mjs';
 import { auditPaths } from '../lib/paths.mjs';
 import { openState } from '../lib/state.mjs';
@@ -157,8 +158,47 @@ test('payments and the parent-id reads FAIL rather than returning an empty item 
     await translateRejects(actionId, {}, 'GHL_ACTION_NOT_TRANSLATED');
   }
   for (const actionId of Object.keys(NOT_COLLECTABLE_IN_THIS_SHAPE)) {
+    // A PASSTHROUGH is exempt, and only from THIS half of the rule. It is still not collectable as
+    // journey evidence (asserted by the enumeration test above and by the preflight test below);
+    // it is merely carried to the worker when something calls it directly. See PASSTHROUGH_ACTIONS.
+    if (PASSTHROUGH_ACTIONS.has(actionId)) continue;
     await translateRejects(actionId, {}, 'GHL_ACTION_NOT_COLLECTABLE_IN_THIS_SHAPE');
   }
+});
+
+test('an approved non-journey read is carried to the worker in the worker dialect', async () => {
+  /*
+   * `lib/adapters/mcp-transport.mjs` requires the bounded envelope's `policy` block on EVERY call,
+   * so this translator is the only thing that can convert an approved read into `{action_id}`. An
+   * approved read with no passthrough therefore cannot be called at all, which is what stalled the
+   * email-copy rail on two consecutive live runs.
+   */
+  const calls = [];
+  const connect = createGhlTranslatingConnect({
+    connect: async () => ({
+      callTool: async (request) => {
+        calls.push(request);
+        return { structuredContent: { ok: true, status: 200, data: { builders: [], total: [{ total: 0 }] } } };
+      },
+      async close() {},
+    }),
+  });
+  const client = await connect({});
+  const response = await client.callTool({
+    name: 'execute_action',
+    arguments: {
+      action: 'emails__fetch-template',
+      params: { locationId: 'L1', limit: 100, offset: 0 },
+      policy: { actionId: 'emails__fetch-template' },
+    },
+  });
+
+  // OUT: the worker's own contract, `action_id`, with the params untouched.
+  assert.equal(calls[0].arguments.action_id, 'emails__fetch-template');
+  assert.deepEqual(calls[0].arguments.params, { locationId: 'L1', limit: 100, offset: 0 });
+  // BACK: verbatim. A passthrough does not normalise into the journey page shape, because it is
+  // not a scope and nothing downstream reads it as one.
+  assert.equal(response.structuredContent.data.total[0].total, 0);
 });
 
 // ---------------------------------------------------------------------------

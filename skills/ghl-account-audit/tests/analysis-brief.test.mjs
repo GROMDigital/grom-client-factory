@@ -342,3 +342,18 @@ test('plainText survives the entities a real GHL email body carries', () => {
   );
   assert.equal(plainText(undefined), '');
 });
+
+test('a real marketing template is mostly CSS, and none of it reaches the copywriter', () => {
+  /*
+   * OBSERVED live: the first library body fetched from the UK account rendered as
+   * "A quick thought body, table, td, p, a, h1, h2, h3, span, div { font-family: 'Montserrat'..."
+   * because stripping tags leaves the STYLE TEXT behind.
+   */
+  const html = "<html><head><style>body, table, td { font-family: 'Montserrat'; color: #111 }</style></head>"
+    + '<body><!-- preheader --><h1>A quick thought</h1><p>Before you book, one thing.</p>'
+    + '<script>console.log(1)</script></body></html>';
+  const text = plainText(html);
+  assert.equal(text, 'A quick thought\nBefore you book, one thing.');
+  assert.ok(!text.includes('font-family'));
+  assert.ok(!text.includes('console.log'));
+});

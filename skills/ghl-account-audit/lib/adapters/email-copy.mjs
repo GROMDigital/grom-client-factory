@@ -187,12 +187,30 @@ async function fetchBodyOverHttps(url, { timeoutMs, maxBytes, signal }) {
  * either sending parameters it does not have or widening the one function every journey read passes
  * through. The approval that matters -- the allowlist entry -- is shared.
  */
-function listRequest(capability, locationId, limit, offset) {
+function listRequest(capability, locationId, limit, offset, dialect) {
+  const params = { locationId, limit, offset };
+  /*
+   * TWO DIALECTS, and picking the wrong one is a live-only failure that no hermetic double catches.
+   *
+   * `native` is the worker's OWN tool contract, `{action_id, params}`. `bounded` is this repo's
+   * normalised dialect, `{action, params, policy}`, which `lib/adapters/ghl-public-translator.mjs`
+   * converts into the native one.
+   *
+   * The first live run of this module sent `bounded` down a NATIVE transport, where the translating
+   * connect sits in front of the client and knows only the seven journey reads. It refused the call
+   * with the very rule this module added to it -- `emails__fetch-template` is listed in
+   * `NOT_COLLECTABLE_IN_THIS_SHAPE` -- and the copy came back empty with `MCP_TOOL_CALL_FAILED`.
+   * That refusal is correct and stays. This rail simply must not be behind the translator: it is
+   * not a journey read, so it speaks to the worker directly, in the worker's own dialect.
+   */
+  if (dialect === 'native') {
+    return { name: 'execute_action', arguments: { action_id: EMAIL_TEMPLATE_ACTION, params } };
+  }
   return {
     name: 'execute_action',
     arguments: {
       action: EMAIL_TEMPLATE_ACTION,
-      params: { locationId, limit, offset },
+      params,
       policy: {
         actionId: capability.actionId,
         method: capability.method,
@@ -208,9 +226,19 @@ function listRequest(capability, locationId, limit, offset) {
   };
 }
 
+/**
+ * The payload inside the worker's response envelope.
+ *
+ * OBSERVED: the worker answers `{ ok, status, data, note, filter, pagination, error }` and the GHL
+ * body is at `.data`. The first live run read one level too shallow, found no `builders`, and
+ * reported `EMAIL_TEMPLATE_LIST_SHAPE` against a perfectly good 200. Both depths are accepted so a
+ * host that injects an already-unwrapped delegate still works, but the envelope is tried FIRST.
+ */
 function bodyOf(response) {
-  const value = response?.structuredContent ?? response?.data ?? response;
-  return isPlainObject(value) ? value : null;
+  const outer = response?.structuredContent ?? response;
+  if (!isPlainObject(outer)) return null;
+  if (isPlainObject(outer.data) && Array.isArray(outer.data.builders)) return outer.data;
+  return isPlainObject(outer) ? outer : null;
 }
 
 /**
@@ -243,6 +271,10 @@ export function createEmailCopyCollector({
   client,
   capability,
   boundLocationId,
+  // Which request contract the supplied client speaks. `native` is the worker's own
+  // `{action_id, params}`; `bounded` is this repo's normalised `{action, params, policy}`. See
+  // `listRequest`: sending the wrong one is a live-only failure, and it happened on the first run.
+  dialect = 'bounded',
   budgets = {},
   fetchBody = fetchBodyOverHttps,
 } = {}) {
@@ -252,6 +284,7 @@ export function createEmailCopyCollector({
     || capability.actionId !== EMAIL_TEMPLATE_ACTION
     || typeof boundLocationId !== 'string'
     || boundLocationId.length === 0
+    || (dialect !== 'native' && dialect !== 'bounded')
   ) throw codedError('EMAIL_COPY_CONFIG_INVALID', TypeError);
   const limits = { ...DEFAULT_BUDGETS, ...budgets };
 
@@ -278,7 +311,7 @@ export function createEmailCopyCollector({
       try {
         for (; pages < limits.maxListPages; pages += 1) {
           const response = await client.callTool(
-            listRequest(capability, boundLocationId, limits.listPageLimit, pages * limits.listPageLimit),
+            listRequest(capability, boundLocationId, limits.listPageLimit, pages * limits.listPageLimit, dialect),
             { signal },
           );
           const body = bodyOf(response);

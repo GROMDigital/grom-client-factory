@@ -60,6 +60,17 @@ function byteOrder(left, right) {
 /** HTML to readable text. The copy is what lane 3 judges, so it has to arrive readable. */
 export function plainText(html) {
   return String(html ?? '')
+    /*
+     * STYLE AND SCRIPT BLOCKS GO FIRST, contents and all.
+     *
+     * Stripping tags alone leaves the CSS TEXT behind, so the first library template read from the
+     * live account handed the copywriter
+     * "A quick thought body, table, td, p, a, h1, h2, h3, span, div { font-family: 'Montserrat'..."
+     * as if it were the email. A marketing template is mostly `<style>`, so this is not a corner
+     * case: it is what every fetched body looks like without this line.
+     */
+    .replaceAll(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/giu, ' ')
+    .replaceAll(/<!--[\s\S]*?-->/gu, ' ')
     .replaceAll(/<br\s*\/?>/giu, '\n')
     .replaceAll(/<\/(?:p|div|tr|h[1-6])>/giu, '\n')
     .replaceAll(/<[^>]+>/gu, '')
