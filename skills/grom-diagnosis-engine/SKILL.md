@@ -60,6 +60,36 @@ file staged from captures/. Any exit 1 = stop, sanitize, re-check. Raw files
 are never staged.
 
 
+## Setting up an account that has never been audited
+
+ONE command. It reads the account's own `companyId`, `timezone` and name from the location record,
+derives everything else from shipped artefacts, and writes the provider config, the vault key, and a
+stub for the account's facts.
+
+```
+node scripts/init-account.mjs \
+  --project ~/.grom-audit-runs/<label> --location <locationId> --label <label> \
+  --credential-env <ENV_VAR_HOLDING_THE_PIT_TOKEN> \
+  --token-file <path to the internal-rail token file>
+```
+
+**Read the timezone from the ACCOUNT, never from the city.** SK Skin is a Melbourne clinic whose
+account timezone is Australia/Sydney. Typing the city would move every weekly window boundary and
+nothing would complain. That is why this reads it rather than asking.
+
+The cutoff defaults to the most recent Monday 00:00 in that timezone, and the script refuses a cutoff
+that has not passed: a week has to close before it can be read.
+
+🔴 **Then fill in `profiles/accounts/<locationId>.v1.json` BEFORE the first run.** The stub is written
+with an empty `knownDataCaveats` on purpose. Ask the owner what would make a number mean something
+other than what it looks like: who marks appointment outcomes, which calendars are deliberately
+two-phase, what is switched off on purpose, whether deposits are taken, where test data lives. The
+briefs are sealed, so a caveat added afterwards can never reach an expert, and a missing one becomes
+a confident wrong finding. Never invent one.
+
+The shared profile is a TEMPLATE and must never name one account. Caveats in an account file are
+added to the shared ones, not substituted for them.
+
 ## Mode: weekly (explicit commercial diagnostic)
 
 Invoke the checked-in Task 9 audit CLI explicitly for the governed weekly
