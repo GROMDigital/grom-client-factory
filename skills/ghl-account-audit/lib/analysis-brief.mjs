@@ -80,8 +80,21 @@ export function plainText(html) {
     .replaceAll('&quot;', '"')
     .replaceAll('&gt;', '>')
     .replaceAll('&lt;', '<')
-    .replaceAll(/\n{3,}/gu, '\n\n')
     .replaceAll(/[ \t]{2,}/gu, ' ')
+    /*
+     * BLANK LINES OUT, and this is not cosmetics.
+     *
+     * A real template is a nest of layout tables, so every `</td>` and `</tr>` became a newline and
+     * one live email arrived as "No problem |  |  |  |  | at all." with the sentence split across
+     * dozens of empty lines. An analyst asked to judge an opening angle cannot read that, and a
+     * model asked to QUOTE it will quote the layout.
+     */
+    .split('\n')
+    .map((line) => line.trim())
+    // A run of blank lines becomes ONE, not none. Dropping them all was the first attempt and it
+    // destroyed the paragraph breaks too, which are real structure a copywriter judges.
+    .filter((line, index, lines) => line.length > 0 || (index > 0 && lines[index - 1].trim().length > 0))
+    .join('\n')
     .trim();
 }
 

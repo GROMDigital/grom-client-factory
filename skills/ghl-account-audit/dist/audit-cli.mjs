@@ -9577,7 +9577,7 @@ function byteOrder(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 function plainText(html) {
-  return String(html ?? "").replaceAll(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/giu, " ").replaceAll(/<!--[\s\S]*?-->/gu, " ").replaceAll(/<br\s*\/?>/giu, "\n").replaceAll(/<\/(?:p|div|tr|h[1-6])>/giu, "\n").replaceAll(/<[^>]+>/gu, "").replaceAll("&nbsp;", " ").replaceAll("&amp;", "&").replaceAll("&#39;", "'").replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll(/\n{3,}/gu, "\n\n").replaceAll(/[ \t]{2,}/gu, " ").trim();
+  return String(html ?? "").replaceAll(/<(style|script)\b[^>]*>[\s\S]*?<\/\1>/giu, " ").replaceAll(/<!--[\s\S]*?-->/gu, " ").replaceAll(/<br\s*\/?>/giu, "\n").replaceAll(/<\/(?:p|div|tr|h[1-6])>/giu, "\n").replaceAll(/<[^>]+>/gu, "").replaceAll("&nbsp;", " ").replaceAll("&amp;", "&").replaceAll("&#39;", "'").replaceAll("&quot;", '"').replaceAll("&gt;", ">").replaceAll("&lt;", "<").replaceAll(/[ \t]{2,}/gu, " ").split("\n").map((line) => line.trim()).filter((line, index, lines) => line.length > 0 || index > 0 && lines[index - 1].trim().length > 0).join("\n").trim();
 }
 function observation(surfaces, capability, observationId) {
   const surface = (surfaces ?? []).find((entry) => entry.capability === capability);
@@ -41902,6 +41902,18 @@ function looksLikePersonRecord(record2) {
   if (!isPlainObject12(record2)) return false;
   return Object.keys(record2).some((key) => PERSON_MARKERS.has(normalizeKey(key)));
 }
+function describeOutboundCall(key, value) {
+  const normalized = normalizeKey(key);
+  if (normalized === "authorization") return ["authorizationConfigured", hasContent(value)];
+  if (normalized === "method" && typeof value === "string" && WRITE_METHODS2.has(value.toUpperCase())) {
+    return ["configuredHttpMethod", value];
+  }
+  return [key, value];
+}
+function hasContent(value) {
+  if (typeof value === "string") return value.trim().length > 0;
+  return value !== null && value !== void 0 && value !== false;
+}
 function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet(), inPersonRecord = false) {
   const normalized = normalizeKey(key);
   const personal = ALWAYS_PERSONAL.has(normalized) || inPersonRecord && PERSONAL_IN_PERSON_RECORD.has(normalized);
@@ -41921,10 +41933,10 @@ function scrubPersonal(value, key = "", seen = /* @__PURE__ */ new WeakSet(), in
     if (personal) return REDACTED;
     const childContext = looksLikePersonRecord(value);
     return Object.fromEntries(
-      Object.entries(value).map(([childKey, child]) => [
-        childKey,
-        scrubPersonal(child, childKey, seen, childContext)
-      ])
+      Object.entries(value).map(([childKey, child]) => {
+        const [safeKey, safeChild] = describeOutboundCall(childKey, child);
+        return [safeKey, scrubPersonal(safeChild, safeKey, seen, childContext)];
+      })
     );
   } finally {
     seen.delete(value);
@@ -42100,7 +42112,7 @@ function createInternalAuditAdapter({
     }
   };
 }
-var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, ALWAYS_PERSONAL, PERSONAL_IN_PERSON_RECORD, PERSON_MARKERS, PERSONAL_PATTERN, REDACTED;
+var EXPECTED_CONTRACT_VERSIONS, LATCHING_CODES, ALWAYS_PERSONAL, PERSONAL_IN_PERSON_RECORD, PERSON_MARKERS, PERSONAL_PATTERN, REDACTED, WRITE_METHODS2;
 var init_internal_audit = __esm({
   "lib/adapters/internal-audit.mjs"() {
     init_collection();
@@ -42152,6 +42164,7 @@ var init_internal_audit = __esm({
     ]));
     PERSONAL_PATTERN = /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\+\d[\d\s().-]{7,}\d|https?:\/\/|Bearer\s+\S+)/iu;
     REDACTED = "[redacted]";
+    WRITE_METHODS2 = Object.freeze(/* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]));
   }
 });
 
@@ -44221,7 +44234,7 @@ function assertSafeCollected(value, seen = /* @__PURE__ */ new WeakSet()) {
   seen.add(value);
   for (const [key, child] of Object.entries(value)) {
     const normalized = key.toLowerCase().replaceAll(/[^a-z]/gu, "");
-    if (["rawrequest", "mutationtool", "authorization", "cookie"].includes(normalized) || normalized === "method" && WRITE_METHODS2.has(String(child).toUpperCase())) throw codedError12("AUDIT_INTEGRITY_FAILURE_WRITE_OR_RAW_TRACE");
+    if (["rawrequest", "mutationtool", "authorization", "cookie"].includes(normalized) || normalized === "method" && WRITE_METHODS3.has(String(child).toUpperCase())) throw codedError12("AUDIT_INTEGRITY_FAILURE_WRITE_OR_RAW_TRACE");
     assertSafeCollected(child, seen);
   }
   seen.delete(value);
@@ -45375,7 +45388,7 @@ function createAuditKernel({
     terminalStates: [...TERMINAL]
   });
 }
-var PHASES, TERMINAL, QUARANTINING_CODES, NON_PUBLISHING_STATUSES2, WRITE_METHODS2, REVISION_PHASES, OPAQUE_ID, FROZEN_INPUT_SEAL_KIND, FROZEN_INPUT_SEAL_DOMAIN, FROZEN_INPUT_PROVENANCE_METHOD2, FROZEN_INPUT_SEAL_FIELDS;
+var PHASES, TERMINAL, QUARANTINING_CODES, NON_PUBLISHING_STATUSES2, WRITE_METHODS3, REVISION_PHASES, OPAQUE_ID, FROZEN_INPUT_SEAL_KIND, FROZEN_INPUT_SEAL_DOMAIN, FROZEN_INPUT_PROVENANCE_METHOD2, FROZEN_INPUT_SEAL_FIELDS;
 var init_kernel = __esm({
   "lib/kernel.mjs"() {
     init_canonical();
@@ -45422,7 +45435,7 @@ var init_kernel = __esm({
       "INTERNAL_AUDIT_READ_ONLY_VIOLATION"
     ]);
     NON_PUBLISHING_STATUSES2 = /* @__PURE__ */ new Set(["blocked", "failed", "quarantined"]);
-    WRITE_METHODS2 = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
+    WRITE_METHODS3 = /* @__PURE__ */ new Set(["POST", "PUT", "PATCH", "DELETE"]);
     REVISION_PHASES = /* @__PURE__ */ new Set([
       "awaiting_model_review",
       "prioritizing",

@@ -353,3 +353,55 @@ test('a provider transport record carries three keys and none of them is a secre
     { code: 'INTERNAL_AUDIT_TRANSPORT_INVALID' },
   );
 });
+
+test('the account describing an outbound call is not us making one', () => {
+  /*
+   * `lib/kernel.mjs` refuses any collected object with an `authorization` key or a write-verb
+   * `method`, and that rule is absolute on purpose. Grom UK's own configuration contains six such
+   * shapes: three voice-AI actions, three custom actions, and the `01 Onboarding Ready`
+   * custom_webhook step. Every live run with the internal rail on died on them right after
+   * `collecting_internal` checkpointed, so no such run ever reached the briefs.
+   */
+  const scrubbed = scrubPersonal({
+    workflow: {
+      name: '01 Onboarding Ready',
+      steps: [{
+        type: 'custom_webhook',
+        attributes: { method: 'POST', authorization: 'sk-live-abcdef123456', url: 'https://onboarding.example.test/hook' },
+      }],
+    },
+    voice_ai: { actions: [{ apiDetails: { method: 'POST' } }, { apiDetails: { method: 'GET' } }] },
+  });
+
+  const step = scrubbed.workflow.steps[0].attributes;
+  // The FACT survives, renamed to say whose request it is.
+  assert.equal(step.configuredHttpMethod, 'POST');
+  assert.equal(step.method, undefined);
+  // The credential VALUE is gone; that it authenticates at all is kept.
+  assert.equal(step.authorizationConfigured, true);
+  assert.equal(step.authorization, undefined);
+  assert.ok(!JSON.stringify(scrubbed).includes('sk-live-abcdef123456'));
+
+  assert.equal(scrubbed.voice_ai.actions[0].apiDetails.configuredHttpMethod, 'POST');
+  // A READ verb is untouched. Only the shapes the scanner refuses are renamed.
+  assert.equal(scrubbed.voice_ai.actions[1].apiDetails.method, 'GET');
+});
+
+test('the scrubbed evidence passes the kernel safety scanner that used to quarantine it', () => {
+  const WRITE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  const violations = [];
+  const walk = (value, path) => {
+    if (!value || typeof value !== 'object') return;
+    for (const [key, child] of Object.entries(value)) {
+      const n = key.toLowerCase().replaceAll(/[^a-z]/gu, '');
+      if (['rawrequest', 'mutationtool', 'authorization', 'cookie'].includes(n)) violations.push(`${path}.${key}`);
+      if (n === 'method' && WRITE.has(String(child).toUpperCase())) violations.push(`${path}.${key}=${child}`);
+      walk(child, `${path}.${key}`);
+    }
+  };
+  walk(scrubPersonal({
+    actions: [{ apiDetails: { method: 'DELETE', authorization: 'Bearer nope' } }],
+    customActions: [{ apiDetails: { method: 'PUT' } }],
+  }), 'root');
+  assert.deepEqual(violations, []);
+});

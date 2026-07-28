@@ -170,6 +170,57 @@ function looksLikePersonRecord(record) {
   return Object.keys(record).some((key) => PERSON_MARKERS.has(normalizeKey(key)));
 }
 
+/** HTTP verbs `lib/kernel.mjs` treats as evidence that a WRITE was performed. */
+const WRITE_METHODS = Object.freeze(new Set(['POST', 'PUT', 'PATCH', 'DELETE']));
+
+/**
+ * THE ACCOUNT DESCRIBING AN OUTBOUND CALL IS NOT US MAKING ONE.
+ *
+ * `lib/kernel.mjs:124` refuses any collected object carrying an `authorization` key, or a `method`
+ * key whose value is a write verb. That rule is correct and absolute: it is what guarantees this
+ * read-only audit never captures a write it performed or a credential it sent, and it must not be
+ * weakened to make a collection fit.
+ *
+ * But a GHL account's own CONFIGURATION contains both of those shapes as ordinary content. Grom's UK
+ * account has six: three voice-AI actions and three custom actions with
+ * `apiDetails.method: "POST"`, plus workflow `01 Onboarding Ready`'s `custom_webhook` step, which
+ * carries `attributes.method: "POST"` and an `attributes.authorization`. Every one of them describes
+ * a request the ACCOUNT makes. None is a request we made.
+ *
+ * The scanner cannot tell those apart from structure alone, and it should not try. So the ambiguity
+ * is removed HERE, at the collection boundary, by naming the thing accurately:
+ *
+ *   `method: "POST"`  ->  `configuredHttpMethod: "POST"`   the fact survives, renamed to say whose
+ *                                                          request it is
+ *   `authorization`   ->  `authorizationConfigured: true`  the VALUE is dropped as data the analysis
+ *                                                          never needs; the FACT that the step
+ *                                                          authenticates is kept
+ *
+ * The value is dropped rather than redacted because an `authorization` header on a webhook step is a
+ * live credential on some accounts. On this one it turned out to be a ten-character non-secret, but
+ * that is an accident of this account and not something to depend on.
+ *
+ * The key is renamed rather than deleted for the reason stated above `looksLikePersonRecord`: a
+ * missing key and a redacted one mean different things, and lane 2 should be able to see that a step
+ * POSTs to a webhook and authenticates when it does.
+ *
+ * This ran into `AUDIT_INTEGRITY_FAILURE_WRITE_OR_RAW_TRACE` on every live run with the internal rail
+ * on, right after `collecting_internal` checkpointed, so no such run had ever reached `normalizing`.
+ */
+function describeOutboundCall(key, value) {
+  const normalized = normalizeKey(key);
+  if (normalized === 'authorization') return ['authorizationConfigured', hasContent(value)];
+  if (normalized === 'method' && typeof value === 'string' && WRITE_METHODS.has(value.toUpperCase())) {
+    return ['configuredHttpMethod', value];
+  }
+  return [key, value];
+}
+
+function hasContent(value) {
+  if (typeof value === 'string') return value.trim().length > 0;
+  return value !== null && value !== undefined && value !== false;
+}
+
 export function scrubPersonal(value, key = '', seen = new WeakSet(), inPersonRecord = false) {
   const normalized = normalizeKey(key);
   const personal = ALWAYS_PERSONAL.has(normalized)
@@ -196,10 +247,10 @@ export function scrubPersonal(value, key = '', seen = new WeakSet(), inPersonRec
     // does not stop being one.
     const childContext = looksLikePersonRecord(value);
     return Object.fromEntries(
-      Object.entries(value).map(([childKey, child]) => [
-        childKey,
-        scrubPersonal(child, childKey, seen, childContext),
-      ]),
+      Object.entries(value).map(([childKey, child]) => {
+        const [safeKey, safeChild] = describeOutboundCall(childKey, child);
+        return [safeKey, scrubPersonal(safeChild, safeKey, seen, childContext)];
+      }),
     );
   } finally {
     seen.delete(value);

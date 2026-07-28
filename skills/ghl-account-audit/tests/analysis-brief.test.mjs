@@ -357,3 +357,12 @@ test('a real marketing template is mostly CSS, and none of it reaches the copywr
   assert.ok(!text.includes('font-family'));
   assert.ok(!text.includes('console.log'));
 });
+
+test('layout tables do not shred a sentence into blank lines', () => {
+  // A real template is a nest of layout tables. One live email arrived as
+  // "No problem |  |  |  | at all." before this, which is unreadable and unquotable.
+  const html = '<table><tr><td><h1>No problem</h1></td><td>at all.</td></tr>'
+    + '<tr><td>&nbsp;</td></tr><tr><td><p>Hi there,</p></td></tr></table>';
+  // One blank line survives where the layout left a gap; the dozens do not.
+  assert.equal(plainText(html), 'No problem\nat all.\n\nHi there,');
+});
