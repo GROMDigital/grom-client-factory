@@ -45,6 +45,31 @@ const JourneySchema = z.object({
  * closes nothing. That is the worst error this product can make, it is not derivable from any
  * amount of data, and it is only ever knowable by being told. Anything of that kind belongs here.
  */
+/**
+ * WHAT THIS ACCOUNT IS TRYING TO HIT. Not what good looks like: what the OWNER wants.
+ *
+ * These two are different and conflating them is how this product would turn back into a checklist.
+ * An expert is the BENCHMARK authority and must keep saying, independently, what a competent
+ * operation in this exact situation achieves. It cannot be the TARGET authority, because a target is
+ * a commercial decision nobody can derive from an account: whether Grom charges a deposit for a
+ * strategy call changes the right show-rate target from 65% to 85%, and no amount of evidence
+ * reveals which of those the business has chosen.
+ *
+ * So a target is stated here, travels with the evidence, and is explicitly NOT a standard. Nothing
+ * in the code compares a rate against one. The expert is shown both and told that if a target is
+ * unrealistic for this situation it should say so and say why.
+ *
+ * `basis` is required, and it is the field that keeps this honest: a number with no stated reasoning
+ * is a number somebody will argue with in six months and nobody will be able to defend.
+ */
+const KpiTargetSchema = z.object({
+  edgeId: z.string().min(1),
+  // A rate, so 0.65 is 65%. Every declared journey edge is a conversion between two steps.
+  target: z.number().gt(0).lte(1),
+  standard: z.enum(['industry_typical', 'industry_good', 'owner_decision']),
+  basis: z.string().min(1),
+}).strict();
+
 const SituationSchema = z.object({
   whoThisIs: z.string().min(1),
   howLeadsArrive: z.string().min(1),
@@ -52,7 +77,19 @@ const SituationSchema = z.object({
   theFunnel: z.string().min(1),
   objective: z.string().min(1),
   knownDataCaveats: z.array(z.string().min(1)),
-}).strict();
+  /*
+   * Optional, and DELIBERATELY PARTIAL where it exists. A target is only set on an edge whose
+   * denominator is unambiguous. The published bands for "lead to booked" are measured on all leads,
+   * while `qualified_to_booked` is measured on qualified ones, and a target quietly carrying the
+   * wrong denominator is worse than no target at all.
+   */
+  targets: z.array(KpiTargetSchema).optional(),
+}).strict().superRefine((situation, ctx) => {
+  const ids = (situation.targets ?? []).map(({ edgeId }) => edgeId);
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: 'custom', message: 'one target per KPI edge' });
+  }
+});
 
 export const CoverageProfileSchema = z.object({
   profileId: z.enum(['client', 'grom_internal']),

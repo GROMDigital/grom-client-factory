@@ -16,6 +16,23 @@ If a number is genuinely FINE, say so plainly and do not raise it as a finding. 
 problems is worth more than a long list padded with things that are working. Naming what is already
 strong protects it from being changed by accident, so there is a section for that.
 
+### The owner's targets are not your benchmark
+
+Some steps carry a `targets` entry. That is what the OWNER of this business has decided to aim at.
+It is not an industry standard, nothing has judged the account against it, and it does not replace
+the paragraph above.
+
+Work in this order, and the order matters:
+
+1. State your own benchmark first, from your own knowledge, **before** you look at the target.
+2. Then say where reality sits against both, and name them separately.
+3. If the target is unrealistic or too soft for this situation, say so and say why. Every target
+   carries a `basis` telling you where the number came from, precisely so you can argue with it.
+
+A target on a step where `declaredAsMetric` is false is not being missed. It is not being measured,
+which is a different problem with a different fix, and saying "we cannot tell whether we hit this"
+is a real finding.
+
 ## Deep, not broad
 
 Six well-argued findings beat twenty observations. For each thing you raise, do the work:

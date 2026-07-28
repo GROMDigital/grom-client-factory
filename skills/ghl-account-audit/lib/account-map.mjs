@@ -131,6 +131,14 @@ export function buildAccountMapEvidence({ briefs } = {}) {
     questionsToAnswer: journey.questionsToAnswer,
     provenanceLimits: journey.provenanceLimits,
     kpis: journey.kpis,
+    /*
+     * What the business is TRYING to hit. Stage 1 gets these because a workflow's job is partly
+     * defined by which number it is supposed to move, and it is the stage that decides which
+     * workflows sit on the money path. It is told, in the framing that travels with them, that a
+     * target is the owner's decision and not a standard, and stage 1 does not diagnose anyway.
+     */
+    targets: journey.targets ?? [],
+    howToReadTargets: journey.howToReadTargets ?? [],
     volumes: journey.volumes,
     projection: journey.projection,
     observations: journey.observations,

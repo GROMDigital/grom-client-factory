@@ -57,10 +57,15 @@ what can be live on the same contact at the same time, and what happens to someo
 once. `runsAlongside` and the account's collision facts are in your evidence. Say what one person
 experiences, not what the diagram intends.
 
-**7. The effect.** The KPI edges this workflow should be moving are in `kpiEdges` with their current
+**7. The effect.** The KPI edges this workflow should be moving are in `effect` with their current
 values. Say what this workflow is doing to them, and be honest about the limit: you cannot prove
 this configuration caused a past number. What you CAN say is that a given rate is consistent with
 what you read, or that it is not, and which one number would settle it.
+
+Where `effect.targets` is present, that is what the owner has decided to aim at for this step. It is
+not an industry standard. Say what YOU think a competent operation achieves here first, then say
+where the account sits against both, and say plainly if you think the target is wrong for this
+situation. Each target carries a `basis` explaining where the number came from.
 
 **8. The rewrite.** For every message you would change, WRITE THE REPLACEMENT IN FULL. Subject line,
 preheader and body for an email, the whole text for an SMS. Not a description of a better message,

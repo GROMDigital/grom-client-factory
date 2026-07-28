@@ -36,6 +36,32 @@
     "knownDataCaveats": [
       "Opportunity `monetaryValue` is the revenue basis, never the payments surface. Where it is unset revenue is UNMEASURABLE rather than zero.",
       "This system is DESIGNED to handle leads with automation and AI. Inserting a human is not a generic fix and must be argued from the evidence."
+    ],
+    "targets": [
+      {
+        "edgeId": "lead_created_to_first_engagement",
+        "target": 0.98,
+        "standard": "industry_typical",
+        "basis": "Every enquiry is contacted by automation, so a shortfall is a delivery or enrolment failure, not a demand problem. Speed is the real lever: close rates run 32% when the first reply lands inside five minutes against 12% at 24 hours."
+      },
+      {
+        "edgeId": "booked_to_showed",
+        "target": 0.85,
+        "standard": "industry_typical",
+        "basis": "Aesthetic clinics run 15 to 25 percent no-shows, worse than general medical practice because treatment is elective, so showing 75 to 85 percent is the normal band and 85 is the top of it. A held deposit is the main thing that moves it. No-shows cost aesthetic clinics 15 to 20 percent of annual revenue, which makes this the single most defensible number on the ladder."
+      },
+      {
+        "edgeId": "booked_to_no_show",
+        "target": 0.15,
+        "standard": "industry_typical",
+        "basis": "The inverse of the show target, stated separately because it is its own declared edge. Under 10 percent is what a well-run clinic with deposits and a working reminder ladder reaches."
+      },
+      {
+        "edgeId": "showed_to_opportunity_outcome",
+        "target": 0.5,
+        "standard": "industry_typical",
+        "basis": "Average clinics convert 40 to 55 percent of attended consultations into booked treatment; 50 is the top of average. Top performers reach 75 to 85 percent, and the published gap is attributed to the consultation process itself rather than to marketing."
+      }
     ]
   }
 }

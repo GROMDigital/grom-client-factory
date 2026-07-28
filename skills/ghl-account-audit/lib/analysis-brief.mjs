@@ -123,6 +123,61 @@ function kpiTable(metrics) {
 }
 
 /**
+ * THE OWNER'S TARGETS, PAIRED WITH WHAT THE ACCOUNT ACTUALLY READS.
+ *
+ * The line this walks is the whole reason the feature is safe. Nothing here JUDGES: it does not
+ * decide a gap is bad, it does not rank one, and no code anywhere fires a finding because a rate sits
+ * under a target. It subtracts two numbers the expert can already see and states which is which.
+ *
+ * Why targets exist at all, when the standing rule is that the expert IS the benchmark authority: a
+ * benchmark and a target are different things. A benchmark is what a competent operation in this
+ * situation achieves, and an expert must keep supplying that independently. A target is what this
+ * business has decided to aim at, which is a commercial choice no evidence reveals. Grom's own show
+ * rate should be measured against 65% while it gives strategy calls away free and 85% if it ever
+ * charges a deposit, and nothing in the account says which of those it has chosen.
+ *
+ * A target on an edge that has NO METRIC is reported, not dropped. "We are trying to hit this and
+ * cannot currently tell whether we do" is one of the more useful things this product can say.
+ */
+function targetTable({ situation, metrics }) {
+  const table = metrics?.metrics ?? {};
+  return (situation?.targets ?? []).map((target) => {
+    const perWindow = {};
+    let measuredAnywhere = false;
+    for (const [window, edges] of Object.entries(table)) {
+      const cell = isPlainObject(edges) ? edges[target.edgeId] : undefined;
+      if (cell === undefined) continue;
+      measuredAnywhere = true;
+      perWindow[window] = {
+        state: cell.state,
+        reasonCode: cell.reasonCode ?? null,
+        rate: cell.rate ?? null,
+        numerator: cell.numerator ?? null,
+        denominator: cell.denominator ?? null,
+        // Positive is above target. Null when the rate did not compute, which is NOT zero.
+        gapToTarget: typeof cell.rate === 'number' ? Number((cell.rate - target.target).toFixed(4)) : null,
+      };
+    }
+    return {
+      ...target,
+      declaredAsMetric: measuredAnywhere,
+      windows: perWindow,
+      ...(measuredAnywhere ? {} : {
+        note: 'This target names a journey step that this account does not currently measure, so whether it is being hit is unknown rather than missed.',
+      }),
+    };
+  });
+}
+
+/** How the targets must be READ, carried next to them so no prompt can drop the framing. */
+export const TARGET_FRAMING = Object.freeze([
+  'The `targets` block is what the OWNER of this business has decided to aim at. It is NOT an industry standard and it is NOT a benchmark, and nothing has judged the account against it.',
+  'You are still the benchmark authority. State what a competent operation in this exact situation achieves, in numbers, from your own knowledge and BEFORE you look at the target. Then say where reality sits against both.',
+  'If a target is unrealistic or too soft for this situation, say so plainly and say why. Disagreeing with it is part of the job, and `basis` on every target tells you where the number came from so you can argue with it.',
+  'A target on a step with `declaredAsMetric: false` is not being missed. It is not being measured, which is a different problem with a different fix.',
+]);
+
+/**
  * The step graph, from where `export_workflow` really keeps it.
  *
  * OBSERVED: `data.workflow.workflowData.templates[]`, each with `type`, `next`, `order`, `name` and
@@ -412,11 +467,15 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
     ],
   };
 
+  const targets = targetTable({ situation, metrics: measurement.metrics });
+
   const leadJourneyKpi = {
     lane: 'lead_journey_kpi',
     ...header,
     remit: 'Reconstruct the journey, find where leads drop out, and name which stage is the largest commercial leak. Judge every rate against standard practice for the situation above.',
     kpis: kpiTable(measurement.metrics),
+    targets,
+    howToReadTargets: [...TARGET_FRAMING],
     kpiCoverage: {
       declared: Object.values(kpiTable(measurement.metrics))[0]
         ? Object.keys(Object.values(kpiTable(measurement.metrics))[0]).length

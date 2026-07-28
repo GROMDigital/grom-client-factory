@@ -366,3 +366,84 @@ test('layout tables do not shred a sentence into blank lines', () => {
   // One blank line survives where the layout left a gap; the dozens do not.
   assert.equal(plainText(html), 'No problem\nat all.\n\nHi there,');
 });
+
+// ---- the owner's targets ---------------------------------------------------
+
+/**
+ * THE LINE THIS FEATURE WALKS.
+ *
+ * The standing rule is that an expert IS the benchmark authority and is never handed one. A TARGET
+ * is a different object: it is what the owner decided to aim at, which no evidence can reveal, and
+ * Grom's own show-rate target is 65% while the strategy call is free and 85% if it ever carries a
+ * deposit. These tests pin the difference, because collapsing it turns the product back into the
+ * checklist it exists to replace.
+ */
+function withTargets(targets) {
+  return buildAnalysisBriefs({
+    measurement,
+    internal: null,
+    profile: { ...profile, situation: { ...profile.situation, targets } },
+  });
+}
+
+test('a target is paired with what the account reads, and the gap is stated not judged', () => {
+  const { lanes } = withTargets([
+    { edgeId: 'enquiry_to_contacted', target: 0.98, standard: 'industry_typical', basis: 'automation contacts everyone' },
+  ]);
+  const [target] = lanes.leadJourneyKpi.targets;
+
+  assert.equal(target.target, 0.98);
+  assert.equal(target.basis, 'automation contacts everyone');
+  assert.equal(target.declaredAsMetric, true);
+  const [window] = Object.values(target.windows);
+  assert.equal(typeof window.gapToTarget, 'number');
+  // Nothing here decides the gap is bad. No verdict, no severity, no finding.
+  const serialized = JSON.stringify(target);
+  for (const verdict of ['MISSED', 'FAIL', 'severity', 'breach', 'belowTarget']) {
+    assert.ok(!serialized.includes(verdict), `a target must not carry a verdict, found ${verdict}`);
+  }
+});
+
+test('the framing travels with the numbers, so a target can never read as a standard', () => {
+  const { lanes } = withTargets([
+    { edgeId: 'enquiry_to_contacted', target: 0.98, standard: 'industry_typical', basis: 'b' },
+  ]);
+  const framing = JSON.stringify(lanes.leadJourneyKpi.howToReadTargets);
+  assert.match(framing, /NOT an industry standard/u);
+  assert.match(framing, /still the benchmark authority/u);
+  assert.match(framing, /BEFORE you look at the target/u);
+  assert.match(framing, /say so plainly and say why/u);
+});
+
+test('a target on a step nobody measures is reported as unmeasured, never as missed', () => {
+  /*
+   * "We are trying to hit this and cannot currently tell whether we do" is one of the more useful
+   * things this product can say, and it is a completely different problem from missing the number.
+   */
+  const { lanes } = withTargets([
+    { edgeId: 'an_edge_this_account_never_declared', target: 0.5, standard: 'owner_decision', basis: 'b' },
+  ]);
+  const [target] = lanes.leadJourneyKpi.targets;
+  assert.equal(target.declaredAsMetric, false);
+  assert.deepEqual(target.windows, {});
+  assert.match(target.note, /unknown rather than missed/u);
+});
+
+test('an uncomputed rate has a null gap, because a missing number is not zero', () => {
+  const { lanes } = withTargets([
+    { edgeId: 'contacted_to_qualified', target: 0.5, standard: 'owner_decision', basis: 'b' },
+  ]);
+  const [target] = lanes.leadJourneyKpi.targets;
+  for (const window of Object.values(target.windows)) {
+    if (window.rate === null) assert.equal(window.gapToTarget, null);
+  }
+});
+
+test('an account with no targets carries an empty list, not a default ladder', () => {
+  // Inventing a target for an account nobody set one on is exactly the hardcoded benchmark the
+  // product forbids. Absent means absent.
+  const bare = { ...profile, situation: { ...profile.situation } };
+  delete bare.situation.targets;
+  const { lanes } = buildAnalysisBriefs({ measurement, internal: null, profile: bare });
+  assert.deepEqual(lanes.leadJourneyKpi.targets, []);
+});

@@ -42,6 +42,7 @@
 import { readFileSync } from 'node:fs';
 import { sha256 } from './canonical.mjs';
 import { mapContextFor } from './account-map.mjs';
+import { TARGET_FRAMING } from './analysis-brief.mjs';
 
 export const OBJECT_REVIEW_SCHEMA = '1.0.0';
 
@@ -130,7 +131,7 @@ function placeOf({ collisions, name, mapContext }) {
  * the declared edge ids: an invented edge would arrive here as an empty cell and read as "this
  * number is missing" rather than "this number was never declared".
  */
-function effectOf({ kpis, edgeIds }) {
+function effectOf({ kpis, edgeIds, targets, framing }) {
   const named = {};
   for (const edgeId of edgeIds) {
     const perWindow = {};
@@ -139,9 +140,16 @@ function effectOf({ kpis, edgeIds }) {
     }
     named[edgeId] = perWindow;
   }
+  /*
+   * Only the targets for THIS workflow's own edges. A per-workflow reviewer handed the account's
+   * whole target ladder starts auditing the funnel, which is stage 3's job and not its own.
+   */
+  const mine = (targets ?? []).filter(({ edgeId }) => edgeIds.includes(edgeId));
   return {
     edgeIds: [...edgeIds],
     kpis: named,
+    targets: mine,
+    ...(mine.length > 0 ? { howToReadTargets: [...framing] } : {}),
     limit: 'These are the edges stage 1 judged this workflow should move. Nothing here proves this configuration caused any of these numbers.',
   };
 }
@@ -214,7 +222,12 @@ export function buildWorkflowReviewPrompts({ briefs, map } = {}) {
       // What actually happened, including its own statement of what was not looked at.
       runtime: workflow.runtime,
       place: placeOf({ collisions: automation.collisions, name, mapContext }),
-      effect: effectOf({ kpis: journey.kpis, edgeIds: mapContext.thisWorkflow?.kpiEdges ?? [] }),
+      effect: effectOf({
+        kpis: journey.kpis,
+        edgeIds: mapContext.thisWorkflow?.kpiEdges ?? [],
+        targets: journey.targets,
+        framing: journey.howToReadTargets ?? TARGET_FRAMING,
+      }),
       copy: sequence === null
         ? { messageCount: 0, messages: [], note: 'This workflow sends no customer-facing message.' }
         : {

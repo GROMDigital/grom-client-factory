@@ -47,6 +47,26 @@
       "The 11 KPIs from `won_to_internal_handoff` onward describe the client DELIVERY journey, which happens in a separate onboarding portal and not in this system. They read UNKNOWN forever on this evidence and are not findings.",
       "Nothing records the moment a lead becomes qualified, so `contacted_to_qualified` and `qualified_to_strategy_call` have no signal at all.",
       "This system is DESIGNED to handle leads with automation and AI, and its AI books more appointments than any other route. Inserting a human is not a generic fix here and must be argued from the evidence if argued at all."
+    ],
+    "targets": [
+      {
+        "edgeId": "enquiry_to_contacted",
+        "target": 0.98,
+        "standard": "industry_typical",
+        "basis": "This system contacts every enquiry by automation, so anything short of near-total coverage is a delivery or enrolment failure rather than a sales result. Speed matters more than coverage here: published data puts close rates at 32% when the first reply lands inside five minutes against 12% at 24 hours, and the average business takes 42 hours."
+      },
+      {
+        "edgeId": "strategy_call_to_showed",
+        "target": 0.65,
+        "standard": "industry_typical",
+        "basis": "Normal band for a FREE B2B discovery call is 50 to 70 percent, and 65 is the middle of it. Owner chose normal deliberately on 2026-07-28. The same research puts a paid or deposit-backed call at 85 percent, so raising this target is a product decision about charging for the call, not a marketing one."
+      },
+      {
+        "edgeId": "showed_to_decision",
+        "target": 0.35,
+        "standard": "industry_typical",
+        "basis": "About 35 percent of shown high-ticket B2B discovery calls close, and first-meeting-to-opportunity runs 30 to 50 percent where discovery is sharp. Read this against the caveat that this pipeline only marks won once the client PAYS."
+      }
     ]
   }
 }

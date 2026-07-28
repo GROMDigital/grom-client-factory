@@ -195,3 +195,25 @@ test('one reviewer gets its OWN entry plus the account in summary', () => {
   // can be live on the same contact, not to re-read the map.
   assert.deepEqual(context.neighbours, [{ name: '08 Lead Nurture', job: 'long term nurture', role: 'money_path' }]);
 });
+
+// ---- the owner's targets --------------------------------------------------
+
+test('targets reach stage 1 with the framing that stops them reading as a standard', () => {
+  const briefs = briefsFor();
+  briefs.lanes.leadJourneyKpi.targets = [
+    { edgeId: 'enquiry_to_booked', target: 0.65, standard: 'industry_typical', basis: 'free B2B calls run 50 to 70', declaredAsMetric: true, windows: {} },
+  ];
+  briefs.lanes.leadJourneyKpi.howToReadTargets = ['A target is the OWNER decision and not a standard.'];
+
+  const evidence = buildAccountMapEvidence({ briefs });
+  assert.equal(evidence.targets.length, 1);
+  // The framing must travel WITH the numbers. A target arriving bare reads as a benchmark, which is
+  // exactly the thing the standing rule forbids supplying.
+  assert.match(JSON.stringify(evidence.howToReadTargets), /OWNER decision and not a standard/u);
+});
+
+test('an account with no targets set is not broken by their absence', () => {
+  const evidence = buildAccountMapEvidence({ briefs: briefsFor() });
+  assert.deepEqual(evidence.targets, []);
+  assert.deepEqual(evidence.howToReadTargets, []);
+});
