@@ -174,7 +174,8 @@ function messageRecord(entry, maxBodyChars) {
   return {
     conversationId,
     contactId: firstString(entry, ['contactId', 'contact_id']),
-    userId: firstString(entry, ['userId', 'user_id']),
+    // Outbound only, and `workflow` on every automated send. See the live shape above.
+    source: firstString(entry, ['source']),
     at,
     direction: direction === 'inbound' || direction === 'outbound' ? direction : 'unknown',
     channel,
@@ -251,6 +252,27 @@ function occurredAtBand(at, fromMs, toMs) {
 }
 
 /**
+ * VERIFIED LIVE against the UK sub-account on 2026-07-29, `limit: 100`:
+ *
+ *   { messages: [{ id, direction, status, type, locationId, attachments, body, contactId,
+ *                  contentType, conversationId, dateAdded, dateUpdated, altId, from, to,
+ *                  messageType, source }],
+ *     nextCursor, total: 2767, traceId }
+ *
+ * Three things that are NOT guesses and that the parser depends on:
+ *
+ *  - `dateAdded` is an ISO STRING here, not the epoch-millisecond number the conversation index
+ *    uses for the same concept. Both are accepted.
+ *  - There is NO `userId` on any message, in either direction. An owner cannot be read off this
+ *    endpoint at all, so nothing pretends to.
+ *  - `source` appears on OUTBOUND messages only (`workflow` on every automated send observed) and
+ *    is absent on inbound. It is the one field that says whether a human ever typed into a thread,
+ *    which is why it is both the sampler's owner discriminator and a field on the transcript.
+ *
+ * `limit` below 10 is a 422 (`limit must not be less than 10`). The translator sends 100.
+ */
+
+/**
  * Assemble threads from a flat message list.
  *
  * Sorted by time within a thread and by id between them, so the same window always produces the
@@ -276,6 +298,10 @@ export function threadsFromMessages(messages, { fromMs, toMs }) {
       outboundCount: group.filter((message) => message.direction === 'outbound').length,
       lastAt: last?.at ?? null,
       lastDirection: last?.direction ?? 'unknown',
+      outboundSources: [...new Set(
+        group.filter((message) => message.direction === 'outbound' && message.source !== null)
+          .map((message) => message.source),
+      )].sort(byteOrder),
       interaction: {
         interactionRef: ref('obj', 'conversation', conversationId),
         // The contact, when the export named one. A thread with no contact id still has a subject:
@@ -295,7 +321,13 @@ export function threadsFromMessages(messages, { fromMs, toMs }) {
         responseTimeBand: responseTimeBand(group),
         callDurationBand: callDurationBand(group),
         handoffState: 'unknown',
-        ownerRef: ref('actor', 'user', lastOutbound?.userId ?? 'unassigned'),
+        /*
+         * WHO SENT THE LAST OUTBOUND — automation or a person. This endpoint carries no `userId` in
+         * either direction (verified live), so an owner in the usual sense cannot be read at all.
+         * `source` can, and it is the more decisive split anyway: a thread the account only ever
+         * spoke to through a workflow is a different thing from one a human answered.
+         */
+        ownerRef: ref('actor', 'source', lastOutbound?.source ?? 'none'),
         flags: flagsFor(group),
       },
     });
@@ -315,6 +347,12 @@ function transcriptOf(thread) {
     outboundCount: thread.outboundCount,
     flags: thread.flags,
     lastDirection: thread.lastDirection,
+    /*
+     * Whether a HUMAN ever typed into this thread. `workflow` alone means every word the account
+     * said was automated, which is the single most useful thing to know about a conversation that
+     * went nowhere. Absent on inbound, so a thread with no outbound message has an empty list.
+     */
+    outboundSources: thread.outboundSources,
     messages: thread.messages.map((message) => ({
       at: message.at,
       direction: message.direction,

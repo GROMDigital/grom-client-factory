@@ -134,7 +134,7 @@ test('the same week drawn twice draws the same threads', async () => {
 test('our own footer is not the lead opting out', async () => {
   const [thread] = threadsFromMessages(
     [
-      { conversationId: 'c1', direction: 'outbound', channel: 'TYPE_SMS', at: START, body: 'Book here. Reply STOP to unsubscribe.', status: null, callStatus: null, callDuration: null, contactId: 'p1', userId: null, attachmentCount: 0, unreadable: false },
+      { conversationId: 'c1', direction: 'outbound', channel: 'TYPE_SMS', at: START, body: 'Book here. Reply STOP to unsubscribe.', status: null, callStatus: null, callDuration: null, contactId: 'p1', source: 'workflow', attachmentCount: 0, unreadable: false },
     ],
     { fromMs: START, toMs: START + 7 * DAY },
   );
@@ -205,15 +205,65 @@ test('the manifest names nobody', async () => {
   const result = await collector(clientReturning([
     // Deliberately not hex: a short id like `c1` IS valid hex and would match inside a digest,
     // which would make this assertion pass for the wrong reason.
-    message('conversation-XYZ', { contactId: 'real-contact-id', userId: 'real-user-id' }),
+    message('conversation-XYZ', { contactId: 'real-contact-id', source: 'real-source-name' }),
   ])).collectTranscripts({});
   const serialised = JSON.stringify(result.sample);
   assert.ok(!serialised.includes('real-contact-id'));
-  assert.ok(!serialised.includes('real-user-id'));
+  assert.ok(!serialised.includes('real-source-name'));
   assert.ok(!serialised.includes('conversation-XYZ'), 'even the conversation id is opaque in the manifest');
   // ...and the transcript, which is what a person reads, keeps it, because a finding you cannot
   // trace back to a conversation cannot be acted on.
   assert.equal(result.transcripts[0].conversationId, 'conversation-XYZ');
+});
+
+test('the real GHL export record parses, field for field', async () => {
+  /*
+   * VERBATIM from the UK sub-account on 2026-07-29, phone numbers and ids aside. Pinned because
+   * every field here is read through a list of spellings — the bundled catalog types this response
+   * as an untyped object — and a shape drift must fail here rather than downstream as a quiet
+   * empty week. Note `dateAdded` is an ISO STRING, unlike the conversation index's epoch number,
+   * and note that inbound carries no `source`.
+   */
+  const outbound = {
+    id: '6WhRsyyZ5NU1Wnx4ZdoV',
+    direction: 'outbound',
+    status: 'delivered',
+    type: 2,
+    locationId: LOCATION,
+    attachments: [],
+    body: 'Hi James, your strategy is ready to review. Check the email I just sent!',
+    contactId: 'RDYNgl1NccsTRXtMF2RA',
+    contentType: 'text/plain',
+    conversationId: '3FZDrKmz41Ipag98qpqW',
+    dateAdded: '2026-07-22T15:19:16.953Z',
+    dateUpdated: '2026-07-22T15:19:25.669Z',
+    source: 'workflow',
+    altId: 'SM68f616c984778ac41cbe22902640d041',
+    from: '+447480800405',
+    to: '+447846445242',
+    messageType: 'TYPE_SMS',
+  };
+  const inbound = {
+    ...outbound,
+    id: 'XVntDZCzClEijTLgBE7q',
+    direction: 'inbound',
+    body: 'Looks good.. only thing is the image on meet kelly is not me.',
+    dateAdded: '2026-07-22T16:14:40.968Z',
+  };
+  delete inbound.source;
+
+  const result = await collector(clientReturning([outbound, inbound])).collectTranscripts({});
+
+  assert.equal(result.complete, true, 'no limitation: every field was understood');
+  assert.equal(result.messageCount, 2, 'neither record counted as unreadable');
+  const [thread] = result.transcripts;
+  assert.equal(thread.conversationId, '3FZDrKmz41Ipag98qpqW');
+  assert.equal(thread.inboundCount, 1);
+  assert.equal(thread.outboundCount, 1);
+  assert.deepEqual(thread.channels, ['TYPE_SMS'], 'messageType wins over the numeric `type`');
+  assert.deepEqual(thread.outboundSources, ['workflow'], 'no human ever typed into this thread');
+  assert.equal(thread.lastDirection, 'inbound', 'the ISO timestamps ordered correctly');
+  assert.equal(thread.messages[1].body, inbound.body);
 });
 
 test('a misconfigured collector refuses to exist', () => {

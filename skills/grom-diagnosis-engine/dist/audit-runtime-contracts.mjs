@@ -43,13 +43,48 @@ var JourneySchema = z.object({
   denominator: z.string().min(1),
   outcomes: z.array(z.string().min(1)).min(1)
 }).strict();
+var KpiTargetSchema = z.object({
+  edgeId: z.string().min(1),
+  // A rate, so 0.65 is 65%. Every declared journey edge is a conversion between two steps.
+  target: z.number().gt(0).lte(1),
+  standard: z.enum(["industry_typical", "industry_good", "owner_decision"]),
+  basis: z.string().min(1)
+}).strict();
 var SituationSchema = z.object({
+  /*
+   * WHAT TO CALL THIS ACCOUNT IN A DOCUMENT SOMEBODY READS.
+   *
+   * Optional, because it is per-account identity and the `client` profile is a template shared by
+   * every clinic. Where it is absent the report falls back to the location id, which is honest and
+   * ugly rather than a guessed name.
+   *
+   * It lives here rather than being collected because the sub-account record is not on the governed
+   * read allowlist, and widening that boundary to fetch a display name would be a poor trade. The
+   * durable fix, if this ever matters for many accounts at once, is to collect it.
+   */
+  accountName: z.string().min(1).optional(),
   whoThisIs: z.string().min(1),
   howLeadsArrive: z.string().min(1),
   whatIsSold: z.string().min(1),
   theFunnel: z.string().min(1),
   objective: z.string().min(1),
-  knownDataCaveats: z.array(z.string().min(1))
+  knownDataCaveats: z.array(z.string().min(1)),
+  /*
+   * Optional, and DELIBERATELY PARTIAL where it exists. A target is only set on an edge whose
+   * denominator is unambiguous. The published bands for "lead to booked" are measured on all leads,
+   * while `qualified_to_booked` is measured on qualified ones, and a target quietly carrying the
+   * wrong denominator is worse than no target at all.
+   */
+  targets: z.array(KpiTargetSchema).optional()
+}).strict().superRefine((situation, ctx) => {
+  const ids = (situation.targets ?? []).map(({ edgeId }) => edgeId);
+  if (new Set(ids).size !== ids.length) {
+    ctx.addIssue({ code: "custom", message: "one target per KPI edge" });
+  }
+});
+var QuestionEdgesSchema = z.object({
+  question: z.number().int().min(1).max(6),
+  edgeIds: z.array(z.string().min(1))
 }).strict();
 var CoverageProfileSchema = z.object({
   profileId: z.enum(["client", "grom_internal"]),
@@ -57,7 +92,8 @@ var CoverageProfileSchema = z.object({
   targetKind: z.literal("location"),
   excludedCapabilities: z.array(z.string().min(1)),
   journeys: z.array(JourneySchema).min(1),
-  situation: SituationSchema.optional()
+  situation: SituationSchema.optional(),
+  questionEdges: z.array(QuestionEdgesSchema).max(6).optional()
 }).strict().superRefine((profile, ctx) => {
   const ids = profile.journeys.map(({ journeyId }) => journeyId);
   if (new Set(ids).size !== ids.length) {
@@ -654,11 +690,33 @@ function normalizeProfileId(profileId) {
   if (profileId === "grom-internal") return "grom_internal";
   return profileId;
 }
-function loadProfile(profileId) {
+function readAccountFacts(locationId) {
+  if (typeof locationId !== "string" || locationId.length === 0) return null;
+  if (!/^[A-Za-z0-9][-A-Za-z0-9_.]{0,127}$/u.test(locationId)) return null;
+  return readProfileFileIfPresent(`accounts/${locationId}.v1.json`);
+}
+function loadProfile(profileId, locationId = null) {
   const normalized = normalizeProfileId(profileId);
   const filename = PROFILE_FILES[normalized];
   if (!filename) throw new Error(`UNKNOWN_PROFILE:${profileId}`);
-  return CoverageProfileSchema.parse(readProfileFile(filename));
+  const raw = readProfileFile(filename);
+  const facts = readAccountFacts(locationId);
+  if (facts === null) return CoverageProfileSchema.parse(raw);
+  if (facts.profileId !== void 0 && facts.profileId !== normalized) {
+    throw new Error(`ACCOUNT_FACTS_PROFILE_MISMATCH:${locationId}`);
+  }
+  const merged = {
+    ...raw,
+    situation: {
+      ...raw.situation,
+      ...facts.situation?.accountName === void 0 ? {} : { accountName: facts.situation.accountName },
+      knownDataCaveats: [
+        ...raw.situation?.knownDataCaveats ?? [],
+        ...facts.situation?.knownDataCaveats ?? []
+      ]
+    }
+  };
+  return CoverageProfileSchema.parse(merged);
 }
 function loadMetricContracts(profileId) {
   const normalized = normalizeProfileId(profileId);

@@ -137,6 +137,17 @@ disk, not from a status somebody wrote down.
    email library, so the per-workflow experts judge the real body of a send step
    that points at a library template instead of only its subject line. It is
    opt-in because it opens a second session and fetches a storage host.
+   Set `internalAudit.conversationTranscripts: true` to also read the REAL
+   conversations, both directions. Without it every word the engine reads is a
+   word the account wrote; with it the copy lane and the AI-agent reviews see
+   what leads actually replied, what they asked that went unanswered, and what
+   they said on the way out. Threads are drawn by `lib/sampling.mjs`, so an
+   account with under fifty conversations in the week is read whole (`CENSUS`)
+   and a busier one gets a stratified draw in which every complaint and opt-out
+   is included by construction. Read `conversations.howToReadThis` on the brief
+   before quoting a number from it: a count taken from a sample is not a rate.
+   These transcripts are COPY evidence and never journey evidence — no metric
+   moves because a message body parsed differently this week.
 2. **STAGE 1, one expert.** Dispatch a single subagent whose whole instruction is
    `prompt-account-map.md`. It reads the whole account and derives THE MAP: what
    journey this account runs, what each workflow's job actually appears to be,

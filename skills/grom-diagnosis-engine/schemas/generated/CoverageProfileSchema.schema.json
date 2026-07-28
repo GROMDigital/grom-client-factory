@@ -68,6 +68,10 @@
     "situation": {
       "type": "object",
       "properties": {
+        "accountName": {
+          "type": "string",
+          "minLength": 1
+        },
         "whoThisIs": {
           "type": "string",
           "minLength": 1
@@ -94,6 +98,42 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "edgeId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "target": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 1
+              },
+              "standard": {
+                "type": "string",
+                "enum": [
+                  "industry_typical",
+                  "industry_good",
+                  "owner_decision"
+                ]
+              },
+              "basis": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "edgeId",
+              "target",
+              "standard",
+              "basis"
+            ],
+            "additionalProperties": false
+          }
         }
       },
       "required": [
@@ -105,6 +145,32 @@
         "knownDataCaveats"
       ],
       "additionalProperties": false
+    },
+    "questionEdges": {
+      "maxItems": 6,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6
+          },
+          "edgeIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "question",
+          "edgeIds"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

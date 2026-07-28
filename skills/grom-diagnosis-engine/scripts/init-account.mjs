@@ -228,6 +228,8 @@ const config = {
     runtimeWorkflowIds: [],
     budgets: { maxDefinitions: 60, maxRuntimeWindows: 3, maxLogPages: 30 },
     emailCopy: true,
+    // The other half of the conversation. See `lib/adapters/conversation-transcripts.mjs`.
+    conversationTranscripts: true,
   },
   cutoff,
   timezone,
