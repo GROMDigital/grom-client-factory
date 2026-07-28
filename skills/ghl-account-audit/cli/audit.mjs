@@ -122,7 +122,7 @@ function safeStatus(value) {
     'briefsHash', 'mapHash', 'analystSetHash', 'investigationHash', 'directory',
     'causeCount', 'corroboratedCauseCount', 'rejectedCount', 'lanes',
     'reviewCount', 'missingCount', 'prompts', 'skipped',
-    'planHash', 'batchCount', 'prerequisiteCount', 'conflictCount', 'workOrderPrompt',
+    'planHash', 'batchCount', 'prerequisiteCount', 'conflictCount', 'workOrderPrompt', 'reportPage',
   ]) {
     if (value?.[key] !== undefined) safe[key] = value[key];
   }

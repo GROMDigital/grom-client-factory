@@ -68,6 +68,7 @@ import { ANALYSTS, buildAllAnalystPrompts } from './lane-analysts.mjs';
 import { buildAgentReviewPrompts, buildWorkflowReviewPrompts } from './object-review.mjs';
 import { compareToHistory, readObservations, recordRun } from './recurrence.mjs';
 import { LANES, investigateRootCause, validateLaneFinding } from './root-cause.mjs';
+import { renderReportPage } from './report-page.mjs';
 import { buildWorkOrderPrompt, renderWorkOrder, validateWorkOrder } from './work-order.mjs';
 import { loadProfile } from '../schemas/v1.mjs';
 
@@ -1037,9 +1038,38 @@ export function runWorkOrder({ paths, runId, plan: answer } = {}) {
   writeOnce(join(directory, 'plan.json'), { schemaVersion: CYCLE_SCHEMA, runId, planHash, plan });
   writeOnce(join(directory, 'PLAN.md'), renderWorkOrder({ index, plan, investigation }));
 
+  /*
+   * THE REPORT PAGE, written here because this is the first moment every input exists: the plan is
+   * stage 5's answer, and these artefacts are write-once, so a page written at stage 4 could never be
+   * updated to include it.
+   *
+   * Best-effort. The markdown above IS the deliverable and a rendering problem must not cost a run its
+   * outputs, so a failure to build the page is reported and swallowed rather than thrown.
+   */
+  let reportPage = null;
+  try {
+    const briefs = readBriefs({ paths, runId });
+    const mapRecord = readJsonFile(join(briefs.directory, 'map.json'), 'CYCLE_MAP_UNREADABLE');
+    const { html } = renderReportPage({
+      index,
+      investigation,
+      plan,
+      recurrence: record.recurrence ?? null,
+      map: mapRecord.map,
+      journeyBrief: briefs.briefs.lanes.leadJourneyKpi,
+      automationBrief: briefs.briefs.lanes.workflowConfigRuntime,
+      reviews: availableReviews(briefs.directory),
+    });
+    writeOnce(join(directory, 'REPORT.html'), html);
+    reportPage = 'REPORT.html';
+  } catch (error) {
+    reportPage = `unavailable:${error?.code ?? 'REPORT_PAGE_FAILED'}`;
+  }
+
   return {
     directory,
     planHash,
+    reportPage,
     batchCount: plan.batches.length,
     prerequisiteCount: plan.prerequisites.length,
     conflictCount: plan.conflicts.length,
