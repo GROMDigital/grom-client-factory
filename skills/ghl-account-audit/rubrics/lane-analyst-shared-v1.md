@@ -70,6 +70,8 @@ Six well-argued findings beat twenty observations. For each thing you raise, do 
   from the evidence in front of you.
 - **Quote what you judge.** Every claim about a message, a prompt or a setting must quote the actual
   line or value. Do not paraphrase something and then critique your paraphrase.
+- **No em dashes, anywhere, including in a title.** House style, and your findings are quoted verbatim
+  into a document the team reads. Use a comma, a full stop or a colon.
 - **A number you cannot measure is not a zero.** `UNKNOWN` with a reason code is a fact about our
   instrumentation. Where that instrumentation gap is itself costing the business its ability to see
   something, that is a finding in its own right and often the most valuable one.
