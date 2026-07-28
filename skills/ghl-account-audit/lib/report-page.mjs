@@ -1,31 +1,31 @@
 /**
- * THE REPORT PAGE — the whole audit as one document somebody will actually read.
+ * THE REPORT PAGE — the whole audit as one document the team reads.
  *
- * The run already produces `BACKLOG.md`, `INVESTIGATION.md`, `PLAN.md`, 19 reviews and one package per
- * problem. That is the right set of artefacts and the wrong reading experience: understanding a run
- * meant opening six folders and reading raw markdown, so the findings were good and nobody looked at
- * them.
- *
- * This is generated, never hand-written, and that is the owner's call: every run produces one
- * automatically and it cannot drift from the findings, because it is rendered from the same sealed
- * artefacts the markdown is rendered from. The prose in it is the EXPERTS' OWN WORDS -- their titles,
- * their fixes, their plan paragraph -- rather than a summary of them, so nothing here is a fourth
- * opinion about the account.
+ * Generated, never hand-written. Every run produces one and it cannot drift from the findings, because
+ * it renders from the same sealed artefacts the markdown renders from. The prose is the EXPERTS' OWN
+ * WORDS: their titles, their fixes, their plan, the line each reviewer ended on. The page arranges, it
+ * never summarises, so it can never become a fourth opinion about the account.
  *
  * ---------------------------------------------------------------------------------------------
- * IT IS EVIDENCE, NOT PUBLICATION. It quotes real message copy and names real workflows, so it is
- * written into the investigation directory alongside the rest of the private material and it must
- * never be published to a hosted URL or shared outside the operator. `lib/publication-safety.mjs`
- * governs what may leave; this file is not in that set.
+ * WRITTEN FOR THE TEAM, and that decided most of what follows. It is sent to people who did not run
+ * the audit and do not know the vocabulary. Four consequences:
  *
- * WRITTEN AT THE END OF THE CHAIN, in `runWorkOrder`, because that is the first moment every input
- * exists: the plan is stage 5's answer and the artefacts here are write-once, so a page written at
- * stage 4 could never be updated to include it. A run that stops before stage 5 still has all the
- * markdown.
+ * LIGHT ONLY. A deliberate single look rather than an omission. This gets read, printed and forwarded,
+ * and a report that changes appearance with the reader's OS setting is a report two people describe
+ * differently on a call.
  *
- * SELF-CONTAINED, no external anything. It is opened as a local file, where a CDN request fails and a
- * link to a `.md` file dumps raw text into a browser tab. Diagrams are HTML and CSS for the same
- * reason: a diagramming library would need a network fetch to render.
+ * REPLACEMENT COPY LOOKS LIKE THE MESSAGE IT REPLACES. The experts write real email and SMS: a subject,
+ * a preheader, a body. An earlier version split every fix on sentence boundaries and bulleted it, which
+ * turned finished copy into a list of fragments and was the first thing the owner objected to. Quoted
+ * copy is now lifted out and shown as the message.
+ *
+ * DIAGRAMS ARE MERMAID. This document is opened as a local file in a real browser, not inside a
+ * sandbox, so it CAN fetch a script. If that fails the diagram source stays on the page as text, and
+ * every fact a diagram draws is also in a table on the same page.
+ *
+ * IT IS STILL EVIDENCE. It quotes real customer messages and names real workflows, so it lives in the
+ * investigation directory with the rest of the private material. Sending it to the team is the owner's
+ * call; publishing it is not.
  * ---------------------------------------------------------------------------------------------
  */
 import { sha256 } from './canonical.mjs';
@@ -42,6 +42,12 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+/** Mermaid reads its source as text, so a label must not contain the characters that end one. */
+function mermaidLabel(value, limit = 46) {
+  const text = String(value ?? '').replaceAll(/["[\]{}()<>|]/gu, ' ').replaceAll(/\s+/gu, ' ').trim();
+  return escapeHtml(text.length > limit ? `${text.slice(0, limit - 1)}...` : text);
+}
+
 const BANDS = Object.freeze({ NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 });
 
 function worstBand(cause, key) {
@@ -54,110 +60,139 @@ function percent(rate) {
   return typeof rate === 'number' ? `${Math.round(rate * 100)}%` : null;
 }
 
+/** The line every per-object review is required to end on. Often the most useful sentence in it. */
+function oneChangeOf(text) {
+  const match = String(text ?? '').match(/\*\*THE ONE CHANGE\*\*\s*[-]?\s*([\s\S]*?)(?:\n\s*\n|$)/u);
+  if (!match) return null;
+  return match[1].replace(/\s+/gu, ' ').replaceAll('**', '').trim() || null;
+}
+
+/** Long prose into readable pieces, splitting only on a full stop followed by a capital. */
+function intoParagraphs(text) {
+  const pieces = String(text ?? '').split(/(?<=\.)\s+(?=[A-Z])/u).map((p) => p.trim()).filter(Boolean);
+  const merged = [];
+  for (const piece of pieces) {
+    if (merged.length > 0 && (piece.length < 60 || merged[merged.length - 1].length < 90)) {
+      merged[merged.length - 1] += ` ${piece}`;
+    } else merged.push(piece);
+  }
+  return merged;
+}
+
 /**
- * The journey, as the money path derived by stage 1.
+ * A piece of replacement copy, shown as the message a customer would receive.
  *
- * A chain of chips rather than a graph. The money path IS a sequence, so the simplest true picture is
- * a sequence, and it stays readable at nine workflows where a node-and-edge drawing would not.
+ * Subject and preheader are pulled out when the writer labelled them, because that is how the rubric
+ * asks for an email and how a reader expects to see one. Unlabelled copy is an SMS or a bare body and
+ * renders as the message with no chrome invented around it.
  */
-function moneyPathDiagram(map) {
-  const path = map?.moneyPath ?? [];
-  if (path.length === 0) return '';
+function renderCopyBlock(quote) {
+  const subject = quote.match(/^\s*Subject\s*[:\-]?\s*['"]?(.+?)['"]?\s*(?:Preheader|Pre-header|Body)\b/iu);
+  const preheader = quote.match(/Pre-?header\s*[:\-]?\s*['"]?(.+?)['"]?\s*Body\b/iu);
+  const body = quote.match(/Body\s*[:\-]?\s*['"]?([\s\S]+)$/iu);
+  if (subject || body) {
+    return `
+    <div class="copyblock email">
+      <span class="copytag">replacement email</span>
+      ${subject ? `<p class="csubject">${escapeHtml(subject[1].trim())}</p>` : ''}
+      ${preheader ? `<p class="cpre">${escapeHtml(preheader[1].trim())}</p>` : ''}
+      ${body ? `<div class="cbody">${escapeHtml(body[1].trim())}</div>` : ''}
+    </div>`;
+  }
+  return `
+  <div class="copyblock">
+    <span class="copytag">replacement copy</span>
+    <div class="cbody">${escapeHtml(quote.trim())}</div>
+  </div>`;
+}
+
+/**
+ * A FIX, RENDERED AS WHAT IT ACTUALLY IS.
+ *
+ * The experts are told to write replacement copy in full, so a fix is usually instructions with real
+ * subject lines and bodies inside them. Bulleting that shreds finished copy into fragments.
+ *
+ * So paragraphs stay paragraphs, and a quoted run long enough to be a message is lifted out and shown
+ * as the message. The detection is deliberately conservative: a quote that is not really copy renders
+ * as a quotation, which is harmless, whereas parsing prose hard enough to be certain would fail
+ * silently on the first fix written in a different shape.
+ */
+function renderFix(fix) {
+  const text = String(fix ?? '').trim();
+  if (text.length === 0) return '';
+  const quotes = [...text.matchAll(/'([^']{60,})'/gu)].map((match) => match[1]);
+  if (quotes.length === 0) {
+    return intoParagraphs(text).map((p) => `<p>${escapeHtml(p)}</p>`).join('');
+  }
+  const blocks = [];
+  let rest = text;
+  for (const quote of quotes) {
+    const at = rest.indexOf(`'${quote}'`);
+    if (at === -1) continue;
+    const before = rest.slice(0, at).trim();
+    if (before.length > 0) blocks.push(...intoParagraphs(before).map((p) => `<p>${escapeHtml(p)}</p>`));
+    blocks.push(renderCopyBlock(quote));
+    rest = rest.slice(at + quote.length + 2);
+  }
+  if (rest.trim().length > 0) blocks.push(...intoParagraphs(rest).map((p) => `<p>${escapeHtml(p)}</p>`));
+  return blocks.join('');
+}
+
+/** One finding: the title always visible, everything else a click away. */
+function findingBlock(cause, rank) {
+  return `
+  <details class="finding" id="f${rank}">
+    <summary>
+      <span class="frank">${rank}</span>
+      <span class="ftitle">${escapeHtml(cause.findings[0]?.title ?? '')}</span>
+      <span class="fmeta">${escapeHtml(worstBand(cause, 'commercialImpact').toLowerCase())}</span>
+    </summary>
+    <div class="fbody">
+      <p class="flabel">What to change</p>
+      ${cause.findings.map((finding) => renderFix(finding.fix)).join('')}
+      <p class="flabel">How you will know it worked</p>
+      <ul class="checks">${cause.findings.map((finding) => `
+        <li>${escapeHtml(finding.discriminatingTest?.check ?? '')}</li>`).join('')}</ul>
+    </div>
+  </details>`;
+}
+
+/**
+ * THE JOURNEY, AS A DIAGRAM.
+ *
+ * Built from the money path stage 1 derived, so it is the account's real order and not a drawing of
+ * how it ought to work. Top to bottom rather than left to right: a fourteen-step funnel read sideways
+ * needs a scrollbar, and this document gets printed.
+ */
+function journeyDiagram(map) {
+  const path = (map?.moneyPath ?? []).slice(0, 14);
+  if (path.length < 2) return '';
   const jobOf = new Map((map.workflows ?? []).map((entry) => [entry.name, entry.job]));
   return `
-  <div class="band">
-    <ol class="chain">
-      ${path.map((name, index) => `
-      <li class="chain-step">
-        <span class="chain-n">${index + 1}</span>
-        <span class="chain-name">${escapeHtml(name)}</span>
-        <span class="chain-job">${escapeHtml(jobOf.get(name) ?? '')}</span>
-      </li>`).join('')}
-    </ol>
-  </div>`;
-}
-
-/** What each workflow is for, by the role stage 1 derived. Counts first, because that is the shape. */
-function rolesDiagram(map) {
-  const workflows = map?.workflows ?? [];
-  if (workflows.length === 0) return '';
-  const order = ['money_path', 'delivery', 'internal_ops', 'data_hygiene', 'abandoned', 'unclear'];
-  const label = {
-    money_path: 'Moves a lead toward paying',
-    delivery: 'Serves someone who already committed',
-    internal_ops: 'Notifies or assigns staff',
-    data_hygiene: 'Maintains records',
-    abandoned: 'Nobody uses it',
-    unclear: 'Could not be determined',
-  };
-  const grouped = order
-    .map((role) => [role, workflows.filter((entry) => entry.role === role)])
-    .filter(([, entries]) => entries.length > 0);
-  return `
-  <div class="roles">
-    ${grouped.map(([role, entries]) => `
-    <section class="role">
-      <h4>${escapeHtml(label[role])} <span class="count">${entries.length}</span></h4>
-      <ul class="plain">
-        ${entries.map((entry) => `<li>${escapeHtml(entry.name)}${entry.nameMatchesBehaviour === false ? ' <em class="warn">name disagrees with behaviour</em>' : ''}</li>`).join('')}
-      </ul>
-    </section>`).join('')}
-  </div>`;
-}
-
-/**
- * The funnel, with the owner's target marked on each bar.
- *
- * A step that could not be measured shows the REASON rather than a zero bar, because a zero-length bar
- * reads as "nobody converted" when the truth is "nobody can tell", and those need different action.
- */
-function funnelDiagram({ kpis, targets }) {
-  const windows = Object.keys(kpis ?? {});
-  if (windows.length === 0) return '';
-  // The widest window with any computed rate, so the picture is the most populated one available.
-  const chosen = windows
-    .map((name) => [name, Object.values(kpis[name]).filter((cell) => typeof cell.rate === 'number').length])
-    .sort((left, right) => right[1] - left[1])[0];
-  if (!chosen || chosen[1] === 0) return '';
-  const [windowName] = chosen;
-  const targetFor = new Map((targets ?? []).map((entry) => [entry.edgeId, entry]));
-  const rows = Object.entries(kpis[windowName]).map(([edgeId, cell]) => {
-    const target = targetFor.get(edgeId);
-    const rate = typeof cell.rate === 'number' ? cell.rate : null;
-    return `
-    <tr>
-      <th>${escapeHtml(edgeId)}</th>
-      <td class="bar-cell">
-        ${rate === null
-    ? `<span class="unmeasured">not measurable${cell.reasonCode ? `: ${escapeHtml(cell.reasonCode)}` : ''}</span>`
-    : `<span class="bar" style="--w:${Math.round(rate * 100)}%"${target ? ` data-target="${Math.round(target.target * 100)}"` : ''}>
-             ${target ? `<i class="target" style="--t:${Math.round(target.target * 100)}%"></i>` : ''}
-           </span>`}
-      </td>
-      <td class="num">${percent(rate) ?? 'n/a'}</td>
-      <td class="num target-col">${target ? percent(target.target) : 'n/a'}</td>
-      <td class="num">${cell.numerator ?? 'n/a'} / ${cell.denominator ?? 'n/a'}</td>
-    </tr>`;
-  });
-  return `
-  <p class="caption">Window: <code>${escapeHtml(windowName)}</code>. The line on each bar is the target.</p>
+  <figure>
+    <pre class="mermaid">flowchart TD
+${path.map((name, index) => `  W${index}["${mermaidLabel(name, 34)}"]`).join('\n')}
+${path.slice(1).map((unused, index) => `  W${index} --> W${index + 1}`).join('\n')}</pre>
+    <figcaption>The order a lead meets your workflows, derived from the account itself.</figcaption>
+  </figure>
   <div class="tablewrap">
-    <table class="funnel">
-      <thead><tr><th>Step</th><th>Rate</th><th class="num">Actual</th><th class="num">Target</th><th class="num">Of</th></tr></thead>
-      <tbody>${rows.join('')}</tbody>
+    <table>
+      <thead><tr><th class="num">Step</th><th>Workflow</th><th>What it is for</th></tr></thead>
+      <tbody>${path.map((name, index) => `
+        <tr><td class="num">${index + 1}</td><td class="wf">${escapeHtml(name)}</td>
+        <td>${escapeHtml(jobOf.get(name) ?? '')}</td></tr>`).join('')}</tbody>
     </table>
   </div>`;
 }
 
 /**
- * THE ENROLMENT PICTURE, and it is the clearest single thing in the document.
+ * WHAT STARTS WHAT, AS A DIAGRAM, and it is the clearest picture of the account's central problem.
  *
- * Rendered as producers, the event, then consumers, rather than as a node graph. Five independent
- * experts on the live run traced the account's central defect to one shared event, and what makes that
- * legible is seeing how many things fire it against how many things listen, side by side. A drawn graph
- * of fourteen chains is a hairball.
+ * Producers on the left, the shared event in the middle, consumers on the right. It reads as a count
+ * rather than a graph, which is the point: many things firing one event and many things listening for
+ * it is the whole finding.
  */
-function collisionDiagram(collisions) {
+function chainDiagram(collisions) {
   const chains = collisions?.creationChains ?? [];
   if (chains.length === 0) return '';
   const byEvent = new Map();
@@ -169,184 +204,105 @@ function collisionDiagram(collisions) {
   }
   return [...byEvent.entries()]
     .sort((left, right) => right[1].consumers.size - left[1].consumers.size)
-    .map(([via, { producers, consumers }]) => `
-    <div class="chain-map">
-      <div class="side">
-        <h4>${producers.size} fire this</h4>
-        <ul class="plain">${[...producers].sort().map((name) => `<li>${escapeHtml(name)}</li>`).join('')}</ul>
-      </div>
-      <div class="via"><code>${escapeHtml(via)}</code></div>
-      <div class="side">
-        <h4>${consumers.size} listen for it</h4>
-        <ul class="plain">${[...consumers.entries()].sort().map(([name, chain]) => `
-          <li>${escapeHtml(name)}
-            ${chain.consumerStopsOnResponse === false ? '<em class="warn">does not stop on reply</em>' : ''}
-            ${typeof chain.consumerMessageSteps === 'number' ? `<span class="muted">${chain.consumerMessageSteps} messages</span>` : ''}
-          </li>`).join('')}</ul>
-      </div>
-    </div>`).join('');
+    .map(([via, { producers, consumers }], index) => {
+      const p = [...producers].sort().slice(0, 8);
+      const c = [...consumers.entries()].sort().slice(0, 8);
+      const noStop = c.some(([, chain]) => chain.consumerStopsOnResponse === false);
+      return `
+    <figure>
+      <pre class="mermaid">flowchart LR
+  E${index}{{"${mermaidLabel(via, 40)}"}}
+${p.map((name, i) => `  P${index}_${i}["${mermaidLabel(name, 28)}"] --> E${index}`).join('\n')}
+${c.map(([name], i) => `  E${index} --> C${index}_${i}["${mermaidLabel(name, 28)}"]`).join('\n')}</pre>
+      <figcaption>${producers.size} ${producers.size === 1 ? 'workflow fires' : 'workflows fire'} this
+      event and ${consumers.size} ${consumers.size === 1 ? 'listens' : 'listen'} for it.
+      ${noStop ? 'At least one listener does not stop when the person replies.' : ''}</figcaption>
+    </figure>`;
+    }).join('');
 }
 
-/**
- * A WALL OF PROSE INTO STEPS, when the map did not supply them.
- *
- * The first live run returned the whole journey as one 300-word paragraph and it was the least
- * readable thing in the report: a sequence written as prose is a sequence the reader has to parse by
- * hand. `journeySteps` fixes it going forward, and this recovers older maps rather than leaving them
- * unreadable.
- *
- * Split on a full stop followed by a capital, never on any full stop, because this text is full of
- * things like `07.5 Contract Signed` and `04 Showed Up`. A fragment shorter than a clause is glued back
- * onto the previous one, so a stray abbreviation cannot produce a one-word bullet.
- */
-function asSteps(paragraph) {
-  const pieces = String(paragraph ?? '').split(/(?<=\.)\s+(?=[A-Z])/u).map((piece) => piece.trim()).filter(Boolean);
-  const steps = [];
-  for (const piece of pieces) {
-    if (steps.length > 0 && piece.length < 45) steps[steps.length - 1] += ` ${piece}`;
-    else steps.push(piece);
-  }
-  return steps;
-}
-
-/**
- * THE DELIVERY SIDE, which the six questions do not reach.
- *
- * All six are about a lead becoming a customer, so a report built only around them says nothing about
- * what happens to a client after they sign, and on this account that is eleven of twenty-seven
- * workflows. The owner asked for it explicitly and he is right: the money is only marked at the end of
- * that rail.
- *
- * Findings appear here when they anchor to a workflow the map gave the `delivery` role, which is the
- * same by-anchor attachment the questions use. No new judgement, no model call.
- */
-function deliverySection({ map, causes, rankOf, reviews }) {
-  const delivery = (map?.workflows ?? []).filter((entry) => entry.role === 'delivery');
-  if (delivery.length === 0) return '';
-  const names = new Set(delivery.map((entry) => entry.name));
-  const related = causes.filter((cause) => cause.anchors.some((anchor) => anchor.startsWith('workflow:') && names.has(anchor.slice('workflow:'.length))));
-  const reviewed = reviews.filter((review) => review.kind === 'workflow' && names.has(review.object));
+/** Every workflow by the job stage 1 gave it. A table, because the team will look things up in it. */
+function rolesTable(map) {
+  const workflows = map?.workflows ?? [];
+  if (workflows.length === 0) return '';
+  const label = {
+    money_path: 'Wins business',
+    delivery: 'Serves a signed client',
+    internal_ops: 'Tells staff something',
+    data_hygiene: 'Maintains records',
+    abandoned: 'Appears unused',
+    unclear: 'Could not tell',
+  };
+  const order = ['money_path', 'delivery', 'internal_ops', 'data_hygiene', 'abandoned', 'unclear'];
+  const sorted = [...workflows].sort((left, right) => order.indexOf(left.role) - order.indexOf(right.role)
+    || (left.name < right.name ? -1 : 1));
   return `
-  <p>${delivery.length} of the account's workflows serve someone who has already signed, and
-  ${reviewed.length} of them were reviewed one by one. The six questions above are all about a lead
-  becoming a customer, so none of them covers this rail, and the money is only marked at the end of it.</p>
   <div class="tablewrap">
     <table>
-      <thead><tr><th>Workflow</th><th>What it does</th><th class="num">Reviewed</th></tr></thead>
-      <tbody>${delivery.map((entry) => {
-    const review = reviewed.find((candidate) => candidate.object === entry.name);
-    return `<tr><td class="mono">${escapeHtml(entry.name)}</td><td>${escapeHtml(entry.job)}</td>
-      <td class="num">${review ? `${review.messageCount ?? 0} messages` : '<span class="muted">no arc to review</span>'}</td></tr>`;
+      <thead><tr><th>Workflow</th><th>Job</th><th>What it is for</th></tr></thead>
+      <tbody>${sorted.map((entry) => `
+        <tr>
+          <td class="wf">${escapeHtml(entry.name)}
+            ${entry.nameMatchesBehaviour === false ? '<em class="flag">name does not match what it does</em>' : ''}</td>
+          <td><span class="role r-${escapeHtml(entry.role)}">${escapeHtml(label[entry.role] ?? entry.role)}</span></td>
+          <td>${escapeHtml(entry.job)}</td>
+        </tr>`).join('')}</tbody>
+    </table>
+  </div>`;
+}
+
+/** The most populated window, so every number is judged on the widest evidence available. */
+function widestWindow(kpis) {
+  const windows = Object.keys(kpis ?? {});
+  if (windows.length === 0) return null;
+  const chosen = windows
+    .map((name) => [name, Object.values(kpis[name]).filter((cell) => typeof cell.rate === 'number').length])
+    .sort((left, right) => right[1] - left[1])[0];
+  return chosen && chosen[1] > 0 ? kpis[chosen[0]] : null;
+}
+
+/** The funnel. An unmeasurable step shows its reason, never an empty bar. */
+function funnelTable({ kpis, targets }) {
+  const cells = widestWindow(kpis);
+  if (cells === null) return '';
+  const targetFor = new Map((targets ?? []).map((entry) => [entry.edgeId, entry]));
+  return `
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Step of the journey</th><th>How it is doing</th><th class="num">Actual</th>
+      <th class="num">Target</th><th class="num">Out of</th></tr></thead>
+      <tbody>${Object.entries(cells).map(([edgeId, cell]) => {
+    const target = targetFor.get(edgeId);
+    const rate = typeof cell.rate === 'number' ? cell.rate : null;
+    const short = rate !== null && target && rate < target.target;
+    return `
+        <tr class="${short ? 'below' : ''}">
+          <td class="wf">${escapeHtml(edgeId.replaceAll('_', ' '))}</td>
+          <td class="barcell">${rate === null
+    ? `<span class="nomeasure">cannot be measured${cell.reasonCode ? `: ${escapeHtml(cell.reasonCode.toLowerCase().replaceAll('_', ' '))}` : ''}</span>`
+    : `<span class="bar"><i style="width:${Math.round(rate * 100)}%"></i>${target ? `<b style="left:${Math.round(target.target * 100)}%"></b>` : ''}</span>`}</td>
+          <td class="num">${percent(rate) ?? 'n/a'}</td>
+          <td class="num tgt">${target ? percent(target.target) : 'n/a'}</td>
+          <td class="num">${cell.numerator ?? 'n/a'} of ${cell.denominator ?? 'n/a'}</td>
+        </tr>`;
   }).join('')}</tbody>
     </table>
-  </div>
-  ${(() => {
-    const said = delivery
-      .map((entry) => ({ entry, review: reviewed.find((candidate) => candidate.object === entry.name) }))
-      .filter(({ review }) => review && oneChangeOf(review.text))
-      .map(({ entry, review }) => `
-        <details class="qf">
-          <summary><span class="qf-rank">1</span><span class="qf-title">${escapeHtml(entry.name)}</span><span class="qf-more">one change</span></summary>
-          <div class="qf-body"><p class="qf-fix">${escapeHtml(oneChangeOf(review.text))}</p></div>
-        </details>`);
-    return said.length === 0 ? '' : `<h3>What each reviewer said to change</h3>
-    <p class="caption">One line per workflow, from the expert that read it on its own. These come from
-    the per-workflow reviews and have not been through the account-wide analysis or the ranking.</p>
-    <div class="qfindings">${said.join('')}</div>`;
-  })()}
-  ${related.length === 0
-    ? '<p class="muted">No account-wide finding points at any of these workflows this week.</p>'
-    : `<h3>What the account-wide analysis found here</h3>
-  <div class="qfindings">${related.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}`;
+  </div>`;
 }
 
 /**
- * THE ONE LINE EACH REVIEWER ENDED ON.
+ * THE SIX QUESTIONS, one at a time, each with a verdict a reader can act on.
  *
- * Every per-workflow and per-agent review closes with THE ONE CHANGE, because the rubric demands it:
- * if the owner does exactly one thing to this object, what is it. That is the single most useful
- * sentence in a 10,000-word review and until now it appeared nowhere in the report, which showed only
- * the account-wide findings.
- *
- * It matters most for the delivery rail. The account-wide experts read the reviews, so a sales finding
- * carries stage-2's work forward into the ranking. Nothing forces every review to produce a finding,
- * so a workflow can be reviewed carefully and still be absent from the ranked list, and on this account
- * that is most of onboarding.
- */
-function oneChangeOf(text) {
-  const match = String(text ?? '').match(/\*\*THE ONE CHANGE\*\*\s*[—-]?\s*([\s\S]*?)(?:\n\s*\n|$)/u);
-  if (!match) return null;
-  return match[1].replace(/\s+/gu, ' ').replace(/\*\*/gu, '').trim() || null;
-}
-
-/**
- * A FINDING'S FIX, COLLAPSED.
- *
- * The analysts write real fixes: multi-paragraph instructions with the replacement subject lines and
- * bodies written out in full. That is exactly what was asked of them and it is the most valuable text
- * the run produces, and printing eleven of them inline under one question turned the summary into a
- * wall nobody reads. The owner said so, looking at question one.
- *
- * So the title is the summary line and the fix is one click away, using `<details>` rather than script
- * because the page is opened as a local file. Collapsed, a question reads as a scannable list of
- * problems; expanded, nothing has been cut. Long fixes are broken into steps by the same splitter the
- * journey uses, since a multi-step instruction is a list written as prose.
- */
-function findingBlock(cause, rank) {
-  const title = escapeHtml(cause.findings[0]?.title ?? '');
-  const bodies = cause.findings.map((finding) => {
-    const steps = asSteps(finding.fix);
-    return steps.length > 1
-      ? `<ul class="fixsteps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`
-      : `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`;
-  }).join('');
-  return `
-  <details class="qf" id="p${rank}">
-    <summary><span class="qf-rank">#${rank}</span><span class="qf-title">${title}</span><span class="qf-more">the fix</span></summary>
-    <div class="qf-body">${bodies}</div>
-  </details>`;
-}
-
-/**
- * THE SIX QUESTIONS, ANSWERED ONE BY ONE.
- *
- * The product exists to answer six specific questions every week, and until now the report published a
- * ranked list and left a reader to work out for themselves which findings bore on "why are booked leads
- * not showing up". This section is the answer, per question.
- *
- * Findings attach BY ANCHOR, using the question-to-step mapping the profile declares. Nothing is
- * inferred from a title and no model decides the grouping: a finding appears under a question when it
- * anchors to one of that question's journey steps.
- *
- * FOUR HONEST OUTCOMES, and three of them are not "here is the answer":
- *
- *   answered      the step is measured and findings explain it
- *   unmeasured    findings exist, but the step cannot be read, so the size is unknown
- *   none          the step is measured and nobody found anything wrong with it
- *   unanswerable  this account has no step corresponding to the question at all
- *
- * "Nobody could measure this" is a real answer to a business question and a more useful one than an
- * empty heading, so it is stated.
+ * A finding is written out under the FIRST question it bears on and cross-referenced elsewhere. A
+ * broadly-anchored finding genuinely touches three questions, and printing it three times made the
+ * second read as a copy of the first.
  */
 function questionsSection({ questions, questionEdges, kpis, targets, causes, rankOf }) {
   if ((questionEdges ?? []).length === 0) return '';
   const byQuestion = new Map(questionEdges.map((entry) => [entry.question, entry.edgeIds]));
   const targetFor = new Map((targets ?? []).map((entry) => [entry.edgeId, entry]));
-  const windows = Object.keys(kpis ?? {});
-  const chosen = windows
-    .map((name) => [name, Object.values(kpis[name]).filter((cell) => typeof cell.rate === 'number').length])
-    .sort((left, right) => right[1] - left[1])[0];
-  const cells = chosen ? kpis[chosen[0]] : {};
+  const cells = widestWindow(kpis) ?? {};
 
-  /*
-   * EACH FINDING IS WRITTEN OUT ONCE, under the first question it bears on, and referenced by number
-   * everywhere else.
-   *
-   * A broadly-anchored finding legitimately touches several questions: "nothing reacts to a reply"
-   * genuinely bears on nurture, on engagement and on booking. Printing it in full under all three made
-   * question two look like a copy of question one and tripled the length of the section for no
-   * information. The cross-reference keeps the fact without the bulk.
-   */
   const primary = new Map();
   for (const [number, edgeIds] of [...byQuestion.entries()].sort((left, right) => left[0] - right[0])) {
     for (const cause of causes) {
@@ -359,94 +315,121 @@ function questionsSection({ questions, questionEdges, kpis, targets, causes, ran
     const number = position + 1;
     const edgeIds = byQuestion.get(number) ?? [];
     const matching = causes.filter((cause) => edgeIds.some((edgeId) => cause.anchors.includes(`kpi:${edgeId}`)));
-    const related = matching.filter((cause) => primary.get(cause.causeId) === number);
-    const alsoSeen = matching.filter((cause) => primary.get(cause.causeId) !== number);
+    const mine = matching.filter((cause) => primary.get(cause.causeId) === number);
+    const elsewhere = matching.filter((cause) => primary.get(cause.causeId) !== number);
     const measured = edgeIds.filter((edgeId) => typeof cells[edgeId]?.rate === 'number');
-    const state = edgeIds.length === 0
-      ? 'unanswerable'
-      : related.length === 0
-        ? 'none'
-        : measured.length === 0 ? 'unmeasured' : 'answered';
-    const label = {
-      answered: `${related.length} ${related.length === 1 ? 'finding' : 'findings'}`,
-      unmeasured: 'not measurable',
-      none: 'nothing found',
-      unanswerable: 'no such step here',
+    const state = edgeIds.length === 0 ? 'nostep'
+      : matching.length === 0 ? 'clear'
+        : measured.length === 0 ? 'blind' : 'answered';
+    const verdict = {
+      answered: `${matching.length} ${matching.length === 1 ? 'reason' : 'reasons'} found`,
+      blind: 'reasons found, but this step is not measured',
+      clear: 'nothing found here',
+      nostep: 'this account does not measure this',
     }[state];
 
-    const numbers = edgeIds.map((edgeId) => {
+    return `
+    <section class="qa q-${state}">
+      <h3><span class="qn">Question ${number}</span>${escapeHtml(question)}</h3>
+      <p class="verdict">${verdict}</p>
+      ${edgeIds.length === 0
+    ? '<p class="plain-note">There is no step in this account that measures this, so the audit cannot answer it. That is a gap in what gets tracked, not a judgement about the account.</p>'
+    : `<ul class="qnums">${edgeIds.map((edgeId) => {
       const cell = cells[edgeId];
       const target = targetFor.get(edgeId);
       const actual = typeof cell?.rate === 'number' ? percent(cell.rate) : null;
-      return `<li><code>${escapeHtml(edgeId)}</code> ${actual === null
-        ? `<span class="unmeasured">not measurable${cell?.reasonCode ? `: ${escapeHtml(cell.reasonCode)}` : ''}</span>`
-        : `<strong>${actual}</strong>${target ? ` <span class="muted">against a ${percent(target.target)} target</span>` : ''}`}</li>`;
-    });
-
-    return `
-    <article class="qa q-${state}">
-      <h3><span class="qn">Q${number}</span>${escapeHtml(question)} <span class="qstate">${label}</span></h3>
-      ${edgeIds.length === 0
-    ? '<p class="muted">This account has no journey step corresponding to this question, so the run cannot answer it. That is a gap in what is measured, not a finding about the account.</p>'
-    : `<ul class="plain nums">${numbers.join('')}</ul>`}
-      ${related.length === 0
-    ? (edgeIds.length === 0 || alsoSeen.length > 0 ? '' : '<p class="muted">No analyst filed a finding against this step this week.</p>')
-    : `<div class="qfindings">${related.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}
-      ${alsoSeen.length === 0 ? '' : `<p class="alsoseen">Also bears on this step, written out above:
-        ${alsoSeen.map((cause) => `<a href="#p${rankOf.get(cause.causeId)}">#${rankOf.get(cause.causeId)}</a>`).join(' ')}</p>`}
-    </article>`;
+      return `<li><span class="wf">${escapeHtml(edgeId.replaceAll('_', ' '))}</span> ${actual === null
+        ? '<span class="nomeasure">cannot be measured</span>'
+        : `<strong>${actual}</strong>${target ? ` <span class="muted">target ${percent(target.target)}</span>` : ''}`}</li>`;
+    }).join('')}</ul>`}
+      ${mine.length === 0 ? '' : `<div class="findings">${mine.map((cause) => findingBlock(cause, rankOf.get(cause.causeId))).join('')}</div>`}
+      ${elsewhere.length === 0 ? '' : `<p class="xref">Also caused by
+        ${elsewhere.map((cause) => `<a href="#f${rankOf.get(cause.causeId)}">finding ${rankOf.get(cause.causeId)}</a>`).join(', ')},
+        written out under an earlier question.</p>`}
+    </section>`;
   }).join('');
 }
 
-/** The plan, which is the part a reader acts on, so it comes before the detail. */
+/** Onboarding and delivery, which none of the six questions reaches. */
+function deliverySection({ map, causes, rankOf, reviews }) {
+  const delivery = (map?.workflows ?? []).filter((entry) => entry.role === 'delivery');
+  if (delivery.length === 0) return '';
+  const names = new Set(delivery.map((entry) => entry.name));
+  const related = causes.filter((cause) => cause.anchors
+    .some((anchor) => anchor.startsWith('workflow:') && names.has(anchor.slice('workflow:'.length))));
+  const said = delivery
+    .map((entry) => ({ entry, one: oneChangeOf(reviews.find((review) => review.object === entry.name)?.text) }))
+    .filter(({ one }) => one);
+  return `
+  <p>All six questions above are about winning a client. ${delivery.length} of this account's workflows
+  run AFTER somebody signs, and the money is only marked at the end of that track, so it gets its own
+  section.</p>
+  ${said.length === 0 ? '' : `
+  <h3>What each reviewer said to change</h3>
+  <p class="plain-note">One line per workflow, from the expert who read that workflow on its own. These
+  come from the per-workflow reviews and have not been through the ranking, so treat them as advice
+  rather than as findings.</p>
+  <div class="onechanges">${said.map(({ entry, one }) => `
+    <div class="onechange">
+      <p class="ocname">${escapeHtml(entry.name)}</p>
+      <p class="octext">${escapeHtml(one)}</p>
+    </div>`).join('')}</div>`}
+  ${related.length === 0 ? '' : `
+  <h3>Findings that touch this track</h3>
+  ${related.map((cause) => `
+    <p class="xref-line"><a href="#f${rankOf.get(cause.causeId)}">Finding ${rankOf.get(cause.causeId)}</a>
+    ${escapeHtml(cause.findings[0]?.title ?? '')}</p>`).join('')}`}`;
+}
+
+/** The plan: what to do, in order. */
 function planSection(plan, titleOf, rankOf) {
   if (plan === null) {
-    return `<p class="note">No running order was produced for this run, so the problems below are in
-      ranked order with nothing said about sequencing, prerequisites or conflicts.</p>`;
+    return `<p class="plain-note">No running order was produced for this run, so the findings are listed
+      by rank with nothing said about sequencing or prerequisites.</p>`;
   }
-  /*
-   * The planner's own summary, as steps. It is asked for as one paragraph and it always comes back as
-   * "first this, second that, third the other", which is a list. Same splitter as the journey.
-   */
-  const week = asSteps(plan.thisWeek);
+  const week = intoParagraphs(plan.thisWeek);
   return `
-  <div class="thisweek">${week.length > 1
+  <div class="summarybox">
+    <h3>This week</h3>
+    ${week.length > 1
     ? `<ol class="weeksteps">${week.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`
-    : escapeHtml(plan.thisWeek)}</div>
+    : `<p>${escapeHtml(plan.thisWeek)}</p>`}
+  </div>
   ${plan.prerequisites.length === 0 ? '' : `
-  <h3>Do these first, or you cannot tell whether the rest worked</h3>
+  <h3>Do these first, or you will not be able to tell whether the rest worked</h3>
   ${plan.prerequisites.map(({ causeId, blocks, why }) => `
   <div class="prereq">
-    <strong>${escapeHtml(titleOf.get(causeId) ?? causeId)}</strong>
+    <p class="pname">${escapeHtml(titleOf.get(causeId) ?? causeId)}</p>
     <p>${escapeHtml(why)}</p>
-    ${blocks.length === 0 ? '' : `<p class="muted">Blocks ${blocks.map((id) => `#${rankOf.get(id)}`).join(', ')}</p>`}
+    ${blocks.length === 0 ? '' : `<p class="muted">Blocks ${blocks.map((id) => `finding ${rankOf.get(id)}`).join(', ')}</p>`}
   </div>`).join('')}`}
-
-  <h3>The batches, in order</h3>
-  <ol class="batches">
-    ${plan.batches.map((batch) => `
-    <li>
-      <h4>${escapeHtml(batch.title)}</h4>
-      <p class="meta">${escapeHtml(batch.size)}${batch.sameChange ? ', one repeated change' : ''}${batch.blockedBy.length > 0 ? `, after ${batch.blockedBy.map((n) => `batch ${n}`).join(' and ')}` : ''}</p>
-      <p>${escapeHtml(batch.rationale)}</p>
-      <ul class="plain">${batch.causeIds.map((id) => `<li>#${rankOf.get(id)} ${escapeHtml(titleOf.get(id) ?? id)}</li>`).join('')}</ul>
-    </li>`).join('')}
-  </ol>
+  <h3>The work, in order</h3>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th class="num">#</th><th>What gets done</th><th>Size</th><th class="num">Closes</th></tr></thead>
+      <tbody>${plan.batches.map((batch) => `
+      <tr>
+        <td class="num">${batch.order}</td>
+        <td><strong>${escapeHtml(batch.title)}</strong>
+          <p class="brat">${escapeHtml(batch.rationale)}</p>
+          ${batch.blockedBy.length > 0 ? `<p class="muted">After ${batch.blockedBy.map((n) => `step ${n}`).join(' and ')}</p>` : ''}</td>
+        <td><span class="size s-${escapeHtml(batch.size)}">${escapeHtml(batch.size.toLowerCase())}</span>
+          ${batch.sameChange ? '<em class="flag">one repeated change</em>' : ''}</td>
+        <td class="num">${batch.causeIds.map((id) => `<a href="#f${rankOf.get(id)}">${rankOf.get(id)}</a>`).join(', ')}</td>
+      </tr>`).join('')}</tbody>
+    </table>
+  </div>
   ${plan.conflicts.length === 0 ? '' : `
   <h3>These pull against each other</h3>
   ${plan.conflicts.map(({ causeIds, why, resolution }) => `
-  <div class="conflict">
-    <p><strong>${causeIds.map((id) => `#${rankOf.get(id)}`).join(' and ')}</strong>: ${escapeHtml(why)}</p>
-    <p class="muted">Resolution: ${escapeHtml(resolution)}</p>
+  <div class="prereq">
+    <p class="pname">Findings ${causeIds.map((id) => rankOf.get(id)).join(' and ')}</p>
+    <p>${escapeHtml(why)}</p>
+    <p class="muted">What to do: ${escapeHtml(resolution)}</p>
   </div>`).join('')}`}`;
 }
 
-/**
- * Build the page.
- *
- * Every input is a sealed artefact of this run. Nothing is fetched, nothing is recomputed, and nothing
- * is summarised by a model: the words are the experts' own.
- */
+/** Build the page. Every input is a sealed artefact of this run. */
 export function renderReportPage({
   index,
   investigation,
@@ -461,310 +444,349 @@ export function renderReportPage({
 } = {}) {
   const situation = journeyBrief?.situation ?? null;
   /*
-   * The account's NAME, taken from the CURRENT profile rather than the sealed brief.
-   *
-   * Deliberate, and the one place this page prefers live configuration to the run's own artefacts: a
-   * display name is not evidence. A run collected before the name was recorded should still render with
-   * it, and an account renamed later should render under its new name rather than the id it had in
-   * March. Falling back to the location id is honest and ugly; guessing a name would be neither.
+   * The account's NAME, from the CURRENT profile rather than the sealed brief, and the one place this
+   * page prefers live configuration to the run's own artefacts: a display name is not evidence.
    */
   const accountName = suppliedName ?? situation?.accountName ?? index.locationId;
   const questions = journeyBrief?.questionsToAnswer ?? [];
-  const titleOf = new Map(investigation.causes.map((cause) => [cause.causeId, cause.findings[0]?.title ?? cause.causeId]));
-  const rankOf = new Map(investigation.causes.map((cause, position) => [cause.causeId, position + 1]));
+  const titleOf = new Map(investigation.causes.map((c) => [c.causeId, c.findings[0]?.title ?? c.causeId]));
+  const rankOf = new Map(investigation.causes.map((c, i) => [c.causeId, i + 1]));
   const ageOf = new Map((recurrence?.causes ?? []).map((entry) => [entry.causeId, entry]));
+  const week = (index.collectionWindow?.to ?? '').slice(0, 10);
+  const delivery = deliverySection({ map, causes: investigation.causes, rankOf, reviews });
+  const chains = chainDiagram(automationBrief?.collisions);
 
-  const problemRows = investigation.causes.map((cause, position) => {
-    const age = ageOf.get(cause.causeId);
-    const ageText = age === undefined
-      ? 'n/a'
-      : age.status === 'RECURRING'
-        ? `seen in ${age.priorRuns} earlier ${age.priorRuns === 1 ? 'run' : 'runs'}`
-        : 'new';
-    return `
-    <tr>
-      <td class="num">${position + 1}</td>
-      <td>${escapeHtml(cause.findings[0]?.title ?? cause.causeId)}
-        <details class="fixes"><summary>the fix</summary>${cause.findings.map((finding) => {
-    const steps = asSteps(finding.fix);
-    return steps.length > 1
-      ? `<ul class="fixsteps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ul>`
-      : `<p>${escapeHtml(finding.fix)}</p>`;
-  }).join('')}</details>
-      </td>
-      <td>${ageText}</td>
-      <td><span class="pill b-${escapeHtml(worstBand(cause, 'commercialImpact'))}">${escapeHtml(worstBand(cause, 'commercialImpact'))}</span></td>
-      <td>${escapeHtml(worstBand(cause, 'implementationEffort'))}</td>
-      <td>${cause.corroboratingLanes.length}/3</td>
-      <td class="mono">${escapeHtml(cause.mechanisms.join(', '))}</td>
-    </tr>`;
-  });
-
-  const workflowReviews = reviews.filter(({ kind }) => kind === 'workflow');
-  const agentReviews = reviews.filter(({ kind }) => kind === 'agent');
+  const contents = [
+    ['method', 'How this audit was done'],
+    ['account', 'How the account works today'],
+    ['questions', 'The six questions, answered'],
+    ['funnel', 'Where people fall out'],
+    ...(chains === '' ? [] : [['chains', 'What starts what']]),
+    ...(delivery === '' ? [] : [['delivery', 'Onboarding and delivery']]),
+    ['plan', 'What to do, in order'],
+    ['findings', 'Every finding'],
+    ...((situation?.knownDataCaveats ?? []).length === 0 ? [] : [['told', 'What we were told']]),
+    ['files', 'Where the detail is'],
+  ];
 
   const body = `
-<header class="masthead">
-  <p class="eyebrow">Weekly account audit</p>
+<header class="cover">
+  <p class="kicker">Account audit &middot; week ending ${escapeHtml(week)}</p>
   <h1>${escapeHtml(accountName)}</h1>
-  <p class="standfirst">${situation?.whoThisIs ? escapeHtml(situation.whoThisIs) : ''}</p>
-  <p class="metaline">
-    Week ending ${escapeHtml((index.collectionWindow?.to ?? '').slice(0, 10) || 'unknown')}
-    &middot; account <code>${escapeHtml(index.locationId)}</code>
-    ${situation?.theFunnel ? '' : ''}
-  </p>
-  <div class="scores">
-    <div><span class="s-n">${investigation.causeCount}</span><span class="s-l">problems found</span></div>
-    <div><span class="s-n">${investigation.corroboratedCauseCount}</span><span class="s-l">reached by more than one analyst</span></div>
-    <div><span class="s-n">${reviews.length}</span><span class="s-l">workflows and agents reviewed one by one</span></div>
-    <div><span class="s-n">${plan === null ? 'n/a' : plan.batches.length}</span><span class="s-l">batches of work in the plan</span></div>
+  ${situation?.whoThisIs ? `<p class="blurb">${escapeHtml(situation.whoThisIs)}</p>` : ''}
+  <div class="figures">
+    <div><b>${investigation.causeCount}</b><span>problems found</span></div>
+    <div><b>${investigation.corroboratedCauseCount}</b><span>found by more than one expert</span></div>
+    <div><b>${reviews.length}</b><span>workflows and agents reviewed</span></div>
+    <div><b>${plan === null ? 'n/a' : plan.batches.length}</b><span>steps in the plan</span></div>
   </div>
-  <p class="warnbar">Internal. Quotes real customer messages and account data, so keep it inside Grom.</p>
+  <p class="internal">Internal document. It quotes real customer messages and account data.</p>
+  <nav class="contents">
+    <p class="cotitle">Contents</p>
+    <ol>${contents.map(([id, label]) => `<li><a href="#${id}">${escapeHtml(label)}</a></li>`).join('')}</ol>
+  </nav>
 </header>
 
-<section>
-  <h2><span class="secnum">01</span>What was done</h2>
-  <p>Five stages of expert read this account. Nothing was told what to look for and no rule in the
-  code decides what good looks like: the account's own evidence is read, and every finding must name
-  a mechanism, state a benchmark, carry two competing explanations and a test that would refute it, or
-  it is thrown away.</p>
-  <div class="stagegrid">
-    <div><span class="big">1</span>expert derived what this account is and what each workflow is for</div>
-    <div><span class="big">${reviews.length || 'n/a'}</span>experts each read ONE workflow or agent whole: settings, runtime, and every message</div>
-    <div><span class="big">3</span>experts read the account as a whole: the journey, the system, the messages as one stream</div>
-    <div><span class="big">${investigation.causeCount}</span>problems after grouping, ranked, each with a fix and a way to check it</div>
+<section id="method">
+  <h2>How this audit was done</h2>
+  <p>Five rounds of expert review read this account. Nobody told them what to look for, and no rule in
+  the software decides what good looks like. They read the account's own evidence, and any problem they
+  raise must name a mechanism, state what a competent operation achieves instead, offer two other
+  explanations for the same evidence, and give a test that would prove it wrong. Anything missing one of
+  those is thrown away rather than reported.</p>
+  <div class="stages">
+    <div><b>1</b><span>expert worked out what this account is, and what each workflow is for</span></div>
+    <div><b>${reviews.length}</b><span>experts each read ONE workflow or AI agent in full: its settings, what happened to real contacts, and every message it sends</span></div>
+    <div><b>3</b><span>experts read the whole account: the journey, the system, and every message as one stream</span></div>
+    <div><b>1</b><span>expert put the problems into the order they should be worked on</span></div>
   </div>
-  ${index.internalRail?.available === false ? '<p class="note">The internal connection was OFF for this run, so no workflow settings or runtime were read. Nothing here should be taken as "the automation is fine".</p>' : ''}
+  ${index.internalRail?.available === false ? '<p class="plain-note">The deeper connection was off for this run, so no workflow settings or history were read. Nothing here should be taken as "the automation is fine".</p>' : ''}
 </section>
 
-<section>
-  <h2><span class="secnum">02</span>The account as we found it</h2>
-  ${map?.journey ? `<p class="lead">${escapeHtml(map.journey)}</p>` : ''}
-  ${(() => {
-    const steps = (map?.journeySteps ?? []).length > 0 ? map.journeySteps : asSteps(map?.journey);
-    // One line each, numbered, because it is a sequence. The paragraph this replaces was the least
-    // readable thing in the first version of this page.
-    return steps.length <= 1 ? '' : `<ol class="steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`;
-  })()}
-  <h3>The money path</h3>
-  ${moneyPathDiagram(map)}
-  <h3>What every workflow is for</h3>
-  ${rolesDiagram(map)}
+<section id="account">
+  <h2>How the account works today</h2>
+  ${map?.journey ? `<p class="lede">${escapeHtml(map.journey)}</p>` : ''}
+  ${(map?.journeySteps ?? []).length === 0 ? '' : `
+  <ol class="steps">${map.journeySteps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`}
+  <h3>The path a lead takes</h3>
+  ${journeyDiagram(map)}
+  <h3>Every workflow, and what it is for</h3>
+  ${rolesTable(map)}
   ${(map?.gaps ?? []).length === 0 ? '' : `
-  <h3>Stages with no automation pointed at them</h3>
-  <ul>${map.gaps.map((gap) => `<li>${escapeHtml(gap)}</li>`).join('')}</ul>`}
-  ${(situation?.knownDataCaveats ?? []).length === 0 ? '' : `
-  <h3>What the experts were told, that the evidence cannot show</h3>
-  <p class="caption">Facts about this account that no amount of data reveals. Every expert reads these
-  before judging anything, and they are the difference between a diagnosis and a confidently wrong one.
-  A run only carries the ones recorded before it collected.</p>
-  <ul>${situation.knownDataCaveats.map((caveat) => `<li>${escapeHtml(caveat)}</li>`).join('')}</ul>`}
+  <h3>Parts of the journey with no automation pointed at them</h3>
+  <ul class="bullets">${map.gaps.map((gap) => `<li>${escapeHtml(gap)}</li>`).join('')}</ul>`}
 </section>
 
-<section>
-  <h2><span class="secnum">03</span>The six questions, answered</h2>
-  <p>This is what the audit exists to answer. Each question is tied to the step of the journey it is
-  about, and a finding appears under it when the finding points at that step.</p>
-  ${questionsSection({
-    questions,
-    questionEdges,
-    kpis: journeyBrief?.kpis,
-    targets: journeyBrief?.targets,
-    causes: investigation.causes,
-    rankOf,
-  })}
+<section id="questions">
+  <h2>The six questions, answered</h2>
+  <p>These are the questions this audit exists to answer. Each is tied to the step of the journey it is
+  about, and a problem appears under a question when it points at that step.</p>
+  ${questionsSection({ questions, questionEdges, kpis: journeyBrief?.kpis, targets: journeyBrief?.targets, causes: investigation.causes, rankOf })}
 </section>
 
-${deliverySection({ map, causes: investigation.causes, rankOf, reviews }) === '' ? '' : `
-<section>
-  <h2><span class="secnum">04</span>After they sign: onboarding and delivery</h2>
-  ${deliverySection({ map, causes: investigation.causes, rankOf, reviews })}
+<section id="funnel">
+  <h2>Where people fall out</h2>
+  <p>Each row is one step of the journey. The bar is what the account did and the line on it is the
+  target. A shaded row is below target.</p>
+  ${funnelTable({ kpis: journeyBrief?.kpis, targets: journeyBrief?.targets })}
+</section>
+
+${chains === '' ? '' : `
+<section id="chains">
+  <h2>What starts what</h2>
+  <p>Finishing one workflow can start another. Where several workflows fire the same event and several
+  listen for it, the wrong person can receive the wrong sequence.</p>
+  ${chains}
+  ${automationBrief?.collisions?.sharedTriggerTypeCaveat
+    ? `<p class="plain-note">${escapeHtml(automationBrief.collisions.sharedTriggerTypeCaveat)}</p>` : ''}
 </section>`}
 
-<section>
-  <h2><span class="secnum">05</span>Where people fall out</h2>
-  ${funnelDiagram({ kpis: journeyBrief?.kpis, targets: journeyBrief?.targets })}
-</section>
-
-${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
-<section>
-  <h2><span class="secnum">06</span>What starts what</h2>
-  <p>One workflow finishing can start another. Where many things fire one shared event and many things
-  listen for it, the wrong person receives the wrong sequence.</p>
-  ${collisionDiagram(automationBrief?.collisions)}
+${delivery === '' ? '' : `
+<section id="delivery">
+  <h2>Onboarding and delivery</h2>
+  ${delivery}
 </section>`}
 
-<section>
-  <h2><span class="secnum">07</span>The plan</h2>
+<section id="plan">
+  <h2>What to do, in order</h2>
   ${planSection(plan, titleOf, rankOf)}
 </section>
 
-<section>
-  <h2><span class="secnum">08</span>Every problem, ranked</h2>
-  <p class="caption">The grey line under each problem is the fix its analyst proposed, in their words.</p>
+<section id="findings">
+  <h2>Every finding</h2>
+  <p>Ranked by what they cost, with how hard they are to fix counting against. Open one to see what to
+  change and how you will know it worked.</p>
   <div class="tablewrap">
-    <table class="problems">
-      <thead><tr><th class="num">#</th><th>Problem and fix</th><th>Age</th><th>Impact</th><th>Effort</th><th>Analysts</th><th>Mechanism</th></tr></thead>
-      <tbody>${problemRows.join('')}</tbody>
+    <table>
+      <thead><tr><th class="num">#</th><th>Problem</th><th>Cost</th><th>Effort</th><th class="num">Experts</th><th>Age</th></tr></thead>
+      <tbody>${investigation.causes.map((cause, i) => {
+    const age = ageOf.get(cause.causeId);
+    return `
+      <tr>
+        <td class="num"><a href="#f${i + 1}">${i + 1}</a></td>
+        <td>${escapeHtml(cause.findings[0]?.title ?? '')}</td>
+        <td><span class="band b-${escapeHtml(worstBand(cause, 'commercialImpact'))}">${escapeHtml(worstBand(cause, 'commercialImpact').toLowerCase())}</span></td>
+        <td>${escapeHtml(worstBand(cause, 'implementationEffort').toLowerCase())}</td>
+        <td class="num">${cause.corroboratingLanes.length} of 3</td>
+        <td>${age === undefined ? 'n/a' : age.status === 'RECURRING' ? `seen ${age.priorRuns} times before` : 'new'}</td>
+      </tr>`;
+  }).join('')}</tbody>
     </table>
   </div>
+  <div class="findings">${investigation.causes.map((cause, i) => findingBlock(cause, i + 1)).join('')}</div>
 </section>
 
-<section>
-  <h2><span class="secnum">09</span>Where the detail is</h2>
-  <p>This page is the overview. The working material is on disk beside it.</p>
+${(situation?.knownDataCaveats ?? []).length === 0 ? '' : `
+<section id="told">
+  <h2>What we were told</h2>
+  <p>Facts about this account that no amount of data reveals. Every expert reads these before judging
+  anything, and they are the difference between a real diagnosis and a confident wrong one. A run only
+  carries the ones written down before it collected its evidence.</p>
+  <ul class="bullets">${situation.knownDataCaveats.map((caveat) => `<li>${escapeHtml(caveat)}</li>`).join('')}</ul>
+</section>`}
+
+<section id="files">
+  <h2>Where the detail is</h2>
+  <p>This document is the overview. The working material sits beside it on disk.</p>
   <div class="tablewrap">
     <table>
       <thead><tr><th>What</th><th>Where</th></tr></thead>
       <tbody>
-        <tr><td>The rewritten copy, message by message</td><td class="mono">private/briefs/${escapeHtml(index.runId)}/reviews/</td></tr>
-        <tr><td>One file per problem: what to change, how to check it</td><td class="mono">investigations/${escapeHtml(index.runId)}/packages/</td></tr>
-        <tr><td>The full argument behind every problem</td><td class="mono">investigations/${escapeHtml(index.runId)}/INVESTIGATION.md</td></tr>
-        <tr><td>The plan</td><td class="mono">investigations/${escapeHtml(index.runId)}/PLAN.md</td></tr>
+        <tr><td>Every message rewritten, workflow by workflow</td><td class="path">private/briefs/${escapeHtml(index.runId)}/reviews/</td></tr>
+        <tr><td>One file per problem: what to change, how to check it</td><td class="path">investigations/${escapeHtml(index.runId)}/packages/</td></tr>
+        <tr><td>The full argument behind every problem</td><td class="path">investigations/${escapeHtml(index.runId)}/INVESTIGATION.md</td></tr>
+        <tr><td>The plan</td><td class="path">investigations/${escapeHtml(index.runId)}/PLAN.md</td></tr>
       </tbody>
     </table>
   </div>
-  ${workflowReviews.length === 0 ? '' : `
-  <h3>Workflows reviewed on their own</h3>
-  <ul class="cols">${workflowReviews.map((review) => `<li>${escapeHtml(review.object)} <span class="muted">${review.messageCount ?? 0} messages</span></li>`).join('')}</ul>`}
-  ${agentReviews.length === 0 ? '' : `
-  <h3>AI agents reviewed on their own</h3>
-  <ul class="cols">${agentReviews.map((review) => `<li>${escapeHtml(review.object)}</li>`).join('')}</ul>`}
 </section>
 
 <footer>
-  <p>Run <code>${escapeHtml(index.runId)}</code>. Briefs <code>${escapeHtml((index.briefsHash ?? '').slice(0, 12))}</code>,
-  investigation <code>${escapeHtml((investigation.investigationHash ?? '').slice(0, 12))}</code>.</p>
-  <p>Nothing here proves the configuration read today was the configuration in force during the window.
-  A setting may be called consistent with an outcome, or said to produce one going forward. It may not
-  be said to have caused a past outcome.</p>
-  <p>Nothing in this cycle changes the account. Every fix is for a person to approve and apply.</p>
-</footer>`;
+  <p><strong>What this report cannot tell you.</strong> Nothing here proves the settings we read today
+  were the settings in force during the period measured. A setting can be called consistent with a
+  result, or expected to produce one from now on. It cannot be said to have caused a past result.</p>
+  <p>Nothing in this process changes the account. Every fix is for a person to approve and apply.</p>
+  <p class="prov">Run ${escapeHtml(index.runId)} &middot; evidence ${escapeHtml((index.briefsHash ?? '').slice(0, 12))}
+  &middot; findings ${escapeHtml((investigation.investigationHash ?? '').slice(0, 12))}</p>
+</footer>
+<script type="module">
+  /*
+   * Mermaid from a CDN, which works because this document is opened as a local file in a real browser
+   * rather than inside a sandbox. If the fetch fails the diagram source stays visible as text, and
+   * every fact a diagram draws is also in a table on the same page.
+   */
+  try {
+    const { default: mermaid } = await import('https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs');
+    mermaid.initialize({
+      /*
+       * NOT startOnLoad. This script is a module and resolves an import from a CDN, so by the time
+       * mermaid exists the load event has already fired and startOnLoad silently does nothing. Calling
+       * run explicitly is what makes the diagrams appear.
+       */
+      startOnLoad: false,
+      theme: 'base',
+      themeVariables: {
+        background: '#ffffff', primaryColor: '#EEF4F5', primaryTextColor: '#12242B',
+        primaryBorderColor: '#9DB6BC', lineColor: '#7A969D', secondaryColor: '#F5F8F9',
+        fontFamily: 'ui-sans-serif, system-ui, sans-serif', fontSize: '14px',
+      },
+    });
+    await mermaid.run({ querySelector: 'pre.mermaid' });
+  } catch {
+    // Offline, blocked, or a malformed diagram: leave the source visible rather than an empty box.
+    for (const pre of document.querySelectorAll('pre.mermaid')) pre.classList.add('raw');
+  }
+</script>`;
 
   return { html: `${PAGE_STYLE}\n${body}\n`, pageHash: sha256(body) };
 }
 
-/** Inline, because the page is opened as a local file where an external stylesheet cannot load. */
+/** Light only, and deliberately: a report two people describe differently on a call is a bad report. */
 const PAGE_STYLE = `<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Account audit</title>
 <style>
-:root{color-scheme:light dark;
---paper:#F2F5F6;--card:#FFF;--ink:#121A1E;--soft:#3B4A50;--faint:#66787F;--rule:#D7E0E2;--rule-soft:#E9EFF0;
---accent:#0B5F66;--wash:#E2EFF0;--warn:#8A5410;--warn-wash:#F6EBDA;--bad:#9C2F2F;--bad-wash:#F6E3E3;--good:#276B47;
---mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;--serif:ui-serif,Georgia,"Times New Roman",serif;}
-@media(prefers-color-scheme:dark){:root{--paper:#0D1417;--card:#141E22;--ink:#E6EDEF;--soft:#B2C2C7;--faint:#84979C;--rule:#24343A;--rule-soft:#1B292E;--accent:#5FCBD3;--wash:#123336;--warn:#D8A05A;--warn-wash:#33260F;--bad:#E08585;--bad-wash:#331A1A;--good:#6FC694;}}
-:root[data-theme=light]{--paper:#F2F5F6;--card:#FFF;--ink:#121A1E;--soft:#3B4A50;--faint:#66787F;--rule:#D7E0E2;--rule-soft:#E9EFF0;--accent:#0B5F66;--wash:#E2EFF0;--warn:#8A5410;--warn-wash:#F6EBDA;--bad:#9C2F2F;--bad-wash:#F6E3E3;--good:#276B47;}
-:root[data-theme=dark]{--paper:#0D1417;--card:#141E22;--ink:#E6EDEF;--soft:#B2C2C7;--faint:#84979C;--rule:#24343A;--rule-soft:#1B292E;--accent:#5FCBD3;--wash:#123336;--warn:#D8A05A;--warn-wash:#33260F;--bad:#E08585;--bad-wash:#331A1A;--good:#6FC694;}
-body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:17px;line-height:1.62;margin:0;padding:0 clamp(1rem,4vw,3rem) 5rem;max-width:66rem;margin-inline:auto;-webkit-font-smoothing:antialiased}
-.masthead{padding:clamp(2.5rem,7vw,4.5rem) 0 2rem;border-bottom:1px solid var(--rule);display:flex;flex-direction:column;gap:1rem}
-.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.13em;text-transform:uppercase;color:var(--accent);margin:0}
-h1{font-family:var(--mono);font-size:clamp(1.4rem,3.5vw,2.1rem);margin:0;letter-spacing:-.01em;word-break:break-all}
-.standfirst{font-size:1.08rem;color:var(--soft);max-width:62ch;margin:0}
-.warnbar{font-size:.82rem;background:var(--warn-wash);color:var(--warn);padding:.5rem .8rem;border-radius:3px;margin:.5rem 0 0;max-width:70ch}
-section{padding-top:3rem}
-h2{font-family:var(--serif);font-weight:500;font-size:clamp(1.35rem,2.6vw,1.8rem);line-height:1.15;margin:0 0 .8rem;text-wrap:balance}
-h2 .secnum{font-family:var(--mono);font-size:.66rem;color:var(--accent);letter-spacing:.14em;display:block;text-align:left;margin-bottom:.5rem;font-weight:400}
-h3{font-size:.92rem;font-weight:650;margin:2rem 0 .6rem}
-h4{font-size:.85rem;font-weight:640;margin:0 0 .4rem}
-p{max-width:74ch}.lead{font-size:1.05rem;color:var(--ink);max-width:72ch}
-.caption{font-size:.82rem;color:var(--faint)}
-.note{font-size:.88rem;background:var(--wash);padding:.7rem .9rem;border-left:2px solid var(--accent);max-width:68ch}
-code{font-family:var(--mono);font-size:.85em;background:var(--rule-soft);padding:.08em .3em;border-radius:3px}
-.mono{font-family:var(--mono);font-size:.8rem}
-.muted{color:var(--faint);font-size:.82em}
-em.warn{color:var(--warn);font-style:normal;font-size:.78em;font-family:var(--mono)}
-ul.plain{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.25rem;font-size:.86rem}
-ul.cols{list-style:none;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(19rem,1fr));gap:.3rem .8rem;font-size:.86rem}
-.stagegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:1.5rem}
-.stagegrid>div{background:var(--card);padding:1rem 1.1rem;font-size:.85rem;color:var(--soft)}
-.big{display:block;font-family:var(--serif);font-size:2rem;line-height:1;color:var(--accent);margin-bottom:.35rem}
-.band{overflow-x:auto;padding-bottom:.4rem}
-.chain{list-style:none;display:flex;gap:0;margin:0;padding:0;min-width:min-content}
-.chain-step{background:var(--card);border:1px solid var(--rule);border-left:none;padding:.7rem .85rem;min-width:11rem;flex:1 1 0;display:flex;flex-direction:column;gap:.2rem}
-.chain-step:first-child{border-left:1px solid var(--rule)}
-.chain-n{font-family:var(--mono);font-size:.62rem;color:var(--accent)}
-.chain-name{font-family:var(--mono);font-size:.78rem;font-weight:600}
-.chain-job{font-size:.76rem;color:var(--faint);line-height:1.35}
-.roles{display:grid;grid-template-columns:repeat(auto-fit,minmax(17rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule)}
-.role{background:var(--card);padding:.9rem 1rem}
-.role .count{font-family:var(--mono);font-size:.72rem;color:var(--accent)}
-.tablewrap{overflow-x:auto;border:1px solid var(--rule);background:var(--card);margin-top:1rem}
-table{border-collapse:collapse;width:100%;min-width:32rem;font-size:.86rem}
-th,td{text-align:left;padding:.55rem .8rem;border-bottom:1px solid var(--rule-soft);vertical-align:top}
-thead th{font-family:var(--mono);font-size:.64rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;background:var(--paper);border-bottom:1px solid var(--rule)}
+:root{color-scheme:light;
+--paper:#FFFFFF;--wash:#F5F8F9;--ink:#12242B;--body:#33474E;--soft:#5C7178;--faint:#7F949A;
+--rule:#DCE5E7;--hair:#EDF2F3;--accent:#0A5C64;--accent-soft:#E7F1F2;
+--bad:#A32A2A;--bad-soft:#FBEBEB;--warn:#8A5210;--warn-soft:#FBF0E2;--good:#1F6B45;--good-soft:#E8F3EC;
+--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+--sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+--serif:ui-serif,Georgia,"Iowan Old Style","Times New Roman",serif}
+*{box-sizing:border-box}
+html{background:var(--wash)}
+body{margin:0 auto;max-width:60rem;padding:0 clamp(1rem,4vw,3.5rem) 5rem;background:var(--paper);
+color:var(--body);font-family:var(--sans);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased}
+p{max-width:70ch}
+a{color:var(--accent)}
+strong{color:var(--ink)}
+.muted{color:var(--faint);font-size:.86em}
+.wf,.path{font-family:var(--mono);font-size:.84em;color:var(--ink)}
+em.flag{display:block;font-style:normal;font-family:var(--mono);font-size:.7rem;color:var(--warn);margin-top:.2rem}
+
+.cover{padding:clamp(2.5rem,7vw,5rem) 0 2rem;border-bottom:2px solid var(--ink)}
+.kicker{font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 1.2rem}
+h1{font-family:var(--serif);font-weight:600;font-size:clamp(2.1rem,5.5vw,3.2rem);line-height:1.05;margin:0;color:var(--ink);letter-spacing:-.02em}
+.blurb{font-size:1.1rem;color:var(--soft);margin:1rem 0 0;max-width:60ch}
+.figures{display:grid;grid-template-columns:repeat(auto-fit,minmax(10rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin:2rem 0 1rem}
+.figures>div{background:var(--paper);padding:1rem 1.1rem}
+.figures b{display:block;font-family:var(--serif);font-size:2.2rem;line-height:1;color:var(--accent)}
+.figures span{display:block;font-size:.8rem;color:var(--faint);margin-top:.3rem;line-height:1.35}
+.internal{font-size:.82rem;color:var(--warn);background:var(--warn-soft);padding:.5rem .8rem;border-radius:3px;display:inline-block;margin:0}
+.contents{margin-top:2.2rem;border-top:1px solid var(--rule);padding-top:1.2rem}
+.cotitle{font-family:var(--mono);font-size:.68rem;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin:0 0 .6rem}
+.contents ol{margin:0;padding-left:1.4rem;columns:2;column-gap:2.5rem;font-size:.92rem}
+.contents li{margin-bottom:.3rem;break-inside:avoid}
+.contents a{text-decoration:none}
+.contents a:hover{text-decoration:underline}
+
+section{padding-top:3.2rem;scroll-margin-top:1rem}
+h2{font-family:var(--serif);font-weight:600;font-size:clamp(1.5rem,3vw,2.05rem);line-height:1.15;color:var(--ink);margin:0 0 .7rem;letter-spacing:-.015em}
+h3{font-size:1rem;font-weight:650;color:var(--ink);margin:2.1rem 0 .6rem}
+.lede{font-size:1.06rem;color:var(--ink);max-width:66ch}
+.plain-note{font-size:.9rem;background:var(--wash);border-left:3px solid var(--rule);padding:.7rem .95rem;max-width:70ch}
+ul.bullets{max-width:70ch;padding-left:0;list-style:none;display:flex;flex-direction:column;gap:.55rem;margin:1rem 0 0}
+ul.bullets>li{position:relative;padding-left:1.15rem;font-size:.93rem}
+ul.bullets>li::before{content:"";position:absolute;left:0;top:.68em;width:5px;height:5px;border-radius:50%;background:var(--accent)}
+.stages{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:1.4rem}
+.stages>div{background:var(--paper);padding:.95rem 1.05rem;font-size:.86rem;color:var(--soft)}
+.stages b{display:block;font-family:var(--serif);font-size:1.7rem;color:var(--accent);line-height:1;margin-bottom:.3rem}
+ol.steps{counter-reset:s;list-style:none;padding:0;margin:1.3rem 0 0;max-width:74ch;border-top:1px solid var(--hair)}
+ol.steps>li{counter-increment:s;position:relative;padding:.55rem .5rem .55rem 2.4rem;border-bottom:1px solid var(--hair);font-size:.93rem}
+ol.steps>li::before{content:counter(s);position:absolute;left:.65rem;top:.6rem;font-family:var(--mono);font-size:.7rem;color:var(--accent)}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);margin-top:1.1rem}
+table{border-collapse:collapse;width:100%;min-width:30rem;font-size:.9rem}
+th,td{text-align:left;padding:.6rem .85rem;border-bottom:1px solid var(--hair);vertical-align:top}
+thead th{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:500;background:var(--wash);border-bottom:1px solid var(--rule);white-space:nowrap}
 tbody tr:last-child td{border-bottom:none}
-.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-th.num,td.num{text-align:right}
-.funnel th{font-family:var(--mono);font-size:.76rem;font-weight:500}
-.bar-cell{width:40%;min-width:9rem}
-.bar{display:block;position:relative;height:1.05rem;background:var(--rule-soft);border-radius:2px;overflow:visible}
-.bar::before{content:"";position:absolute;inset:0 auto 0 0;width:var(--w);background:var(--accent);border-radius:2px}
-.target{position:absolute;top:-2px;bottom:-2px;left:var(--t);width:2px;background:var(--warn)}
-.target-col{color:var(--warn)}
-.unmeasured{font-family:var(--mono);font-size:.72rem;color:var(--warn)}
-.pill{display:inline-block;font-family:var(--mono);font-size:.64rem;letter-spacing:.06em;padding:.15rem .4rem;border-radius:2px;white-space:nowrap}
-.b-CRITICAL,.b-HIGH{background:var(--bad-wash);color:var(--bad)}
-.b-MEDIUM{background:var(--warn-wash);color:var(--warn)}
-.b-LOW,.b-NONE{background:var(--rule-soft);color:var(--faint)}
-.chain-map{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:1rem}
-@media(min-width:52rem){.chain-map{grid-template-columns:1fr auto 1fr}}
-.chain-map .side{background:var(--card);padding:.9rem 1rem}
-.chain-map .via{background:var(--wash);padding:.9rem 1rem;display:flex;align-items:center;justify-content:center}
-.chain-map .via code{background:none;color:var(--accent);font-size:.74rem}
-.metaline{font-size:.82rem;color:var(--faint);margin:0}
-.scores{display:grid;grid-template-columns:repeat(auto-fit,minmax(11rem,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:.5rem}
-.scores>div{background:var(--card);padding:.85rem 1rem;display:flex;flex-direction:column;gap:.15rem}
-.s-n{font-family:var(--serif);font-size:1.9rem;line-height:1;color:var(--accent)}
-.s-l{font-size:.76rem;color:var(--faint);line-height:1.3}
-.qa{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--rule);padding:1rem 1.2rem;margin-top:.75rem}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.below td{background:var(--bad-soft)}
+.barcell{min-width:9rem;width:30%}
+.bar{position:relative;display:block;height:1.1rem;background:var(--hair);border-radius:2px}
+.bar i{position:absolute;top:0;bottom:0;left:0;background:var(--accent);border-radius:2px}
+.bar b{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--warn)}
+.tgt{color:var(--warn)}
+.nomeasure{font-family:var(--mono);font-size:.74rem;color:var(--warn)}
+.role,.band,.size{display:inline-block;font-size:.72rem;padding:.16rem .45rem;border-radius:3px;white-space:nowrap}
+.r-money_path{background:var(--good-soft);color:var(--good)}
+.r-delivery{background:var(--accent-soft);color:var(--accent)}
+.r-internal_ops,.r-data_hygiene{background:var(--hair);color:var(--soft)}
+.r-abandoned,.r-unclear{background:var(--warn-soft);color:var(--warn)}
+.b-CRITICAL,.b-HIGH{background:var(--bad-soft);color:var(--bad)}
+.b-MEDIUM{background:var(--warn-soft);color:var(--warn)}
+.b-LOW,.b-NONE{background:var(--hair);color:var(--soft)}
+.s-SMALL{background:var(--good-soft);color:var(--good)}
+.s-MEDIUM{background:var(--warn-soft);color:var(--warn)}
+.s-LARGE{background:var(--bad-soft);color:var(--bad)}
+.brat{font-size:.86rem;color:var(--soft);margin:.3rem 0 0;max-width:52ch}
+
+.qa{padding:1.2rem 1.3rem;border:1px solid var(--rule);border-left-width:4px;margin-top:1.1rem;background:var(--paper)}
 .qa.q-answered{border-left-color:var(--bad)}
-.qa.q-unmeasured{border-left-color:var(--warn)}
-.qa.q-none{border-left-color:var(--good)}
-.qa.q-unanswerable{border-left-color:var(--faint)}
-.qa h3{margin:0 0 .5rem;font-size:1rem;font-weight:600;display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;line-height:1.35}
-.qn{font-family:var(--mono);font-size:.68rem;color:var(--accent);letter-spacing:.08em}
-.qstate{font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);margin-left:auto;white-space:nowrap}
-.q-answered .qstate{color:var(--bad)}.q-unmeasured .qstate{color:var(--warn)}.q-none .qstate{color:var(--good)}
-ol.steps{counter-reset:s;list-style:none;padding:0;margin:1rem 0 0;max-width:76ch;display:flex;flex-direction:column;gap:.1rem}
-ol.steps>li{counter-increment:s;position:relative;padding:.5rem .6rem .5rem 2.4rem;font-size:.9rem;line-height:1.5;border-bottom:1px solid var(--rule-soft)}
-ol.steps>li:last-child{border-bottom:none}
-ol.steps>li::before{content:counter(s);position:absolute;left:.6rem;top:.52rem;font-family:var(--mono);font-size:.68rem;color:var(--accent)}
-ul.nums{font-size:.84rem;gap:.2rem;margin-bottom:.6rem}
-ul.nums code{font-size:.78rem}
-.qfindings{display:flex;flex-direction:column;gap:.55rem;margin-top:.6rem;border-top:1px solid var(--rule-soft);padding-top:.6rem}
-details.qf{border-top:1px solid var(--rule-soft);padding:.15rem 0}
-details.qf:first-child{border-top:none}
-details.qf>summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:2.4rem minmax(0,1fr) auto;gap:.6rem;align-items:baseline;padding:.6rem 0;font-size:.92rem;line-height:1.5}
-details.qf>summary::-webkit-details-marker{display:none}
-details.qf>summary:hover .qf-title{color:var(--accent)}
-.qf-rank{font-family:var(--mono);font-size:.7rem;color:var(--faint);flex:none}
-.qf-title{font-weight:600}
-.qf-more{font-family:var(--mono);font-size:.62rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);flex:none;opacity:.75}
-details.qf[open] .qf-more{opacity:.4}
-.qf-body{padding:.2rem 0 .9rem 3rem}
-.alsoseen{font-size:.82rem;color:var(--faint);margin:.6rem 0 0;max-width:none}
-.alsoseen a{color:var(--accent);text-decoration:none;font-family:var(--mono);font-size:.8rem;padding:0 .1rem}
-.alsoseen a:hover{text-decoration:underline}
-.qf-fix{font-size:.86rem;color:var(--soft);margin:0 0 .5rem;max-width:74ch}
-ul.fixsteps{list-style:none;padding:0;margin:0 0 .5rem;display:flex;flex-direction:column;gap:.35rem;max-width:74ch}
-ul.fixsteps>li{font-size:.86rem;color:var(--soft);line-height:1.5;padding-left:.9rem;position:relative}
-ul.fixsteps>li::before{content:"";position:absolute;left:0;top:.62em;width:4px;height:4px;border-radius:50%;background:var(--accent);opacity:.6}
-details.fixes{margin-top:.35rem}
-details.fixes>summary{cursor:pointer;font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--accent);opacity:.75}
-details.fixes>summary::-webkit-details-marker{display:none}
-details.fixes ul.fixsteps,details.fixes p{margin-top:.4rem;font-size:.82rem}
-.thisweek{background:var(--card);border:1px solid var(--rule);border-left:3px solid var(--accent);padding:1rem 1.2rem;font-size:.96rem;max-width:74ch}
-ol.weeksteps{counter-reset:w;list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.55rem}
-ol.weeksteps>li{counter-increment:w;position:relative;padding-left:1.6rem;line-height:1.55}
-ol.weeksteps>li::before{content:counter(w);position:absolute;left:0;top:.05rem;font-family:var(--mono);font-size:.7rem;color:var(--accent)}
-.prereq,.conflict{background:var(--card);border:1px solid var(--rule);padding:.8rem 1rem;margin-bottom:.5rem;max-width:72ch}
-.prereq p,.conflict p{margin:.3rem 0 0;font-size:.88rem}
-.batches{padding-left:0;list-style:none;counter-reset:b;display:flex;flex-direction:column;gap:1px;background:var(--rule);border:1px solid var(--rule)}
-.batches>li{background:var(--card);padding:1rem 1.1rem;counter-increment:b}
-.batches>li h4::before{content:counter(b) ". ";color:var(--accent);font-family:var(--mono)}
-.batches .meta{font-family:var(--mono);font-size:.7rem;color:var(--faint);margin:0 0 .5rem;text-transform:uppercase;letter-spacing:.06em}
-.batches p{font-size:.88rem;margin:.3rem 0 .5rem}
-footer{margin-top:4rem;padding-top:1.2rem;border-top:1px solid var(--rule);font-size:.8rem;color:var(--faint)}
-footer p{max-width:74ch}
+.qa.q-blind{border-left-color:var(--warn)}
+.qa.q-clear{border-left-color:var(--good)}
+.qa.q-nostep{border-left-color:var(--rule)}
+.qa h3{margin:0;font-size:1.12rem;font-family:var(--serif);font-weight:600;line-height:1.3}
+.qn{display:block;font-family:var(--mono);font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;color:var(--accent);margin-bottom:.35rem;font-weight:400}
+.verdict{font-family:var(--mono);font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;margin:.5rem 0 .9rem;color:var(--faint)}
+.q-answered .verdict{color:var(--bad)}
+.q-blind .verdict{color:var(--warn)}
+.q-clear .verdict{color:var(--good)}
+ul.qnums{list-style:none;padding:0;margin:0 0 .9rem;display:flex;flex-direction:column;gap:.28rem;font-size:.88rem}
+.xref,.xref-line{font-size:.86rem;color:var(--faint);margin:.7rem 0 0}
+.xref-line{margin:.35rem 0;max-width:74ch}
+
+.findings{margin-top:.6rem;border-top:1px solid var(--hair)}
+details.finding{border-bottom:1px solid var(--hair);scroll-margin-top:1rem}
+details.finding>summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:2rem minmax(0,1fr) auto;gap:.7rem;align-items:baseline;padding:.7rem 0;font-size:.94rem;line-height:1.5}
+details.finding>summary::-webkit-details-marker{display:none}
+details.finding>summary:hover .ftitle{color:var(--accent)}
+.frank{font-family:var(--mono);font-size:.74rem;color:var(--faint)}
+.ftitle{color:var(--ink);font-weight:600}
+.fmeta{font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;color:var(--faint)}
+.fbody{padding:.3rem 0 1.4rem 2.7rem}
+.flabel{font-family:var(--mono);font-size:.64rem;letter-spacing:.11em;text-transform:uppercase;color:var(--accent);margin:1rem 0 .4rem}
+.fbody p{font-size:.92rem;max-width:70ch;margin:.55rem 0}
+ul.checks{list-style:none;padding:0;margin:.3rem 0 0;display:flex;flex-direction:column;gap:.35rem;font-size:.88rem;max-width:70ch}
+ul.checks>li{padding-left:1.35rem;position:relative}
+ul.checks>li::before{content:"\\2713";position:absolute;left:0;color:var(--good)}
+
+.copyblock{border:1px solid var(--rule);background:var(--wash);border-radius:4px;padding:.9rem 1.05rem;margin:.9rem 0;max-width:64ch}
+.copyblock.email{border-left:3px solid var(--accent)}
+.copytag{display:block;font-family:var(--mono);font-size:.6rem;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);margin-bottom:.55rem}
+.csubject{font-weight:650;color:var(--ink);margin:0;font-size:.96rem;max-width:none}
+.cpre{color:var(--faint);margin:.2rem 0 .7rem;font-size:.86rem;max-width:none}
+.cbody{font-size:.92rem;color:var(--body);white-space:pre-wrap;line-height:1.62}
+
+.summarybox{border:1px solid var(--rule);border-left:4px solid var(--accent);padding:1.1rem 1.3rem;margin-top:1rem}
+.summarybox h3{margin:0 0 .7rem}
+ol.weeksteps{counter-reset:w;list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.6rem}
+ol.weeksteps>li{counter-increment:w;position:relative;padding-left:1.8rem;font-size:.95rem;line-height:1.6;max-width:70ch}
+ol.weeksteps>li::before{content:counter(w);position:absolute;left:0;top:.05rem;font-family:var(--mono);font-size:.72rem;color:var(--accent)}
+.prereq{border:1px solid var(--rule);padding:.9rem 1.05rem;margin-top:.6rem;max-width:74ch}
+.pname{font-weight:650;color:var(--ink);margin:0 0 .35rem;font-size:.95rem}
+.prereq p{font-size:.9rem;margin:.35rem 0 0}
+.onechanges{display:flex;flex-direction:column;gap:1px;background:var(--rule);border:1px solid var(--rule);margin-top:.9rem}
+.onechange{background:var(--paper);padding:.9rem 1.05rem}
+.ocname{font-family:var(--mono);font-size:.8rem;color:var(--ink);margin:0 0 .3rem;font-weight:600;max-width:none}
+.octext{font-size:.9rem;margin:0;max-width:74ch}
+
+figure{margin:1.2rem 0 0;padding:1.2rem;border:1px solid var(--rule);background:var(--wash);overflow-x:auto}
+figure .mermaid{display:flex;justify-content:center;background:none;margin:0}
+pre.mermaid{font-family:var(--mono);font-size:.75rem;color:var(--faint);white-space:pre;margin:0}
+pre.mermaid.raw{white-space:pre-wrap}
+figcaption{font-size:.84rem;color:var(--faint);margin-top:1rem;text-align:center}
+
+footer{margin-top:4rem;padding-top:1.4rem;border-top:2px solid var(--ink);font-size:.86rem;color:var(--soft)}
+footer p{max-width:70ch}
+.prov{font-family:var(--mono);font-size:.7rem;color:var(--faint);margin-top:1.2rem}
+
+@media print{
+  html,body{background:#fff}
+  body{max-width:none;font-size:11pt}
+  section{break-inside:avoid}
+  details.finding{break-inside:avoid}
+  details:not([open])>*:not(summary){display:revert}
+  .contents{break-after:page}
+}
 </style>`;
