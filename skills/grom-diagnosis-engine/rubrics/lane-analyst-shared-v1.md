@@ -86,6 +86,19 @@ with a letter. Three or four words, like the example below. It is a handle, not 
 is where the sentence goes. A real finding has already been thrown away here for being 65 characters
 long, so count them.
 
+**EVERY FIELD BELOW IS REQUIRED ON EVERY FINDING. Two in particular have each already destroyed real
+work, so check them before you answer:**
+
+- **`confidence` must be present and must be exactly one of `C0`, `C1`, `C2`, `C3`.** Not "high", not
+  "medium", not a sentence, and NOT ABSENT. An analyst once omitted this key and all seven of its
+  findings were refused in one go, including the most commercially significant finding of that run.
+  The level is your judgement and nobody else can supply it afterwards, because a confidence invented
+  by someone who did not read the evidence is worth nothing. Where your own reasoning hedged, say so
+  with a lower level rather than rounding everything up to C3.
+- **`discriminatingTest` must carry ALL THREE of `check`, `supportsIf` and `refutesIf`.** A test with
+  two of them is refused. `refutesIf` must name a real observation that would KILL the finding, not a
+  restatement of the claim.
+
 ```json
 [
   {
@@ -145,9 +158,20 @@ honest about them: a cheap low-risk fix that can be verified next week is worth 
 expensive one of the same impact, and inflating a cost you did not think about buries your own
 finding.
 
-After the JSON array, add two short prose sections:
+## Two prose sections, and WHERE they go
+
+You also owe two short prose sections:
 
 **WHAT IS ALREADY STRONG** — quoted, so it does not get changed by accident.
 
 **WHAT I COULD NOT JUDGE, AND WHY** — what you would normally examine that this evidence cannot
 answer, and what would need collecting.
+
+🔴 **They do NOT go in the answer file.** The answer file is parsed with a strict `JSON.parse` and
+must contain the array and NOTHING ELSE: no prose before or after it, no code fence, no commentary.
+This instruction used to read "after the JSON array" and it made every answer unreadable, because a
+trailing section is not valid JSON. All three lanes of a real run were lost to it in one go.
+
+Write the prose to a SEPARATE file alongside your answer, named for your lane with a `-notes.md`
+suffix: if your answer is `lead_journey_kpi.json`, the prose is `lead_journey_kpi-notes.md`. The
+sections are read by a person and never by the validator, so they cannot break a run from there.

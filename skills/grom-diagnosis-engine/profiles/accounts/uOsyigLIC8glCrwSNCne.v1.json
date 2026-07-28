@@ -1,0 +1,14 @@
+{
+  "profileId": "client",
+  "situation": {
+    "accountName": "SK Skin and Body Health",
+    "knownDataCaveats": [
+      "NOBODY IN THIS ACCOUNT MARKS AN APPOINTMENT AS SHOWED OR NO-SHOW. The workflow that would capture a consultation outcome was specified and deliberately deferred, and no automation can write an appointment outcome. Attendance is therefore STRUCTURALLY UNMEASURABLE, and a low or zero show rate is a recording gap, NOT evidence that patients are failing to attend. The honest finding is that attendance cannot be measured and why; any claim about the show rate itself is unsupported.",
+      "There are TWO calendars and they are deliberately different machines. The in-clinic calendar auto-confirms. The MOBILE calendar is manual-confirm ON PURPOSE: the client requests a time, then the owner confirms whether the suburb is reachable, so a mobile booking legitimately sits unconfirmed for a while. A mobile appointment that is still `new` or `confirmed` after its own start time reflects that two-phase design plus the missing outcome marking above, and must NOT be read as a stale-record defect on its own.",
+      "Opportunity `monetaryValue` IS being populated on this account, at the treatment price (A$99 and A$150 were observed live), so revenue here is genuinely readable rather than blank. Judge the coverage from the evidence rather than assuming either full or absent population.",
+      "NO DEPOSIT IS TAKEN on either calendar. Both booking flows state that no upfront deposit is required. A held deposit is the standard lever on no-shows for this kind of clinic, so its absence is a real structural fact about the account and not an oversight to be reported as if it were already configured.",
+      "The Voice AI agent is BUILT BUT DELIBERATELY SWITCHED OFF. It has no inbound number assigned, so telephone calls still ring the owner directly. A finding that the voice agent handles no calls describes a pending go-live decision, not a broken configuration.",
+      "This account carries TEST DATA that has NOT been filtered out of the evidence. There is at least one internal test contact and a recurring SMS test loop used to drive the AI agents during the build. Nothing is redacted or excluded, deliberately, because a hole in the evidence is indistinguishable from a hole in the account. Discount obviously internal test traffic when reasoning, and say so when a number depends on it."
+    ]
+  }
+}

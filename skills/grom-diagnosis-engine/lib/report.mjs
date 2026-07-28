@@ -401,7 +401,7 @@ function gromJourneyCatalog(run) {
   let profile;
   let contracts;
   try {
-    profile = loadProfile(run.target.operatingProfile);
+    profile = loadProfile(run.target.operatingProfile, run.target.locationId ?? null);
     contracts = loadMetricContracts(run.target.operatingProfile);
   } catch {
     throw codedError('REPORT_CLAIM_UNRESOLVED_GROM_PROFILE');

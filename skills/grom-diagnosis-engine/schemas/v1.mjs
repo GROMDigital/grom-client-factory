@@ -866,11 +866,61 @@ function normalizeProfileId(profileId) {
   return profileId;
 }
 
-export function loadProfile(profileId) {
+/**
+ * THE ACCOUNT'S OWN FACTS, LAYERED ONTO THE SHARED PROFILE.
+ *
+ * `client` is a TEMPLATE shared by every clinic: what an aesthetic clinic is, what its funnel means,
+ * and the benchmark targets. Exactly two things are not shared, because they belong to one account
+ * and are wrong for every other one: what to call it, and the caveats that stop an expert reading a
+ * recording gap as a business failure.
+ *
+ * Those lived in the shared profile for exactly one run, which worked only because SK Skin was the
+ * only approved client. The moment a second clinic is audited it inherits the first one's caveats,
+ * and a caveat that is false for the account being read is worse than no caveat at all: it is a
+ * confident instruction to misread the evidence.
+ *
+ * So an account may declare `profiles/accounts/<locationId>.v1.json`. It is keyed by LOCATION ID
+ * rather than a name, because the location id is the one identifier every caller already has and
+ * nobody has to remember a slug. Absent, nothing changes and the shared profile is returned as is.
+ *
+ * 🔴 THIS IS NOT PER-ACCOUNT CONFIGURATION OF THE ANALYSIS, and the distinction is the owner's
+ * standing rule. Nothing here may say what a workflow is FOR, which stage-1 derives and is never
+ * told. `situation` facts are a different thing entirely: the spec deliberately made them profile
+ * data, because a number cannot be judged without them.
+ *
+ * Caveats APPEND rather than replace. The shared ones are true of every clinic we run, so an account
+ * adds to them and cannot silently drop them.
+ */
+function readAccountFacts(locationId) {
+  if (typeof locationId !== 'string' || locationId.length === 0) return null;
+  if (!/^[A-Za-z0-9][-A-Za-z0-9_.]{0,127}$/u.test(locationId)) return null;
+  return readProfileFileIfPresent(`accounts/${locationId}.v1.json`);
+}
+
+export function loadProfile(profileId, locationId = null) {
   const normalized = normalizeProfileId(profileId);
   const filename = PROFILE_FILES[normalized];
   if (!filename) throw new Error(`UNKNOWN_PROFILE:${profileId}`);
-  return CoverageProfileSchema.parse(readProfileFile(filename));
+  const raw = readProfileFile(filename);
+  const facts = readAccountFacts(locationId);
+  if (facts === null) return CoverageProfileSchema.parse(raw);
+  if (facts.profileId !== undefined && facts.profileId !== normalized) {
+    throw new Error(`ACCOUNT_FACTS_PROFILE_MISMATCH:${locationId}`);
+  }
+  const merged = {
+    ...raw,
+    situation: {
+      ...raw.situation,
+      ...(facts.situation?.accountName === undefined
+        ? {}
+        : { accountName: facts.situation.accountName }),
+      knownDataCaveats: [
+        ...(raw.situation?.knownDataCaveats ?? []),
+        ...(facts.situation?.knownDataCaveats ?? []),
+      ],
+    },
+  };
+  return CoverageProfileSchema.parse(merged);
 }
 
 /**

@@ -87,10 +87,29 @@ function intoParagraphs(text) {
  * renders as the message with no chrome invented around it.
  */
 function renderCopyBlock(quote) {
-  const subject = quote.match(/^\s*Subject\s*[:\-]?\s*['"]?(.+?)['"]?\s*(?:Preheader|Pre-header|Body)\b/iu);
-  const preheader = quote.match(/Pre-?header\s*[:\-]?\s*['"]?(.+?)['"]?\s*Body\b/iu);
-  const body = quote.match(/Body\s*[:\-]?\s*['"]?([\s\S]+)$/iu);
-  if (subject || body) {
+  /*
+   * THE LABELS MUST BE LABELS, NOT THE WORDS.
+   *
+   * These once matched `Subject`/`Body` ANYWHERE in the quote. This account is called "SK Skin and
+   * Body Health", so the word Body inside the client's own name hijacked the parser: five pieces of
+   * finished SMS copy rendered as "replacement email" bodies beginning mid-sentence at "Health...".
+   * Measured on this run, not reasoned about: 5 of 35 quotes were hijacked and NONE carried a real
+   * label. A label is written at the start of a line and followed by a colon or dash, so that is
+   * what is required now. Copy that is not labelled is a message, and renders as one.
+   */
+  const subject = quote.match(/^[ \t]*Subject[ \t]*[:\-][ \t]*['"]?(.+?)['"]?[ \t]*$/imu);
+  const preheader = quote.match(/^[ \t]*Pre-?header[ \t]*[:\-][ \t]*['"]?(.+?)['"]?[ \t]*$/imu);
+  const labelledBody = quote.match(/^[ \t]*Body[ \t]*[:\-][ \t]*([\s\S]+)$/imu);
+  /*
+   * A writer who labels the subject and then just writes the message underneath is not doing
+   * anything wrong, so when there is a subject but no Body label, everything after the last labelled
+   * line IS the body. Without this the subject renders alone and the message silently vanishes.
+   */
+  const trailing = subject
+    ? quote.slice((preheader ?? subject).index + (preheader ?? subject)[0].length).trim()
+    : '';
+  const body = labelledBody ?? (trailing.length > 0 ? [null, trailing] : null);
+  if (subject || labelledBody) {
     return `
     <div class="copyblock email">
       <span class="copytag">replacement email</span>
@@ -120,7 +139,22 @@ function renderCopyBlock(quote) {
 function renderFix(fix) {
   const text = String(fix ?? '').trim();
   if (text.length === 0) return '';
-  const quotes = [...text.matchAll(/'([^']{60,})'/gu)].map((match) => match[1]);
+  /*
+   * AN APOSTROPHE IS NOT A CLOSING QUOTE.
+   *
+   * This once read /'([^']{60,})'/, which pairs every apostrophe in the prose as a delimiter. One
+   * "it's" puts the whole document out of phase, and the visible damage was severe: finished copy
+   * cut off at "you are speaking with Sky, the clinic" (losing "'s AI assistant"), copy beginning
+   * mid-word at "s Sky. I am sorry", and a run of pure narrative — "only if 03 Long Term Lead
+   * Nurture is built. If it is not, cut" — lifted into a box as though a customer would receive it.
+   *
+   * So a delimiter is a quote that is not word-internal: an opening quote is not preceded by a word
+   * character, a closing quote is not followed by one, and an apostrophe with letters on both sides
+   * is kept as part of the copy where it belongs. Measured against this run's 25 fixes: 42 matches
+   * become 35, and the ones that go are the fragments.
+   */
+  const quotes = [...text.matchAll(/(?<![\w'])'((?:[^']|(?<=\w)'(?=\w)){60,}?)'(?!\w)/gu)]
+    .map((match) => match[1]);
   if (quotes.length === 0) {
     return intoParagraphs(text).map((p) => `<p>${escapeHtml(p)}</p>`).join('');
   }

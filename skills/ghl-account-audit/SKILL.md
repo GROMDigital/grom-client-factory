@@ -1,13 +1,32 @@
 ---
 name: ghl-account-audit
-description: Read-only live-state capture and audit of one GoHighLevel sub-account for the Grom client factory. Use for pre-build capture of a new or brownfield client sub-account, post-build verification of a built account against its design docs, or harvesting live IDs into client-manifest.json. Combines the vendored workflow-JSON capture engine (browser JWT, throttled, GET-only) with a full MCP sweep (pipelines, fields, values, tags, calendars, users, phone numbers, AI agents). Never mutates the account. Sanitizes every capture before it can be committed.
----
+description: Read-only live-state capture and audit of one GoHighLevel sub-account for the Grom client factory. Use for pre-build capture of a new or brownfield client sub-account, post-build verification of a built account against its design docs, or harvesting live IDs into client-manifest.json. Combines the vendored workflow-JSON capture engine (browser JWT, throttled, GET-only) with a full MCP sweep (pipelines, fields, values, tags, calendars, users, phone numbers, AI agents). Never mutates the account. Sanitizes every capture before it can be committed. Does NOT judge whether the account is working commercially: for the weekly diagnostic of what is losing an account money and what to fix first, use the grom-diagnosis-engine skill, which shares this codebase.
 
 # ghl-account-audit
 
 READ-ONLY. This skill never creates, updates, or deletes anything in GHL. If a
 finding needs fixing, it goes in the report for a human or a mutating skill.
 
+## Where the code lives
+
+This skill and `grom-diagnosis-engine` are two jobs over ONE codebase, which sits in
+`../grom-diagnosis-engine/`. They were one skill until the diagnosis engine grew into its own
+product; the code was NOT split because the capture, verify and harvest modes sit on the same core as
+the engine (`schemas/v1.mjs`, `lib/canonical.mjs`, the collection adapters, the trusted public read
+policy), and duplicating that core or importing across skills would be worse than sharing it.
+
+So the paths you need are:
+
+| What | Where |
+|---|---|
+| the three modes below | `../grom-diagnosis-engine/lib/modes/{capture,harvest,verify}.mjs` |
+| the capture runbook, throttle and shape validator | `../grom-diagnosis-engine/capture/` |
+| capture sanitiser (run before ANY capture is committed) | `../grom-diagnosis-engine/scripts/sanitize_capture.mjs` |
+| go-live checker | `../grom-diagnosis-engine/scripts/golive_check.mjs` |
+
+**If you want the weekly commercial diagnostic instead — what is losing this account money and what
+to fix first — that is `grom-diagnosis-engine`, not this skill.** This skill answers "what is
+currently in this account and does it match the design". It does not judge whether the account works.
 ## Preflight (every run)
 
 1. Doctor floor: confirm `~/.grom-factory.json` exists and the target GHL MCP
@@ -39,6 +58,7 @@ COMMIT GATE: before any git add of a capture, run
 `node <skill-dir>/scripts/sanitize_capture.mjs --check <file>` on every JSON
 file staged from captures/. Any exit 1 = stop, sanitize, re-check. Raw files
 are never staged.
+
 
 ## The sweep (modes capture + harvest)
 
@@ -99,104 +119,6 @@ From the fresh sweep, fill `client-manifest.json`:
   report
 Then run `golive_check.mjs` and include its output in the report.
 
-## Mode: weekly (explicit commercial diagnostic)
-
-Invoke the checked-in Task 9 audit CLI explicitly for the governed weekly
-path. A public-only or otherwise incomplete evidence run reports
-`complete_partial`. Proposed fixes remain local proposal artifacts for approval
-and are never executed by this skill.
-
-### The analysis cycle (five stages of expert)
-
-`PRODUCT-SPEC.md` is the authority for what this stage is for. Two rules it
-encodes are not negotiable: **the auditor decides what to analyse and is never
-told**, and **there are no hardcoded best-practice detectors**. Never dispatch
-one lane, never tell an expert which metric to look at, and never supply a
-benchmark: the expert IS the benchmark authority.
-
-**There is no per-account configuration anywhere in this cycle.** Nothing tells
-the auditor what a workflow is for. Stage 1 derives it, which is what lets this
-run against any location whether or not it was built to the Standard Build.
-
-A model call is the only non-deterministic step in the product, so each one sits
-between two deterministic commands (see `lib/cycle.mjs` for why the kernel
-cannot make them itself). Run `audit briefs` at any point to be told which stage
-a run is at and what to dispatch next; the answer is derived from what is on
-disk, not from a status somebody wrote down.
-
-1. **`audit run --mode weekly ...`** collects, measures, and writes the three
-   lane briefs and the ONE stage-1 prompt under
-   `audits/ghl/<location>/private/briefs/<runId>/`.
-   Set `internalAudit.emailCopy: true` in the provider config to also read the
-   email library, so the per-workflow experts judge the real body of a send step
-   that points at a library template instead of only its subject line. It is
-   opt-in because it opens a second session and fetches a storage host.
-2. **STAGE 1, one expert.** Dispatch a single subagent whose whole instruction is
-   `prompt-account-map.md`. It reads the whole account and derives THE MAP: what
-   journey this account runs, what each workflow's job actually appears to be,
-   which sit on the money path, which are delivery, which look abandoned. Save
-   its JSON answer to a file.
-3. **`audit map --project <p> --location <l> --run-id <r> --map <file>`**
-   validates the map (every workflow covered exactly once, no invented workflow
-   or KPI edge) and writes one prompt per object under `reviews/`. EVERY workflow
-   and EVERY AI agent, with no gate: an auditor that skips a workflow is not
-   auditing the account, and the workflows a gate would skip are the cheapest
-   ones in the run. The COUNT comes from the account.
-4. **STAGE 2, one expert per object, dispatched in parallel.** Each subagent's
-   whole instruction is its `reviews/prompt-*.md`. Add nothing to it. Each sees
-   its object WHOLE: configuration, runtime, every message in full, where it sits
-   in the account, the KPI edges it should move, and the stage-1 map. Write each
-   answer's markdown to the `answerFile` the command named for it.
-5. **`audit reviews --project <p> --location <l> --run-id <r>`** collects them,
-   records any that never arrived, and writes the three stage-3 lane prompts.
-6. **STAGE 3, three account-wide experts, in parallel.** One per
-   `prompt-<lane>.md`: the lead journey and its KPIs, the account as one system,
-   and every message as ONE STREAM. Each reads the map and all the per-object
-   reviews and is told not to repeat them. Write each answer's JSON array to
-   `<answers>/<lane>.json`.
-7. **STAGE 4, `audit investigate --project <p> --location <l> --run-id <r>
-   --findings <answers>`** validates every finding, refuses the malformed ones by
-   name, groups the rest into causes on their anchors, ranks them, and writes
-   `INVESTIGATION.md`, `BACKLOG.md`, `investigation.json` and one solution
-   package per cause under `audits/ghl/<location>/investigations/<runId>/`.
-
-8. **STAGE 5, one expert.** `audit investigate` also wrote
-   `prompt-work-order.md` into the investigation folder. Dispatch a single
-   subagent with it. It reads every ranked problem and its fix and returns the
-   running order: which problems are one job, what has to land first, and which
-   fixes pull against each other. It may not re-diagnose anything and the contract
-   gives it nowhere to put a new finding.
-9. **`audit plan --project <p> --location <l> --run-id <r> --plan <file>`**
-   validates it (every problem placed exactly once, no invented ids) and writes
-   `PLAN.md`.
-
-The briefs and reviews live under `private/` and quote real message copy, so they
-are evidence and never publication material. Solution packages are for human
-implementation and approval; nothing in this cycle applies a change.
-
-### Week over week
-
-`audit investigate` records every cause in the account's own ledger and compares
-this run against every run before it, so the backlog carries an **Age** column and
-each problem in the report says whether it is new or has survived since a named
-date. Nothing extra to run: it happens inside step 7.
-
-Identity is derived from the problem, not from what an expert called it: the
-mechanism families plus the discriminating anchors. Experts invent fresh ids every
-week and `causeId` moves with them, so neither can be the join key.
-
-Two rules it will not break:
-
-- **ABSENT IS NOT FIXED.** A cause that stops appearing is listed under "recorded
-  before, absent this week", with the reasons it might have vanished. Nothing in
-  this product verifies a fix yet, so nothing claims one.
-- **A NEAR MISS IS SHOWN, NEVER MATCHED.** Rename a workflow and the fingerprint
-  changes. Rather than loosen identity and risk calling two different problems the
-  same, the report states the overlap and lets the reader judge.
-
-A ledger that cannot be read or written never costs the account its report: the
-comparison is reported as unavailable, which is a different statement from
-"nothing has changed".
 
 ## Boundaries (inherited + plugin)
 

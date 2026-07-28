@@ -189,7 +189,7 @@ export function prepareAnalysisArtifacts({
   internal = null,
 } = {}) {
   if (!isPlainObject(measurement)) throw codedError('CYCLE_MEASUREMENT_INVALID', TypeError);
-  const profile = loadProfile(measurement.profileId);
+  const profile = loadProfile(measurement.profileId, measurement.locationId);
   const briefs = buildAnalysisBriefs({ measurement, internal, profile });
   const directory = briefsDirectory(paths, runId);
 
@@ -1063,8 +1063,8 @@ export function runWorkOrder({ paths, runId, plan: answer } = {}) {
       reviews: availableReviews(briefs.directory),
       // Which journey step each of the six questions is about. Profile data, so the report can answer
       // them one by one without any code deciding what a question means.
-      questionEdges: loadProfile(index.profileId).questionEdges ?? [],
-      accountName: loadProfile(index.profileId).situation?.accountName ?? null,
+      questionEdges: loadProfile(index.profileId, index.locationId).questionEdges ?? [],
+      accountName: loadProfile(index.profileId, index.locationId).situation?.accountName ?? null,
     });
     writeOnce(join(directory, 'REPORT.html'), html);
     reportPage = 'REPORT.html';

@@ -164,3 +164,54 @@ test('public action matching binds every tuple field and the catalog snapshot ha
     assert.throws(() => assertAllowedPublicAction(allowlist, { ...action, [field]: replacement }), /PUBLIC_ACTION_NOT_ALLOWED/);
   }
 });
+
+/*
+ * ONE CLINIC'S FACTS MUST NEVER REACH ANOTHER CLINIC'S AUDIT.
+ *
+ * `client` is a template shared by every clinic. For one run SK Skin's name and its six caveats sat
+ * inside that shared file, which worked only because it was the only approved client account. A
+ * caveat is an instruction about how to read evidence -- "nobody marks attendance here, so a zero
+ * show rate is a recording gap" -- and inherited by an account where it is false it is worse than no
+ * caveat at all, because it tells an expert to explain away a real defect.
+ *
+ * These assertions are written against the SHIPPED profiles rather than a fixture on purpose. A
+ * fixture would agree with whatever the loader does; the thing worth pinning is that the file a real
+ * run reads has not had one account's facts pasted into it.
+ */
+test('an account overlay names one account and never leaks into another', () => {
+  const shared = loadProfile('client');
+  assert.equal(shared.situation.accountName, undefined, 'the shared clinic template must not name an account');
+
+  const skskin = loadProfile('client', 'uOsyigLIC8glCrwSNCne');
+  assert.equal(skskin.situation.accountName, 'SK Skin and Body Health');
+
+  // An account with no overlay file gets the template untouched, which is the regression that matters.
+  const unknown = loadProfile('client', 'SJRURxzgbPTVBNLhqEZi');
+  assert.deepEqual(unknown.situation, shared.situation);
+  assert.equal(unknown.situation.accountName, undefined);
+});
+
+test('account caveats ADD to the shared ones and cannot silently drop them', () => {
+  const shared = loadProfile('client');
+  const skskin = loadProfile('client', 'uOsyigLIC8glCrwSNCne');
+  for (const caveat of shared.situation.knownDataCaveats) {
+    assert.ok(skskin.situation.knownDataCaveats.includes(caveat), 'a shared caveat went missing under an overlay');
+  }
+  assert.ok(
+    skskin.situation.knownDataCaveats.length > shared.situation.knownDataCaveats.length,
+    'the overlay contributed nothing',
+  );
+  // The benchmark targets are the template's job and an overlay has no business restating them.
+  assert.deepEqual(skskin.situation.targets, shared.situation.targets);
+});
+
+test('an overlay cannot be reached by a traversing location id, and cannot claim another profile', () => {
+  const shared = loadProfile('client');
+  for (const hostile of ['../../etc/passwd', '../grom-internal', '..', '', 'a/b']) {
+    assert.deepEqual(
+      loadProfile('client', hostile).situation,
+      shared.situation,
+      `a location id of ${JSON.stringify(hostile)} must not select a file`,
+    );
+  }
+});
