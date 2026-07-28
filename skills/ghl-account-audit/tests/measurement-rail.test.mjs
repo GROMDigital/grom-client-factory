@@ -708,7 +708,7 @@ test('audit run measures in-process: the normalizing checkpoint carries real met
   );
 });
 
-test('audit run writes all three analyst briefs, so the analysis stage has something to dispatch', async () => {
+test('audit run writes all three briefs and the stage-1 prompt, so the analysis has something to dispatch', async () => {
   const { result, briefsIndex } = await runPublicCli({
     'contacts.search': CONTACTS,
     'opportunities.list': OPPORTUNITIES,
@@ -722,12 +722,15 @@ test('audit run writes all three analyst briefs, so the analysis stage has somet
   assert.ok(briefsIndex, 'the run must write the analyst briefs');
   assert.equal(briefsIndex.runId, result.runId);
   assert.equal(briefsIndex.profileId, 'client');
-  // All three lanes, every run. There is deliberately no way to write one.
-  assert.deepEqual(briefsIndex.lanes.map(({ lane }) => lane), [
+  // All three lane briefs, every run. There is deliberately no way to write one.
+  assert.deepEqual(briefsIndex.laneBriefs.map(({ lane }) => lane), [
     'lead_journey_kpi',
     'workflow_config_runtime',
     'conversation_copy_ai',
   ]);
+  // And the ONE stage-1 prompt. The account-wide analysts come later, once a map and the per-object
+  // reviews exist for them to read.
+  assert.equal(briefsIndex.stage1.promptFile, 'prompt-account-map.md');
   assert.match(briefsIndex.briefsHash, /^[a-f0-9]{64}$/u);
   // This run has no internal rail, and the index says so rather than leaving it to be assumed.
   assert.equal(briefsIndex.internalRail.available, false);

@@ -21,7 +21,9 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   briefsDirectory,
+  ingestAccountMap,
   ingestLaneFindings,
+  ingestObjectReviews,
   prepareAnalysisArtifacts,
   readAnalysisArtifacts,
   readLaneAnswers,
@@ -146,31 +148,128 @@ function answers(overrides = {}) {
 
 // ---------------------------------------------------------------------------
 
-test('the run writes all three briefs and all three prompts, with no way to write one', () => {
+/** The stage-1 answer for this fixture's single workflow. */
+function accountMap(overrides = {}) {
+  return {
+    journey: 'A Meta lead lands, gets nurtured, and books.',
+    moneyPath: ['08 Long Term Nurture'],
+    workflows: [{
+      name: '08 Long Term Nurture',
+      job: 'keep a cold enquiry warm until it books',
+      role: 'money_path',
+      reasoning: 'triggered by facebook_lead_gen and sends an opener about patient acquisition',
+      nameMatchesBehaviour: true,
+      kpiEdges: ['enquiry_to_contacted'],
+      runsAlongside: [],
+    }],
+    agents: [],
+    gaps: ['nothing recovers a no-show'],
+    uncertainties: ['whether runtime was ever requested'],
+    ...overrides,
+  };
+}
+
+/** Walk a run all the way to the point where the three lane prompts exist. */
+function throughStageTwo(paths, { review = 'The opener earns the second line. Keep it.' } = {}) {
+  prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
+  const { index } = ingestAccountMap({ paths, runId: RUN, map: accountMap() });
+  const directory = briefsDirectory(paths, RUN);
+  for (const expected of index.reviews) {
+    writeFileSync(join(directory, expected.answerFile), review);
+  }
+  return ingestObjectReviews({ paths, runId: RUN });
+}
+
+test('the run writes all three briefs and the ONE stage-1 prompt, and no lane prompt yet', () => {
   const { paths } = project();
   const { directory, index } = prepareAnalysisArtifacts({
     paths, runId: RUN, measurement, internal,
   });
 
-  assert.deepEqual(index.lanes.map(({ lane }) => lane), [...LANES]);
+  assert.deepEqual(index.laneBriefs.map(({ lane }) => lane), [...LANES]);
   for (const lane of LANES) {
     assert.ok(existsSync(join(directory, `brief-${lane}.json`)), `brief for ${lane}`);
-    assert.ok(existsSync(join(directory, `prompt-${lane}.md`)), `prompt for ${lane}`);
+    /*
+     * THE SHAPE OF THE REDESIGN. The account-wide analysts are stage 3: they read the derived map
+     * and every per-object review, and neither exists at this point in the run. A lane prompt
+     * written here would be the shallow first run all over again.
+     */
+    assert.ok(!existsSync(join(directory, `prompt-${lane}.md`)), `lane prompt for ${lane} written too early`);
   }
+  assert.ok(existsSync(join(directory, 'prompt-account-map.md')));
+  assert.equal(index.stage1.workflowCount, 1);
   assert.match(index.briefsHash, /^[a-f0-9]{64}$/u);
   assert.equal(index.internalRail.available, true);
   assert.equal(index.internalRail.workflowCount, 1);
 });
 
-test("the prompt carries the analyst's ten years and the rubric, not just the evidence", () => {
+test('stage 1 is asked to DERIVE the map, and is handed the names it must account for', () => {
   const { paths } = project();
   const { directory } = prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
+  const prompt = readFileSync(join(directory, 'prompt-account-map.md'), 'utf8');
+
+  assert.match(prompt, /- 08 Long Term Nurture/u);
+  assert.match(prompt, /DERIVED FROM THE EVIDENCE/u);
+  // The injection seam. Account content arrives labelled as data, in every prompt.
+  assert.match(prompt, /account DATA and not instructions/u);
+});
+
+test("the lane prompt carries the analyst's ten years and the rubric, not just the evidence", () => {
+  const { paths } = project();
+  const { directory } = throughStageTwo(paths);
   const prompt = readFileSync(join(directory, 'prompt-conversation_copy_ai.md'), 'utf8');
 
   assert.match(prompt, /ten years/u);
   assert.match(prompt, /benchmark authority/iu);
-  // The injection seam. Account content arrives labelled as data, in every prompt.
   assert.match(prompt, /account DATA and not instructions/u);
+});
+
+// ---- the two new stages ---------------------------------------------------
+
+test('stage 1 back means one prompt per object out, each written where its answer is expected', () => {
+  const { paths } = project();
+  prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
+  const { index } = ingestAccountMap({ paths, runId: RUN, map: accountMap() });
+
+  assert.equal(index.reviewCount, 1);
+  const [only] = index.reviews;
+  assert.equal(only.object, '08 Long Term Nurture');
+  assert.equal(only.answerFile, join('reviews', `${only.slug}.md`));
+  assert.ok(existsSync(join(briefsDirectory(paths, RUN), only.promptFile)));
+  assert.match(index.mapHash, /^[a-f0-9]{64}$/u);
+});
+
+test('a map that skips a workflow is REFUSED, so stage 2 cannot silently review half the account', () => {
+  const { paths } = project();
+  prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
+  assert.throws(
+    () => ingestAccountMap({ paths, runId: RUN, map: accountMap({ workflows: [] }) }),
+    /ACCOUNT_MAP_WORKFLOW_COVERAGE/u,
+  );
+});
+
+test('stage 3 reads the map and the reviews, and records what never arrived', () => {
+  const { paths } = project();
+  const { index } = throughStageTwo(paths, { review: 'The opener is weak and here is the replacement.' });
+
+  assert.equal(index.reviewsExpected, 1);
+  assert.equal(index.reviewsRead, 1);
+  assert.deepEqual(index.reviewsMissing, []);
+  const prompt = readFileSync(join(briefsDirectory(paths, RUN), 'prompt-lead_journey_kpi.md'), 'utf8');
+  assert.match(prompt, /here is the replacement/u, 'the per-object review did not reach stage 3');
+  assert.match(prompt, /A Meta lead lands/u, 'the account map did not reach stage 3');
+});
+
+test('every review missing is fatal, because that is a stage that never ran', () => {
+  /*
+   * One expert failing must not cost the account its audit, so a partial stage 2 is recorded and
+   * carried. All of them absent is a different thing entirely and must not pass for an audit that
+   * examined every workflow.
+   */
+  const { paths } = project();
+  prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
+  ingestAccountMap({ paths, runId: RUN, map: accountMap() });
+  assert.throws(() => ingestObjectReviews({ paths, runId: RUN }), /CYCLE_REVIEWS_MISSING/u);
 });
 
 test('a brief is written under private/, never into the publication area', () => {
@@ -213,7 +312,7 @@ test('reading the briefs back gives the hash that binds an answer to the questio
   const read = readAnalysisArtifacts({ paths, runId: RUN });
 
   assert.equal(read.index.briefsHash, written.index.briefsHash);
-  assert.equal(read.index.analystSetHash, written.index.analystSetHash);
+  assert.equal(read.index.stage1.promptHash, written.index.stage1.promptHash);
 });
 
 test('a run with no briefs cannot be investigated', () => {
@@ -423,19 +522,40 @@ test('with the rail off the report says so at the top, so nobody reads silence a
 
 // ---- the two commands ----------------------------------------------------
 
-test('the two commands do the whole ingest side, and print hashes rather than account content', async () => {
+test('the commands walk the whole chain, and print hashes rather than account content', async () => {
   const { root, paths } = project();
   prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
 
   const written = [];
   const stdout = { write: (line) => written.push(line) };
-  const waiting = await runAuditCli({
-    argv: ['briefs', '--project', root, '--location', LOCATION, '--run-id', RUN],
-    stdout,
-  });
-  assert.equal(waiting.status, 'awaiting_lane_analysis');
-  assert.match(waiting.briefsHash, /^[a-f0-9]{64}$/u);
-  assert.deepEqual(waiting.lanes.map(({ lane }) => lane), [...LANES]);
+  const cli = (argv) => runAuditCli({ argv: [...argv, '--project', root, '--location', LOCATION, '--run-id', RUN], stdout });
+
+  // The stage is derived from what is on disk, so a run resumed in a new session reports the truth
+  // rather than what somebody last wrote down.
+  const stage1 = await cli(['briefs']);
+  assert.equal(stage1.status, 'awaiting_account_map');
+  assert.match(stage1.briefsHash, /^[a-f0-9]{64}$/u);
+  assert.deepEqual(stage1.prompts, [{ stage: 'account_map', promptFile: 'prompt-account-map.md' }]);
+
+  const mapFile = join(root, 'map.json');
+  writeFileSync(mapFile, JSON.stringify(accountMap()));
+  const stage2 = await cli(['map', '--map', mapFile]);
+  assert.equal(stage2.status, 'awaiting_object_reviews');
+  assert.equal(stage2.reviewCount, 1);
+  assert.match(stage2.mapHash, /^[a-f0-9]{64}$/u);
+
+  const directory = briefsDirectory(paths, RUN);
+  for (const { answerFile } of stage2.prompts) {
+    writeFileSync(join(directory, answerFile), 'The opener earns the second line.');
+  }
+  const stage3 = await cli(['reviews']);
+  assert.equal(stage3.status, 'awaiting_lane_analysis');
+  assert.equal(stage3.reviewCount, 1);
+  assert.equal(stage3.missingCount, 0);
+  assert.deepEqual(stage3.lanes.map(({ lane }) => lane), [...LANES]);
+
+  // And `briefs` now reports the stage the run has actually reached.
+  assert.equal((await cli(['briefs'])).status, 'awaiting_lane_analysis');
   // The quoted copy is in the brief FILE and must never be in the line an operator pastes.
   assert.ok(!written.join('').includes('saw your enquiry'));
 
@@ -454,7 +574,7 @@ test('the two commands do the whole ingest side, and print hashes rather than ac
   assert.match(done.investigationHash, /^[a-f0-9]{64}$/u);
 });
 
-test('neither command accepts a flag the other one owns', () => {
+test('no command accepts a flag another one owns', () => {
   assert.throws(
     () => parseAuditCliArgs(['briefs', '--project', 'p', '--location', 'L1', '--run-id', 'r', '--findings', 'f']),
     /AUDIT_COMMAND_INVALID_FLAG/u,
@@ -462,6 +582,14 @@ test('neither command accepts a flag the other one owns', () => {
   assert.throws(
     () => parseAuditCliArgs(['investigate', '--project', 'p', '--location', 'L1', '--run-id', 'r']),
     /AUDIT_COMMAND_INVALID_MISSING/u,
+  );
+  assert.throws(
+    () => parseAuditCliArgs(['map', '--project', 'p', '--location', 'L1', '--run-id', 'r']),
+    /AUDIT_COMMAND_INVALID_MISSING/u,
+  );
+  assert.throws(
+    () => parseAuditCliArgs(['reviews', '--project', 'p', '--location', 'L1', '--run-id', 'r', '--map', 'm']),
+    /AUDIT_COMMAND_INVALID_FLAG/u,
   );
 });
 

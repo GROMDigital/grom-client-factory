@@ -20,10 +20,19 @@ const COMMAND_FLAGS = Object.freeze({
   'review-request': new Set(['project', 'location', 'run-id']),
   'ingest-review': new Set(['project', 'location', 'run-id', 'response']),
   resume: new Set(['project', 'location', 'run-id', 'vault-key-ref']),
-  // The two halves of the analysis cycle. `briefs` reports what a completed run wrote for the three
-  // expert analysts; `investigate` takes their answers back. See `lib/cycle.mjs` for why the model
-  // call sits between two commands instead of inside the run.
+  /*
+   * The analysis cycle, one command per seam. Four stages of expert, and a deterministic command on
+   * both sides of every one of them. See `lib/cycle.mjs` for why the model call can never sit inside
+   * the run itself.
+   *
+   *   briefs       what this run is waiting for, whichever stage it is at
+   *   map          stage 1's account map back, stage 2's per-object prompts out
+   *   reviews      stage 2's reviews back, stage 3's three lane prompts out
+   *   investigate  stage 3's findings back, the investigation out
+   */
   briefs: new Set(['project', 'location', 'run-id']),
+  map: new Set(['project', 'location', 'run-id', 'map']),
+  reviews: new Set(['project', 'location', 'run-id']),
   investigate: new Set(['project', 'location', 'run-id', 'findings']),
 });
 const REQUIRED_FLAGS = Object.freeze({
@@ -33,6 +42,8 @@ const REQUIRED_FLAGS = Object.freeze({
   'ingest-review': ['project', 'location', 'run-id', 'response'],
   resume: ['project', 'location', 'run-id'],
   briefs: ['project', 'location', 'run-id'],
+  map: ['project', 'location', 'run-id', 'map'],
+  reviews: ['project', 'location', 'run-id'],
   investigate: ['project', 'location', 'run-id', 'findings'],
 });
 const LOCATION = /^[A-Za-z0-9][-A-Za-z0-9_.:]{0,127}$/u;
@@ -101,10 +112,13 @@ function safeStatus(value) {
   const safe = {};
   for (const key of [
     'status', 'runId', 'oldRunId', 'newRunId', 'publicationId', 'publicationPath',
-    // The analysis cycle's own status. Hashes, counts and a directory path only: everything a
-    // caller needs to dispatch the analysts and read the result, and nothing read off the account.
-    'briefsHash', 'analystSetHash', 'investigationHash', 'directory',
+    // The analysis cycle's own status. Hashes, counts, file paths and OBJECT NAMES: everything a
+    // caller needs to dispatch the next stage's experts and read the result. Object names are here
+    // because a dispatcher cannot dispatch eighteen per-workflow experts without knowing which
+    // workflows they are. No message copy, no contact, no credential ever reaches this line.
+    'briefsHash', 'mapHash', 'analystSetHash', 'investigationHash', 'directory',
     'causeCount', 'corroboratedCauseCount', 'rejectedCount', 'lanes',
+    'reviewCount', 'missingCount', 'prompts', 'skipped',
   ]) {
     if (value?.[key] !== undefined) safe[key] = value[key];
   }
@@ -226,24 +240,99 @@ export async function runAuditCli({
     }
   } else if (command === 'briefs') {
     /*
-     * Report what the run already wrote for the three analysts. It computes nothing: the briefs are
-     * a product of the sealed evidence and were written during the run, so a command that could
-     * rebuild them here would be a second, unsealed source of the same question.
+     * WHERE THIS RUN IS, and what to dispatch next. It computes nothing: every prompt is a product of
+     * the sealed evidence and of the previous stage's answers, and a command that could rebuild one
+     * here would be a second, unsealed source of the same question.
+     *
+     * The stage is derived from what is on disk rather than from a status field, so a run resumed in
+     * a new session reports the truth instead of what somebody last wrote down.
      */
-    const [{ auditPaths }, { readAnalysisArtifacts }] = await Promise.all([
+    const [{ auditPaths }, cycle] = await Promise.all([
       import('../lib/paths.mjs'),
       import('../lib/cycle.mjs'),
     ]);
-    const { directory, index } = readAnalysisArtifacts({
+    const paths = auditPaths(resolve(flags.project), flags.location);
+    const runId = flags['run-id'];
+    const { directory, index } = cycle.readAnalysisArtifacts({ paths, runId });
+    let stage;
+    try {
+      stage = cycle.readReviewIndex({ paths, runId }).index;
+    } catch {
+      stage = null;
+    }
+    if (stage === null) {
+      result = {
+        status: 'awaiting_account_map',
+        runId: index.runId,
+        directory,
+        briefsHash: index.briefsHash,
+        prompts: [{ stage: 'account_map', promptFile: index.stage1.promptFile }],
+      };
+    } else {
+      const analysts = cycle.readAnalystIndex({ paths, runId });
+      result = analysts === null
+        ? {
+            status: 'awaiting_object_reviews',
+            runId: index.runId,
+            directory,
+            briefsHash: index.briefsHash,
+            mapHash: stage.mapHash,
+            reviewCount: stage.reviewCount,
+            prompts: stage.reviews.map(({ kind, object, promptFile, answerFile }) => ({
+              stage: `${kind}_review`, object, promptFile, answerFile,
+            })),
+          }
+        : {
+            status: 'awaiting_lane_analysis',
+            runId: index.runId,
+            directory,
+            briefsHash: index.briefsHash,
+            mapHash: analysts.mapHash,
+            analystSetHash: analysts.analystSetHash,
+            reviewCount: analysts.reviewsRead,
+            lanes: analysts.lanes.map(({ lane, discipline, promptFile, briefFile }) => ({
+              lane, discipline, promptFile, briefFile,
+            })),
+          };
+    }
+  } else if (command === 'map') {
+    const [{ auditPaths }, { ingestAccountMap, readAccountMapAnswer }] = await Promise.all([
+      import('../lib/paths.mjs'),
+      import('../lib/cycle.mjs'),
+    ]);
+    const { index } = ingestAccountMap({
+      paths: auditPaths(resolve(flags.project), flags.location),
+      runId: flags['run-id'],
+      map: readAccountMapAnswer(resolve(flags.map)),
+    });
+    result = {
+      status: 'awaiting_object_reviews',
+      runId: flags['run-id'],
+      mapHash: index.mapHash,
+      reviewCount: index.reviewCount,
+      prompts: index.reviews.map(({ kind, object, promptFile, answerFile }) => ({
+        stage: `${kind}_review`, object, promptFile, answerFile,
+      })),
+      // Named, never silently dropped. A workflow nobody reviewed is a fact about the audit.
+      skipped: index.skipped.map(({ workflow, reason }) => ({ object: workflow, reason })),
+    };
+  } else if (command === 'reviews') {
+    const [{ auditPaths }, { ingestObjectReviews }] = await Promise.all([
+      import('../lib/paths.mjs'),
+      import('../lib/cycle.mjs'),
+    ]);
+    const { index } = ingestObjectReviews({
       paths: auditPaths(resolve(flags.project), flags.location),
       runId: flags['run-id'],
     });
     result = {
       status: 'awaiting_lane_analysis',
-      runId: index.runId,
-      directory,
+      runId: flags['run-id'],
       briefsHash: index.briefsHash,
+      mapHash: index.mapHash,
       analystSetHash: index.analystSetHash,
+      reviewCount: index.reviewsRead,
+      missingCount: index.reviewsMissing.length,
       lanes: index.lanes.map(({ lane, discipline, promptFile, briefFile }) => ({
         lane, discipline, promptFile, briefFile,
       })),

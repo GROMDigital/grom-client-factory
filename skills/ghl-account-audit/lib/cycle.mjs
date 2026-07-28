@@ -3,34 +3,45 @@
  * existed, and nothing called them in sequence, so `audit run` collected 588 real records, measured
  * them, and published an empty report.
  *
- * The chain, end to end:
+ * The chain, end to end. FOUR stages of expert, and a deterministic command on both sides of every
+ * one of them:
  *
- *   collect -> measure -> buildAnalysisBriefs -> buildAllAnalystPrompts
- *           -> [three expert analysts, dispatched by the SKILL]
+ *   collect -> measure -> buildAnalysisBriefs -> buildAccountMapPrompt
+ *           -> [STAGE 1: one expert derives the account map]                    audit map
+ *           -> validateAccountMap -> buildWorkflowReviewPrompts + agents
+ *           -> [STAGE 2: one expert per workflow and per AI agent]              audit reviews
+ *           -> buildAllAnalystPrompts, now carrying the map and every review
+ *           -> [STAGE 3: three account-wide experts]                            audit investigate
  *           -> validateLaneFinding -> investigateRootCause
- *           -> investigation + solution packages + ranked backlog
+ *           -> [STAGE 4] investigation + solution packages + ranked backlog
+ *
+ * The expert COUNT comes from the account, never from a constant here: as many stage-2 experts as
+ * the account has workflows worth reviewing, which the derived map decides.
  *
  * ---------------------------------------------------------------------------------------------
- * WHY THE ANALYSTS ARE NOT CALLED FROM IN HERE, AND WHY THAT IS NOT A COMPROMISE.
+ * WHY THE EXPERTS ARE NOT CALLED FROM IN HERE, AND WHY THAT IS NOT A COMPROMISE.
  *
  * The audit kernel is deterministic. It checkpoints every phase, canonical-JSON round-trips the
  * output, and byte-compares it on resume; a phase that answers differently the second time
  * quarantines the run. A model call is not deterministic. So a kernel that called three analysts
  * mid-run would quarantine itself on the first resume, every time.
  *
- * The split that works, and the one this module implements, is a SEAM rather than a workaround:
+ * The split that works, and the one this module implements, is a SEAM rather than a workaround, and
+ * it repeats once per stage:
  *
  *   1. `prepareAnalysisArtifacts` runs inside the run. It is pure and deterministic — briefs are a
  *      function of the sealed measurement, the internal evidence and the profile — so the kernel can
  *      checkpoint around it, and the briefs land on disk with the hash that identifies them.
- *   2. The SKILL dispatches the three analysts, exactly as `/uxie-ghl-factory:audit` already
- *      dispatches its surface auditors. Their answers are JSON files.
- *   3. `runInvestigation` ingests those answers. It is deterministic too: the same lane answers
- *      always produce the same ranked causes, because `investigateRootCause` groups on anchors and
- *      orders on weights, with no clock and no randomness anywhere in it.
+ *   2. The SKILL dispatches the experts, exactly as `/uxie-ghl-factory:audit` already dispatches its
+ *      surface auditors. Their answers are files.
+ *   3. `ingestAccountMap` and `ingestObjectReviews` take each stage's answers back and build the next
+ *      stage's prompts from them. Both are deterministic and write-once byte-compared.
+ *   4. `runInvestigation` ingests the lane findings. Deterministic too: the same answers always
+ *      produce the same ranked causes, because `investigateRootCause` groups on anchors and orders on
+ *      weights, with no clock and no randomness anywhere in it.
  *
- * So the non-deterministic step is the only one outside, and both sides of it are reproducible. Hand
- * the same three answer files back and you get byte-identical causes.
+ * So every non-deterministic step sits outside, and both sides of each are reproducible. Hand the
+ * same answers back and you get byte-identical causes.
  * ---------------------------------------------------------------------------------------------
  *
  * WHAT THIS MODULE REFUSES TO DO. It does not judge a finding, soften one, or invent one. An analyst
@@ -50,9 +61,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
+import { buildAccountMapPrompt, validateAccountMap } from './account-map.mjs';
 import { buildAnalysisBriefs } from './analysis-brief.mjs';
-import { canonicalJson } from './canonical.mjs';
+import { canonicalJson, sha256 } from './canonical.mjs';
 import { ANALYSTS, buildAllAnalystPrompts } from './lane-analysts.mjs';
+import { buildAgentReviewPrompts, buildWorkflowReviewPrompts } from './object-review.mjs';
 import { LANES, investigateRootCause, validateLaneFinding } from './root-cause.mjs';
 import { loadProfile } from '../schemas/v1.mjs';
 
@@ -155,11 +168,16 @@ function readJsonFile(pathname, code) {
 }
 
 /**
- * STEP 1, inside the run. Build the three briefs and the three prompts, and put them on disk.
+ * STEP 1, inside the run. Build the three lane briefs, and the prompt for the ONE expert that reads
+ * the whole account and derives its map.
  *
  * Called from the public composition root's `normalize`, where the measurement and the internal
  * evidence are both in hand. Pure apart from the write, and the write is byte-compared, so a
  * restored `normalizing` checkpoint and a fresh one leave the same files.
+ *
+ * The three LANE prompts are NOT written here any more, and that is the whole shape of the redesign:
+ * the account-wide experts are stage 3, they read the map and every per-object review, and neither
+ * exists yet at this point in the run.
  */
 export function prepareAnalysisArtifacts({
   paths,
@@ -170,23 +188,16 @@ export function prepareAnalysisArtifacts({
   if (!isPlainObject(measurement)) throw codedError('CYCLE_MEASUREMENT_INVALID', TypeError);
   const profile = loadProfile(measurement.profileId);
   const briefs = buildAnalysisBriefs({ measurement, internal, profile });
-  const prompts = buildAllAnalystPrompts({ briefs });
   const directory = briefsDirectory(paths, runId);
 
-  const lanes = prompts.prompts.map((entry) => {
-    const briefFile = `brief-${entry.lane}.json`;
-    const promptFile = `prompt-${entry.lane}.md`;
-    writeOnce(join(directory, briefFile), briefs.lanes[ANALYSTS[entry.lane].briefKey]);
-    writeOnce(join(directory, promptFile), `${entry.prompt}\n`);
-    return {
-      lane: entry.lane,
-      discipline: entry.discipline,
-      briefFile,
-      promptFile,
-      promptHash: entry.promptHash,
-      rubricHash: entry.rubricHash,
-    };
+  const laneBriefs = LANES.map((lane) => {
+    const briefFile = `brief-${lane}.json`;
+    writeOnce(join(directory, briefFile), briefs.lanes[ANALYSTS[lane].briefKey]);
+    return { lane, briefKey: ANALYSTS[lane].briefKey, briefFile };
   });
+
+  const accountMap = buildAccountMapPrompt({ briefs });
+  writeOnce(join(directory, 'prompt-account-map.md'), `${accountMap.prompt}\n`);
 
   const index = {
     schemaVersion: CYCLE_SCHEMA,
@@ -194,7 +205,7 @@ export function prepareAnalysisArtifacts({
     profileId: measurement.profileId,
     locationId: measurement.locationId,
     collectionWindow: { ...measurement.collectionWindow },
-    // The internal rail's state is recorded here because lanes 2 and 3 are unanswerable without it,
+    // The internal rail's state is recorded here because stages 1 to 3 are unanswerable without it,
     // and an investigation read next month must be able to tell "nothing wrong" from "not looked at".
     internalRail: internal === null
       ? { available: false, complete: false, workflowCount: 0 }
@@ -204,11 +215,16 @@ export function prepareAnalysisArtifacts({
           workflowCount: Array.isArray(internal.workflows) ? internal.workflows.length : 0,
         },
     briefsHash: briefs.briefsHash,
-    analystSetHash: prompts.analystSetHash,
-    lanes,
+    stage1: {
+      promptFile: 'prompt-account-map.md',
+      promptHash: accountMap.promptHash,
+      rubricHash: accountMap.rubricHash,
+      workflowCount: accountMap.workflowCount,
+    },
+    laneBriefs,
   };
   writeOnce(join(directory, 'briefs.json'), index);
-  return { directory, index, briefs, prompts };
+  return { directory, index, briefs, accountMap };
 }
 
 /** Read back what step 1 wrote. The `briefsHash` is what binds an answer to the question asked. */
@@ -221,6 +237,178 @@ export function readAnalysisArtifacts({ paths, runId } = {}) {
     throw codedError('CYCLE_BRIEFS_UNREADABLE');
   }
   return { directory, index };
+}
+
+/**
+ * The briefs themselves, reassembled from disk into the shape the prompt builders expect.
+ *
+ * Read back rather than rebuilt. Rebuilding would mean re-reading the sealed measurement in a
+ * command that runs hours later and possibly after a resume, which is a second source for a question
+ * that already has one. `briefsHash` comes from the index and is not recomputed here, so a brief file
+ * edited by hand cannot quietly pass as the brief an expert was actually given.
+ */
+export function readBriefs({ paths, runId } = {}) {
+  const { directory, index } = readAnalysisArtifacts({ paths, runId });
+  const lanes = {};
+  for (const { briefKey, briefFile } of index.laneBriefs ?? []) {
+    lanes[briefKey] = readJsonFile(join(directory, briefFile), 'CYCLE_BRIEFS_UNREADABLE');
+  }
+  if (Object.keys(lanes).length !== LANES.length) throw codedError('CYCLE_BRIEFS_UNREADABLE');
+  return { directory, index, briefs: { briefsHash: index.briefsHash, lanes } };
+}
+
+/**
+ * STEP 2. Take stage 1's map back, and build one prompt per object from it.
+ *
+ * The map is VALIDATED against the briefs before anything is written: it must cover every workflow
+ * exactly once and may not name a workflow or a KPI edge the account does not have. See
+ * `lib/account-map.mjs` for why that check is the load-bearing one.
+ */
+export function ingestAccountMap({ paths, runId, map: answer } = {}) {
+  const { directory, index, briefs } = readBriefs({ paths, runId });
+  const { map, mapHash } = validateAccountMap(answer, { briefs });
+
+  const workflows = buildWorkflowReviewPrompts({ briefs, map });
+  const agents = buildAgentReviewPrompts({ briefs, map });
+  const reviewsDirectory = ensureWithin(paths.auditRoot, join(directory, 'reviews'));
+
+  const written = [];
+  for (const review of workflows.reviews) {
+    const promptFile = join('reviews', `prompt-workflow-${review.slug}.md`);
+    writeOnce(join(directory, promptFile), `${review.prompt}\n`);
+    written.push({
+      kind: 'workflow',
+      object: review.workflow,
+      slug: review.slug,
+      role: review.role,
+      onTheMoneyPath: review.onTheMoneyPath,
+      messageCount: review.messageCount,
+      promptFile,
+      // Where the expert's answer must land, so the ingest side never has to guess a filename.
+      answerFile: join('reviews', `${review.slug}.md`),
+      promptHash: review.promptHash,
+    });
+  }
+  for (const review of agents.reviews) {
+    const promptFile = join('reviews', `prompt-agent-${review.slug}.md`);
+    writeOnce(join(directory, promptFile), `${review.prompt}\n`);
+    written.push({
+      kind: 'agent',
+      object: `${review.surface} ${review.agent}`,
+      slug: review.slug,
+      role: 'ai_agent',
+      onTheMoneyPath: null,
+      messageCount: null,
+      promptFile,
+      answerFile: join('reviews', `${review.slug}.md`),
+      promptHash: review.promptHash,
+    });
+  }
+
+  writeOnce(join(directory, 'map.json'), { schemaVersion: CYCLE_SCHEMA, runId, mapHash, map });
+  const record = {
+    schemaVersion: CYCLE_SCHEMA,
+    runId,
+    briefsHash: index.briefsHash,
+    mapHash,
+    reviewCount: written.length,
+    // Workflows deliberately NOT reviewed, with the reason. "We chose not to look" and "this does
+    // not exist" are different facts and only one of them is true.
+    skipped: workflows.skipped,
+    rubricHashes: { workflow: workflows.rubricHash, agent: agents.rubricHash },
+    setHash: sha256(written.map(({ promptHash }) => promptHash)),
+    reviews: written,
+  };
+  writeOnce(join(directory, 'reviews.json'), record);
+  return { directory: reviewsDirectory, index: record };
+}
+
+/** Read a stage-1 answer off disk, tolerating a model that wrapped its map in `{ "map": ... }`. */
+export function readAccountMapAnswer(pathname) {
+  const target = resolve(pathname);
+  if (!existsSync(target) || lstatSync(target).isSymbolicLink()) throw codedError('CYCLE_MAP_MISSING');
+  const value = readJsonFile(target, 'CYCLE_MAP_UNREADABLE');
+  return isPlainObject(value.map) ? value.map : value;
+}
+
+/** What step 2 wrote, so step 3 knows which reviews it is waiting on. */
+export function readReviewIndex({ paths, runId } = {}) {
+  const directory = briefsDirectory(paths, runId);
+  const pathname = join(directory, 'reviews.json');
+  if (!existsSync(pathname)) throw codedError('CYCLE_REVIEW_INDEX_MISSING');
+  return { directory, index: readJsonFile(pathname, 'CYCLE_REVIEW_INDEX_UNREADABLE') };
+}
+
+/**
+ * STEP 3. Take the per-object reviews back, and build the three account-wide prompts from them.
+ *
+ * A MISSING REVIEW IS RECORDED, NOT FATAL. One expert failing should not cost the account its audit,
+ * and the honest handling is the same as everywhere else here: the count of what was expected and
+ * what arrived travels with the run, and the stage-3 rubrics tell an analyst to say where a gap
+ * limits it. All of them missing IS fatal, because that is not a gap, it is a stage that never ran.
+ */
+export function ingestObjectReviews({ paths, runId } = {}) {
+  const { directory, briefs } = readBriefs({ paths, runId });
+  const { index: reviewIndex } = readReviewIndex({ paths, runId });
+  const mapRecord = readJsonFile(join(directory, 'map.json'), 'CYCLE_MAP_UNREADABLE');
+
+  const collected = [];
+  const missing = [];
+  for (const expected of reviewIndex.reviews) {
+    const pathname = join(directory, expected.answerFile);
+    if (!existsSync(pathname) || !lstatSync(pathname).isFile()) {
+      missing.push({ kind: expected.kind, object: expected.object, answerFile: expected.answerFile });
+      continue;
+    }
+    const body = readFileSync(pathname, 'utf8').trim();
+    if (body.length === 0) {
+      missing.push({ kind: expected.kind, object: expected.object, answerFile: expected.answerFile });
+      continue;
+    }
+    collected.push({ kind: expected.kind, object: expected.object, slug: expected.slug, text: body });
+  }
+  if (reviewIndex.reviews.length > 0 && collected.length === 0) {
+    throw codedError('CYCLE_REVIEWS_MISSING');
+  }
+
+  const prompts = buildAllAnalystPrompts({ briefs, map: mapRecord.map, reviews: collected });
+  const lanes = prompts.prompts.map((entry) => {
+    const promptFile = `prompt-${entry.lane}.md`;
+    writeOnce(join(directory, promptFile), `${entry.prompt}\n`);
+    return {
+      lane: entry.lane,
+      discipline: entry.discipline,
+      briefFile: `brief-${entry.lane}.json`,
+      promptFile,
+      promptHash: entry.promptHash,
+      rubricHash: entry.rubricHash,
+    };
+  });
+
+  const record = {
+    schemaVersion: CYCLE_SCHEMA,
+    runId,
+    briefsHash: briefs.briefsHash,
+    mapHash: mapRecord.mapHash,
+    analystSetHash: prompts.analystSetHash,
+    reviewsExpected: reviewIndex.reviews.length,
+    reviewsRead: collected.length,
+    reviewsMissing: missing,
+    lanes,
+  };
+  writeOnce(join(directory, 'analysts.json'), record);
+  return { directory, index: record };
+}
+
+/** What step 3 wrote, when it has run. Absent means the lane prompts were never built. */
+function readAnalystRecord(directory) {
+  const pathname = join(directory, 'analysts.json');
+  return existsSync(pathname) ? readJsonFile(pathname, 'CYCLE_ANALYSTS_UNREADABLE') : null;
+}
+
+/** The same, by run. `null` rather than a throw: "stage 3 has not run yet" is a normal state. */
+export function readAnalystIndex({ paths, runId } = {}) {
+  return readAnalystRecord(briefsDirectory(paths, runId));
 }
 
 /**
@@ -429,9 +617,24 @@ export function renderInvestigation({ index, investigation, findings, rejected }
   lines.push(
     '## Provenance',
     '',
-    `Briefs \`${index.briefsHash}\`, analyst set \`${index.analystSetHash}\`, `
+    `Briefs \`${index.briefsHash}\`, analyst set \`${index.analystSetHash ?? 'not built'}\`, `
       + `investigation \`${investigation.investigationHash}\`.`,
     '',
+    ...(index.mapHash
+      ? [
+          `Account map \`${index.mapHash}\`. Per-object reviews: `
+            + `${index.reviewsRead ?? 0} of ${index.reviewsExpected ?? 0} read`
+            + `${(index.reviewsMissing ?? []).length > 0
+              ? `, missing ${index.reviewsMissing.map(({ object }) => object).join(', ')}`
+              : ''}.`,
+          '',
+        ]
+      : [
+          'NO ACCOUNT MAP AND NO PER-OBJECT REVIEWS were part of this run, so no workflow was',
+          'examined on its own before the account-wide analysis. Read the findings below with that',
+          'in mind.',
+          '',
+        ]),
     'Nothing on the internal rail proves the workflow configuration read here was the configuration',
     'in force during the window. A configuration may be called consistent with an outcome, or said to',
     'produce one going forward. It may not be said to have caused a past outcome.',
@@ -536,7 +739,15 @@ export function renderSolutionPackage({ index, cause, findings }) {
  * write the three outputs the spec names.
  */
 export function runInvestigation({ paths, runId, answers } = {}) {
-  const { index } = readAnalysisArtifacts({ paths, runId });
+  const { directory: briefsDir, index: briefsIndex } = readAnalysisArtifacts({ paths, runId });
+  /*
+   * The provenance of an investigation is the WHOLE chain that produced it, not only the briefs. A
+   * run whose stage-2 reviews half failed and a run where they all landed produce different findings
+   * from the same evidence, so the counts travel into the report rather than being inferable only by
+   * reading the run directory afterwards.
+   */
+  const analysts = readAnalystRecord(briefsDir);
+  const index = analysts === null ? briefsIndex : { ...briefsIndex, ...analysts, runId };
   const { accepted, rejected } = ingestLaneFindings({ answers });
   const investigation = investigateRootCause({
     laneAnalyses: accepted,
@@ -549,7 +760,12 @@ export function runInvestigation({ paths, runId, answers } = {}) {
     schemaVersion: CYCLE_SCHEMA,
     runId,
     briefsHash: index.briefsHash,
-    analystSetHash: index.analystSetHash,
+    // Null, not absent, when stage 3 never built the lane prompts. An investigation run straight off
+    // the briefs is a legitimate thing to do and a distinguishable one.
+    analystSetHash: index.analystSetHash ?? null,
+    mapHash: index.mapHash ?? null,
+    reviewsRead: index.reviewsRead ?? 0,
+    reviewsExpected: index.reviewsExpected ?? 0,
     internalRail: index.internalRail,
     rejected,
     investigation,

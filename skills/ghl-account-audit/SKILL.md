@@ -106,39 +106,61 @@ path. A public-only or otherwise incomplete evidence run reports
 `complete_partial`. Proposed fixes remain local proposal artifacts for approval
 and are never executed by this skill.
 
-### The analysis cycle (three expert lanes, then one investigation)
+### The analysis cycle (four stages of expert)
 
 `PRODUCT-SPEC.md` is the authority for what this stage is for. Two rules it
 encodes are not negotiable: **the auditor decides what to analyse and is never
-told**, and **there are no hardcoded best-practice detectors**. All three lanes
-run every time. Never dispatch one lane, never tell an analyst which metric to
-look at, and never supply a benchmark: the analyst IS the benchmark authority.
+told**, and **there are no hardcoded best-practice detectors**. Never dispatch
+one lane, never tell an expert which metric to look at, and never supply a
+benchmark: the expert IS the benchmark authority.
 
-The model call is the only non-deterministic step in the product, so it sits
+**There is no per-account configuration anywhere in this cycle.** Nothing tells
+the auditor what a workflow is for. Stage 1 derives it, which is what lets this
+run against any location whether or not it was built to the Standard Build.
+
+A model call is the only non-deterministic step in the product, so each one sits
 between two deterministic commands (see `lib/cycle.mjs` for why the kernel
-cannot make it itself).
+cannot make them itself). Run `audit briefs` at any point to be told which stage
+a run is at and what to dispatch next; the answer is derived from what is on
+disk, not from a status somebody wrote down.
 
 1. **`audit run --mode weekly ...`** collects, measures, and writes the three
-   briefs and the three analyst prompts under
+   lane briefs and the ONE stage-1 prompt under
    `audits/ghl/<location>/private/briefs/<runId>/`.
    Set `internalAudit.emailCopy: true` in the provider config to also read the
-   email library, so the copywriter lane judges the real body of a send step
+   email library, so the per-workflow experts judge the real body of a send step
    that points at a library template instead of only its subject line. It is
    opt-in because it opens a second session and fetches a storage host.
-2. **`audit briefs --project <p> --location <l> --run-id <r>`** prints the
-   `briefsHash` and the three prompt files.
-3. **Dispatch three subagents, one per prompt file, in parallel**, exactly as
-   `/uxie-ghl-factory:audit` dispatches its surface auditors. Each subagent's
-   whole instruction is the contents of its `prompt-<lane>.md`. Add nothing to
-   it. Write each answer's JSON array to `<answers>/<lane>.json`.
-4. **`audit investigate --project <p> --location <l> --run-id <r> --findings
-   <answers>`** validates every finding, refuses the malformed ones by name,
-   groups the rest into causes on their anchors, ranks them, and writes
+2. **STAGE 1, one expert.** Dispatch a single subagent whose whole instruction is
+   `prompt-account-map.md`. It reads the whole account and derives THE MAP: what
+   journey this account runs, what each workflow's job actually appears to be,
+   which sit on the money path, which are delivery, which look abandoned. Save
+   its JSON answer to a file.
+3. **`audit map --project <p> --location <l> --run-id <r> --map <file>`**
+   validates the map (every workflow covered exactly once, no invented workflow
+   or KPI edge) and writes one prompt per object under `reviews/`. The COUNT
+   comes from the account: roughly fourteen workflows plus every AI agent on a
+   Grom-sized location, fewer on a smaller one.
+4. **STAGE 2, one expert per object, dispatched in parallel.** Each subagent's
+   whole instruction is its `reviews/prompt-*.md`. Add nothing to it. Each sees
+   its object WHOLE: configuration, runtime, every message in full, where it sits
+   in the account, the KPI edges it should move, and the stage-1 map. Write each
+   answer's markdown to the `answerFile` the command named for it.
+5. **`audit reviews --project <p> --location <l> --run-id <r>`** collects them,
+   records any that never arrived, and writes the three stage-3 lane prompts.
+6. **STAGE 3, three account-wide experts, in parallel.** One per
+   `prompt-<lane>.md`: the lead journey and its KPIs, the account as one system,
+   and every message as ONE STREAM. Each reads the map and all the per-object
+   reviews and is told not to repeat them. Write each answer's JSON array to
+   `<answers>/<lane>.json`.
+7. **STAGE 4, `audit investigate --project <p> --location <l> --run-id <r>
+   --findings <answers>`** validates every finding, refuses the malformed ones by
+   name, groups the rest into causes on their anchors, ranks them, and writes
    `INVESTIGATION.md`, `BACKLOG.md`, `investigation.json` and one solution
    package per cause under `audits/ghl/<location>/investigations/<runId>/`.
 
-The briefs live under `private/` and quote real message copy, so they are
-evidence and never publication material. Solution packages are for human
+The briefs and reviews live under `private/` and quote real message copy, so they
+are evidence and never publication material. Solution packages are for human
 implementation and approval; nothing in this cycle applies a change.
 
 ## Boundaries (inherited + plugin)
