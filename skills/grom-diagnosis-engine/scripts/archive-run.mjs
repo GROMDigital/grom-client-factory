@@ -174,6 +174,7 @@ copy(facts, join(configOut, `account-facts-${flags.location}.v1.json`), { option
  */
 const { loadProfile } = await import(join(SKILL, 'schemas/v1.mjs'));
 const { causeFingerprint } = await import(join(SKILL, 'lib/recurrence.mjs'));
+const { parseChangesMade, compareWeeks } = await import(join(SKILL, 'lib/archive-recurrence.mjs'));
 let caveats = [];
 try {
   caveats = loadProfile(briefIndex.profileId, flags.location).situation?.knownDataCaveats ?? [];
@@ -353,36 +354,36 @@ let lastWeekWritten = false;
 
 if (previous) {
   const priorChanges = join(accountFolder, previous, 'CHANGES-MADE.md');
-  // Match on the FINGERPRINT, never the causeId. See the note on the template above.
-  const thisWeeksPrints = new Set(causes.map((c) => causeFingerprint(c)));
-  const claimed = new Map();
-  let priorHadFingerprints = false;
-  if (existsSync(priorChanges)) {
-    const text = readFileSync(priorChanges, 'utf8');
-    // Each block is "### <causeId>" followed by its fields, up to the next heading.
-    // `(?![\s\S])` is end-of-input. `\z` is Ruby and throws under the `u` flag.
-    for (const match of text.matchAll(/^### (cause_[a-f0-9]+)\n([\s\S]*?)(?=^#{2,3} |(?![\s\S]))/gmu)) {
-      const status = (match[2].match(/\*\*Status:\*\*\s*(.+)/u)?.[1] ?? '').trim();
-      const did = (match[2].match(/\*\*What was actually done:\*\*\s*(.*)/u)?.[1] ?? '').trim();
-      const print = (match[2].match(/\*\*fingerprint:\*\*\s*`([a-f0-9]+)`/u)?.[1] ?? '').trim();
-      if (print) priorHadFingerprints = true;
-      claimed.set(match[1], { status: status || 'NOT STARTED', did, print });
-    }
-  }
-  const acted = [...claimed.entries()].filter(([, v]) => /^DONE/u.test(v.status));
-  const present = (v) => v.print !== '' && thisWeeksPrints.has(v.print);
-  const stillHere = acted.filter(([, v]) => present(v));
-  const gone = acted.filter(([, v]) => !present(v));
-  const untouchedGone = [...claimed.entries()]
-    .filter(([, v]) => !/^DONE/u.test(v.status) && !present(v));
+  /*
+   * Match on the FINGERPRINT, never the causeId, and refuse the whole file if ANY block is missing
+   * one. Both rules — and the reasoning that a refused comparison is far cheaper than a false
+   * "fixed" — live in `lib/archive-recurrence.mjs`, which exists so they can be tested. This
+   * script cannot be: it is top-to-bottom with no exports.
+   */
+  const claimed = existsSync(priorChanges)
+    ? parseChangesMade(readFileSync(priorChanges, 'utf8'))
+    : new Map();
+  const comparison = compareWeeks({
+    claimed,
+    thisWeeksFingerprints: causes.map((c) => causeFingerprint(c)),
+  });
+  const priorHadFingerprints = comparison.concluded;
+  const { acted, gone, stillHere, untouchedGone } = comparison;
 
   writeFileSync(join(destination, 'LAST-WEEK.md'), `# Against last week (${previous})
 
 ${claimed.size > 0 && !priorHadFingerprints
-  ? `🔴 Last week's \`CHANGES-MADE.md\` predates the stable join key, so it carries no \`fingerprint\`
-line. Weeks CANNOT be matched from it: the causeId changes whenever an expert rewords a finding, so
-matching on it would report renamed problems as fixed. Nothing below is concluded from it. From this
-week on the fingerprint is written into the template and the comparison works.`
+  ? `🔴 Last week's \`CHANGES-MADE.md\` cannot be joined to this week, so **nothing below is concluded
+from it** — no problem is called fixed and none is called still here.
+
+Either the file predates the stable join key, or at least one of its ${claimed.size} blocks is
+missing its \`fingerprint\` line, or two blocks share one. All three are refused for the same reason:
+the causeId changes whenever an expert rewords a finding, so a block with no usable fingerprint
+matches nothing this week and would be reported as SOLVED. One missing line is enough to invalidate
+the comparison, which is why a file that is mostly fine is still refused whole.
+
+To fix it: add the missing \`**fingerprint:** \\\`<hash>\\\`\` line to every block in last week's file,
+taking the hash from that week's own diagnosis, and re-run the archive.`
   : claimed.size === 0
   ? `Last week's \`CHANGES-MADE.md\` was never filled in, so nothing can be said about whether anything
 was fixed. Every problem below is simply what this run found. **Fill in this week's

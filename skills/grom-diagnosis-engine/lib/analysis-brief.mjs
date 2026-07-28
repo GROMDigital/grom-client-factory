@@ -357,6 +357,14 @@ function conversationsOf(internal) {
     };
   }
   const mode = collection.sample?.mode ?? 'UNKNOWN';
+  const sampledCount = collection.sampledCount ?? (collection.transcripts ?? []).length;
+  /*
+   * The mandatory guarantee is a CLAIM, and the collector now reconciles it against what was
+   * actually delivered. Anything other than an explicit `true` means it did not hold, which
+   * includes a run where no manifest was produced at all. Defaulting the other way would have this
+   * brief assert the guarantee on exactly the runs that failed to keep it.
+   */
+  const guaranteeHeld = collection.mandatoryGuaranteeHeld === true;
   return {
     ran: true,
     complete: collection.complete === true,
@@ -364,17 +372,28 @@ function conversationsOf(internal) {
     mode,
     universeCount: collection.universeCount ?? null,
     messageCount: collection.messageCount ?? null,
-    sampledCount: collection.sampledCount ?? (collection.transcripts ?? []).length,
+    sampledCount,
     droppedForSizeCount: collection.droppedForSizeCount ?? 0,
+    droppedFlaggedCount: collection.droppedFlaggedCount ?? 0,
+    elidedThreadCount: collection.elidedThreadCount ?? 0,
     unparsedMessageCount: collection.unparsedMessageCount ?? 0,
+    mandatoryGuaranteeHeld: guaranteeHeld,
+    // How many threads the commercial join could place, and on what. See `conversation-outcomes`.
+    outcomeCoverage: collection.outcomeCoverage ?? null,
     limitations: [...(collection.limitations ?? [])],
     /*
      * Stated as a sentence and not only as fields, because this is the one place a lane most
      * reliably overclaims, and the sentence is what ends up quoted back in a finding.
      */
-    howToReadThis: mode === 'CENSUS'
-      ? 'Every conversation in the window is below. A count you take from these threads is the real count for the week.'
-      : `These are ${collection.sampledCount ?? 0} threads drawn from ${collection.universeCount ?? 0}. Every complaint and opt-out the flagging caught is included, so complaints are OVER-represented on purpose. Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
+    howToReadThis: mode === 'UNKNOWN'
+      ? 'NO VALID SAMPLE WAS PRODUCED for this run — the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included.'
+      : mode === 'CENSUS'
+        ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? '' : ' 🔴 EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`.'}`
+        : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${
+          guaranteeHeld
+            ? 'Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent.'
+            : `🔴 THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`
+        } Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
     threads: [...(collection.transcripts ?? [])],
   };
 }

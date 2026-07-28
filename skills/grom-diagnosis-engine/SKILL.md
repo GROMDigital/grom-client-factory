@@ -147,7 +147,17 @@ disk, not from a status somebody wrote down.
    is included by construction. Read `conversations.howToReadThis` on the brief
    before quoting a number from it: a count taken from a sample is not a rate.
    These transcripts are COPY evidence and never journey evidence — no metric
-   moves because a message body parsed differently this week.
+   moves because a message body parsed differently this week. Each thread IS
+   joined to what commercially happened to that person (booked, no-show,
+   cancelled, won, lost), read from appointment and opportunity records the
+   public rail already owns and never derived from a message. That join is what
+   lets the draw put a booked conversation next to a lost one. Read
+   `conversations.outcomeCoverage` before trusting it: on an account that does
+   not record attendance, most threads are honestly `unknown`.
+   The flagging that guarantees complaints a place in the sample is a KEYWORD
+   MATCH, not a judgement. `conversations.mandatoryGuaranteeHeld` says whether
+   the guarantee actually held after the size budget was applied; when it is
+   false, no sentence claiming every complaint is present may be written.
 2. **STAGE 1, one expert.** Dispatch a single subagent whose whole instruction is
    `prompt-account-map.md`. It reads the whole account and derives THE MAP: what
    journey this account runs, what each workflow's job actually appears to be,

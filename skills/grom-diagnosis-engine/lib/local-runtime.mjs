@@ -1765,13 +1765,13 @@ function buildConversationTranscriptRail({
   });
   if (session === null) return null;
   return {
-    async collectTranscripts({ window, signal }) {
+    async collectTranscripts({ window, publicEvidence, signal }) {
       return withCopySession(session, (client) => createConversationTranscriptCollector({
         client,
         capability: session.capability,
         boundLocationId: config.expectedLocationId,
         window: { fromDate: window?.from, toDate: window?.to },
-      }).collectTranscripts({ signal }));
+      }).collectTranscripts({ signal, publicEvidence }));
     },
   };
 }
@@ -1837,6 +1837,9 @@ function buildInternalAuditAdapter({
         try {
           conversationTranscripts = await transcriptRail.collectTranscripts({
             window: request?.window,
+            // The JOIN input. Already collected and already in hand at this phase; see
+            // `lib/conversation-outcomes.mjs` for why an outcome is read from it and never derived.
+            publicEvidence: request?.publicEvidence ?? null,
             signal: request?.signal,
           });
         } catch (error) {

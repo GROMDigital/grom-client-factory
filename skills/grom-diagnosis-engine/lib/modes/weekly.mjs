@@ -1005,6 +1005,15 @@ export async function collectInternalEvidencePhase({
     window,
     applicability,
     stepRosterRequests,
+    /*
+     * READ-ONLY, and passed as a CLONE so an adapter cannot reach back and edit the public
+     * evidence this phase is required to preserve byte-for-byte. The transcript rail joins
+     * conversations to their commercial outcome from it; nothing else consumes it, and nothing may
+     * write to it. Deliberately NOT `preservedPublic`: that object is what travels onward, and
+     * handing the adapter the very reference this phase promises to preserve is how a preserved
+     * copy stops being one.
+     */
+    publicEvidence: jsonClone(publicEvidence),
     signal,
   });
 

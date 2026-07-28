@@ -315,13 +315,36 @@ export function buildWorkflowReviewPrompts({ briefs, map } = {}) {
 const VOICE_CHANNEL = /call|voice/iu;
 const AGENT_THREAD_LIMIT = 12;
 
-function threadsForSurface(copy, surface) {
+/**
+ * `TYPE_SMS` on a message, `SMS` on an agent. Normalised to the bare channel word so the two can be
+ * intersected at all.
+ */
+function normalizeChannel(value) {
+  return String(value ?? '').replace(/^TYPE_/iu, '').trim().toLowerCase();
+}
+
+function threadsForSurface(copy, surface, agent) {
   const threads = copy?.conversations?.threads ?? [];
   if (threads.length === 0) return { available: false, basis: null, threads: [] };
   const wantsVoice = /voice|call/iu.test(surface);
+  /*
+   * THE AGENT'S OWN CHANNELS, when it declares them. VERIFIED on the SK Skin bundle: a
+   * conversation-AI agent carries `channels: ["SMS"]`, so an SMS-only agent was previously being
+   * shown email and social threads as evidence about itself and could be blamed for a conversation
+   * it could not have handled. Voice agents declare no `channels` field, which is why the
+   * surface-level voice split stays as the fallback rather than being replaced by this.
+   */
+  const declared = new Set(
+    (Array.isArray(agent?.channels) ? agent.channels : []).map(normalizeChannel).filter(Boolean),
+  );
   const matching = threads.filter((thread) => {
-    const isVoice = (thread.channels ?? []).some((channel) => VOICE_CHANNEL.test(channel));
-    return wantsVoice ? isVoice : !isVoice;
+    const channels = (thread.channels ?? []).map(normalizeChannel);
+    const isVoice = channels.some((channel) => VOICE_CHANNEL.test(channel));
+    if (wantsVoice) return isVoice;
+    if (isVoice) return false;
+    // No declared channels means the agent did not say, so the surface split is all we honestly
+    // have. Declaring them narrows it to an intersection and nothing else.
+    return declared.size === 0 || channels.some((channel) => declared.has(channel));
   });
   /*
    * Flagged threads first, then the ones with the most back-and-forth. A truncated set that kept
@@ -335,7 +358,9 @@ function threadsForSurface(copy, surface) {
     available: matching.length > 0,
     basis: wantsVoice
       ? 'Threads in the sample whose channel is a call. NOT attributed to this agent: nothing in the evidence records which agent answered.'
-      : 'Threads in the sample on a text channel. NOT attributed to this agent: nothing in the evidence records which agent answered.',
+      : declared.size === 0
+        ? 'Threads in the sample on a text channel. This agent declares no channels, so this is NOT narrowed to what it can handle, and it is NOT attributed to this agent either: nothing in the evidence records which agent answered.'
+        : `Threads in the sample on a channel this agent is configured for (${[...declared].sort().join(', ')}). NOT attributed to this agent: nothing in the evidence records which agent answered, only that this agent could have.`,
     matchingCount: matching.length,
     shownCount: Math.min(ordered.length, AGENT_THREAD_LIMIT),
     threads: ordered.slice(0, AGENT_THREAD_LIMIT),
@@ -375,7 +400,7 @@ export function buildAgentReviewPrompts({ briefs, map } = {}) {
         // The agent's copy only means something against where conversations actually end.
         engagement: copy.engagement,
         // And it means far more against conversations that actually happened.
-        conversationsOnThisChannel: threadsForSurface(copy, surface),
+        conversationsOnThisChannel: threadsForSurface(copy, surface, agent),
       };
       const prompt = [
         `You are reviewing the instructions of ONE AI agent: ${name}, on the ${surface} surface.`,

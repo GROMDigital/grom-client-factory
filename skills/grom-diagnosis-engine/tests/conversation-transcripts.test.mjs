@@ -266,6 +266,175 @@ test('the real GHL export record parses, field for field', async () => {
   assert.equal(thread.messages[1].body, inbound.body);
 });
 
+/*
+ * The four below reproduce an external review's own repros. Each one FAILED before the fix.
+ */
+
+test('the total budget is a real ceiling, even for the very first thread', async () => {
+  // Reported: a 1,000-character budget delivered ~9,898 characters, 0 dropped, no limitation.
+  const items = Array.from({ length: 40 }, (_, index) => message('huge', {
+    seq: index,
+    dateAdded: START + DAY + index * 1000,
+    body: 'z'.repeat(240),
+  }));
+  const result = await collector(clientReturning(items), { maxTranscriptChars: 1_000, maxThreadChars: 800 })
+    .collectTranscripts({});
+
+  const delivered = JSON.stringify(result.transcripts).length;
+  assert.ok(
+    delivered <= 1_400,
+    `the delivered payload must respect the ceiling, got ${delivered} characters`,
+  );
+  assert.ok(
+    result.limitations.length > 0,
+    'exceeding or eliding to fit must always be stated, never silent',
+  );
+});
+
+test('a dropped complaint is reported as the guarantee failing, not hidden', async () => {
+  // Reported: manifest mandatoryCount 2, complaints actually delivered 1, no admission.
+  const long = 'q'.repeat(600);
+  const items = [
+    message('complaint-a', { direction: 'inbound', body: `${long} this is terrible` }),
+    message('complaint-b', { direction: 'inbound', body: `${long} I want a refund` }),
+  ];
+  const result = await collector(clientReturning(items), { maxTranscriptChars: 1_300 })
+    .collectTranscripts({});
+
+  const delivered = result.transcripts.filter((thread) => thread.flags.length > 0).length;
+  if (delivered < 2) {
+    assert.equal(result.mandatoryGuaranteeHeld, false, 'a dropped flagged thread must fail the guarantee');
+    assert.ok(result.limitations.includes('CONVERSATION_MANDATORY_THREAD_DROPPED'));
+    assert.equal(result.droppedFlaggedCount, 2 - delivered);
+  } else {
+    assert.equal(result.mandatoryGuaranteeHeld, true);
+  }
+});
+
+test('common ways of complaining and opting out are caught', async () => {
+  const cases = [
+    ['leave me alone', 'opt_out'],
+    ['lose my number', 'opt_out'],
+    ['do not message me again', 'opt_out'],
+    ['this service is useless', 'complaint'],
+    ['you have ignored me for a week', 'complaint'],
+    ['I am furious about this', 'complaint'],
+  ];
+  const items = cases.map(([body], index) => message(`case-${index}`, { direction: 'inbound', body }));
+  const result = await collector(clientReturning(items)).collectTranscripts({});
+  const byId = new Map(result.transcripts.map((thread) => [thread.conversationId, thread]));
+  for (const [index, [body, expected]] of cases.entries()) {
+    assert.ok(
+      byId.get(`case-${index}`).flags.includes(expected),
+      `"${body}" should flag as ${expected}`,
+    );
+  }
+});
+
+test('an unanswered call carries its outcome in status, not callStatus', async () => {
+  // VERIFIED LIVE: TYPE_CALL records come back with status `no-answer` / `voicemail` and no
+  // `callStatus` field at all. Reading `callStatus` alone flagged nothing.
+  const result = await collector(clientReturning([
+    message('missed', { direction: 'inbound', messageType: 'TYPE_CALL', status: 'no-answer', body: null }),
+    message('vm', { direction: 'inbound', messageType: 'TYPE_CALL', status: 'voicemail', body: null }),
+    message('sms-fail', { status: 'failed' }),
+  ])).collectTranscripts({});
+  const byId = new Map(result.transcripts.map((thread) => [thread.conversationId, thread]));
+  assert.deepEqual(byId.get('missed').flags, ['abandoned_call']);
+  assert.deepEqual(byId.get('vm').flags, ['abandoned_call']);
+  assert.deepEqual(
+    byId.get('sms-fail').flags,
+    ['failure'],
+    'on a text channel the same word still means a delivery failure',
+  );
+});
+
+test('conversations are joined to what commercially happened', async () => {
+  const publicEvidence = {
+    scopes: [{
+      actionId: 'calendars-v3__get-calendar-events',
+      items: [
+        { record: { contactId: 'contact-booked', calendarId: 'cal1', startTime: '2026-07-21T10:00:00+00:00', appointmentStatus: 'showed' } },
+        { record: { contactId: 'contact-ghost', calendarId: 'cal1', startTime: '2026-07-21T11:00:00+00:00', appointmentStatus: 'noshow' } },
+      ],
+    }, {
+      actionId: 'opportunities.search',
+      items: [
+        { record: { contactId: 'contact-lost', pipelineId: 'p1', status: 'lost', monetaryValue: 400 } },
+        // An appointment already spoke for this contact; the pipeline must not overrule it.
+        { record: { contactId: 'contact-ghost', pipelineId: 'p1', status: 'open' } },
+      ],
+    }],
+  };
+  const items = [
+    { ...message('won', {}), contactId: 'contact-booked' },
+    { ...message('ghosted', {}), contactId: 'contact-ghost' },
+    { ...message('lost', {}), contactId: 'contact-lost' },
+    { ...message('nothing-known', {}), contactId: 'contact-absent' },
+  ];
+
+  const result = await collector(clientReturning(items)).collectTranscripts({ publicEvidence });
+
+  const byId = new Map(result.transcripts.map((thread) => [thread.conversationId, thread]));
+  assert.equal(byId.get('won').outcome, 'won');
+  assert.equal(byId.get('won').outcomeBasis, 'appointment');
+  assert.equal(byId.get('ghosted').outcome, 'no_show', 'the appointment beats the open opportunity');
+  assert.equal(
+    byId.get('ghosted').outcomeBasis,
+    'appointment',
+    'and it is still recorded as decided by the appointment',
+  );
+  assert.equal(byId.get('lost').outcome, 'lost');
+  assert.equal(byId.get('lost').outcomeBasis, 'opportunity');
+  assert.equal(byId.get('nothing-known').outcome, 'unknown', 'no record means unknown, never assumed open');
+  assert.equal(result.outcomeCoverage.joined, true);
+  assert.equal(result.outcomeCoverage.threadsWithOutcome, 3);
+
+  // The outcome must reach the SAMPLER, not just the transcript: it is the stratum that lets a
+  // booked conversation be drawn next to a lost one.
+  const strata = new Set(result.sample.selections.map((selection) => selection.stratum));
+  assert.ok(strata.size >= 3, 'distinct outcomes must produce distinct strata');
+  // ...and it must not leak a real id into the manifest while doing it.
+  assert.ok(!JSON.stringify(result.sample).includes('contact-booked'));
+});
+
+test('a pipeline nobody maintains cannot overrule the appointment record', async () => {
+  /*
+   * The case the ordering rule exists for, and the one the rank alone does NOT cover. This account
+   * cancelled the appointment and the pipeline says the deal was won — which happens constantly on
+   * accounts where staff close opportunities in bulk and never touch the calendar. The appointment
+   * is the record that was actually touched by the event, so it decides.
+   */
+  const publicEvidence = {
+    scopes: [
+      { actionId: 'calendars-v3__get-calendar-events', items: [{ record: { contactId: 'c-1', calendarId: 'cal1', startTime: '2026-07-21T10:00:00+00:00', appointmentStatus: 'cancelled' } }] },
+      { actionId: 'opportunities.search', items: [{ record: { contactId: 'c-1', pipelineId: 'p1', status: 'won' } }] },
+    ],
+  };
+  const result = await collector(clientReturning([{ ...message('t1'), contactId: 'c-1' }]))
+    .collectTranscripts({ publicEvidence });
+  assert.equal(result.transcripts[0].outcome, 'cancelled');
+  assert.equal(result.transcripts[0].outcomeBasis, 'appointment');
+});
+
+test('a deleted appointment decides nothing', async () => {
+  const publicEvidence = {
+    scopes: [{
+      actionId: 'calendars-v3__get-calendar-events',
+      items: [{ record: { contactId: 'c-1', calendarId: 'cal1', startTime: '2026-07-21T10:00:00+00:00', appointmentStatus: 'showed', deleted: true } }],
+    }],
+  };
+  const result = await collector(clientReturning([{ ...message('t1'), contactId: 'c-1' }]))
+    .collectTranscripts({ publicEvidence });
+  assert.equal(result.transcripts[0].outcome, 'unknown');
+});
+
+test('with no public evidence every outcome is honestly unknown', async () => {
+  const result = await collector(clientReturning([message('c1')])).collectTranscripts({});
+  assert.equal(result.transcripts[0].outcome, 'unknown');
+  assert.equal(result.outcomeCoverage.joined, false);
+});
+
 test('a misconfigured collector refuses to exist', () => {
   for (const bad of [
     { window: { fromDate: TO, toDate: FROM } },

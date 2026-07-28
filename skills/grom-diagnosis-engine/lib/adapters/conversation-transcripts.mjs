@@ -50,6 +50,7 @@
  */
 import { canonicalJson, sha256 } from '../canonical.mjs';
 import { selectConversationSample } from '../sampling.mjs';
+import { buildOutcomeIndex, outcomeStratumRef } from '../conversation-outcomes.mjs';
 
 export const CONVERSATION_TRANSCRIPTS_SCHEMA = '1.0.0';
 
@@ -82,6 +83,19 @@ const DEFAULT_BUDGETS = Object.freeze({
    * manifest can then state exactly how many threads the analyst did not see.
    */
   maxTranscriptChars: 120_000,
+  /**
+   * Characters of ONE thread. A genuinely hard per-thread bound, and it exists because the total
+   * budget alone is not one: an early implementation admitted the first thread unconditionally so
+   * that a budget smaller than a single conversation could not produce an empty result, and a
+   * single 10,000-character thread then blew a documented 1,000-character ceiling silently.
+   *
+   * A thread over this keeps its OPENING and its ENDING and elides the middle with a visible
+   * marker, because how a conversation starts and how it dies are the two things being judged.
+   */
+  maxThreadChars: 24_000,
+  /** Messages kept at each end of an elided thread. */
+  threadHeadMessages: 6,
+  threadTailMessages: 6,
 });
 
 /** Response-time bands, in milliseconds. Strata only. Never reported as a measurement. */
@@ -105,10 +119,15 @@ const CALL_BANDS = Object.freeze([
  * judgement, made by reading it. A false positive therefore costs one sample slot, and a false
  * negative costs a guarantee, so both patterns are deliberately loose.
  */
-const OPT_OUT = /\b(?:stop|unsubscribe|opt[\s-]?out|remove me|take me off|do not (?:contact|call|text)|don'?t contact me)\b/iu;
-const COMPLAINT = /\b(?:complain(?:t|ing)?|unhappy|disappointed|refund|terrible|awful|rude|appalling|waste of (?:my )?time|scam|misleading|report you|never (?:got|received)|still waiting|no ?one (?:has )?(?:called|replied|got back))\b/iu;
+const OPT_OUT = /\b(?:stop|unsubscribe|opt[\s-]?out|remove me|take me off|delete my (?:number|details)|lose my number|leave me alone|do ?n[o']?t (?:contact|call|text|message|email|ring)|do not (?:contact|call|text|message|email|ring)|stop (?:contacting|calling|texting|messaging|emailing))\b/iu;
+const COMPLAINT = /\b(?:complain(?:t|ing)?|unhappy|dissatisfied|disappointed|refund|terrible|awful|rude|appalling|useless|shambles|disgrace(?:ful)?|furious|angry|annoyed|fed up|waste of (?:my )?time|scam|misleading|report you|trading standards|never (?:got|received|heard)|still waiting|been waiting|ignored me|ignoring me|no ?one (?:has )?(?:called|replied|responded|got back|been in touch))\b/iu;
 const FAILED_STATUS = new Set(['failed', 'undelivered', 'rejected', 'error', 'bounced']);
-const UNANSWERED_CALL = new Set(['no-answer', 'no_answer', 'noanswer', 'busy', 'failed', 'canceled', 'cancelled', 'voicemail']);
+/**
+ * A call that nobody had. VERIFIED LIVE: a `TYPE_CALL` record carries this in `status`
+ * (`no-answer`, `voicemail` both observed on the UK account), NOT in a `callStatus` field — the
+ * first draft read `callStatus` only and would never have flagged a single abandoned call.
+ */
+const UNANSWERED_CALL = new Set(['no-answer', 'no_answer', 'noanswer', 'busy', 'failed', 'canceled', 'cancelled', 'voicemail', 'missed']);
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -197,14 +216,22 @@ function isCall(message) {
 function flagsFor(messages) {
   const flags = new Set();
   for (const message of messages) {
-    if (typeof message.status === 'string' && FAILED_STATUS.has(message.status.toLowerCase())) {
+    const call = isCall(message);
+    /*
+     * `status` carries BOTH meanings depending on the channel, which is why the call check comes
+     * first: on an SMS `failed` is a delivery failure, on a `TYPE_CALL` it is a call nobody took.
+     * Counting an unanswered call as a delivery failure would report a working phone line as broken.
+     */
+    if (!call && typeof message.status === 'string' && FAILED_STATUS.has(message.status.toLowerCase())) {
       flags.add('failure');
     }
     if (
-      isCall(message)
+      call
       && (
         message.callDuration === 0
-        || (typeof message.callStatus === 'string' && UNANSWERED_CALL.has(message.callStatus.toLowerCase()))
+        || [message.callStatus, message.status].some(
+          (value) => typeof value === 'string' && UNANSWERED_CALL.has(value.toLowerCase()),
+        )
       )
     ) flags.add('abandoned_call');
     // Only the LEAD can complain or opt out. Matching our own outbound copy would flag every
@@ -278,13 +305,21 @@ function occurredAtBand(at, fromMs, toMs) {
  * Sorted by time within a thread and by id between them, so the same window always produces the
  * same universe in the same order and the sampler's determinism survives a reordered response.
  */
-export function threadsFromMessages(messages, { fromMs, toMs }) {
+export function threadsFromMessages(messages, { fromMs, toMs, outcomes = null }) {
   const byConversation = new Map();
   for (const message of messages) {
     byConversation.set(message.conversationId, [...(byConversation.get(message.conversationId) ?? []), message]);
   }
   const threads = [];
   for (const [conversationId, group] of byConversation) {
+    const contactId = group.find((message) => message.contactId !== null)?.contactId ?? null;
+    /*
+     * JOINED, never derived. See `lib/conversation-outcomes.mjs`: this comes from appointment and
+     * opportunity records the public rail already owns, matched by contact id. A thread whose
+     * contact has no such record is honestly `unknown` rather than assumed open.
+     */
+    const joined = contactId === null ? null : outcomes?.byContact?.get(contactId) ?? null;
+    const outcome = joined?.outcome ?? 'unknown';
     group.sort((left, right) => (left.at ?? 0) - (right.at ?? 0));
     const last = group.at(-1);
     const lastOutbound = [...group].reverse().find((message) => message.direction === 'outbound');
@@ -294,6 +329,9 @@ export function threadsFromMessages(messages, { fromMs, toMs }) {
       messages: group,
       flags: flagsFor(group),
       channels,
+      // Readable on the transcript, opaque in the manifest. Both are deliberate.
+      outcome,
+      outcomeBasis: joined?.basis ?? null,
       inboundCount: group.filter((message) => message.direction === 'inbound').length,
       outboundCount: group.filter((message) => message.direction === 'outbound').length,
       lastAt: last?.at ?? null,
@@ -306,18 +344,21 @@ export function threadsFromMessages(messages, { fromMs, toMs }) {
         interactionRef: ref('obj', 'conversation', conversationId),
         // The contact, when the export named one. A thread with no contact id still has a subject:
         // itself. Inventing a shared placeholder would collapse unrelated threads into one person.
-        subjectRef: ref('psn', 'contact', group.find((message) => message.contactId !== null)?.contactId ?? conversationId),
+        subjectRef: ref('psn', 'contact', contactId ?? conversationId),
         evidenceRefs: [ref('ev', 'conversation-transcript', conversationId)],
         occurredAtBand: occurredAtBand(last?.at ?? null, fromMs, toMs),
         source: ref('src', 'channels', channels.join(',')),
         /*
-         * NOT a journey stage. The sampler wants a stage to stratify on and this rail has no
-         * journey projection to read one from, so the discriminator is who spoke last — the single
-         * most decisive thing about an unfinished conversation. Named `stage` because that is the
-         * field's name, opaque like every other, and never reported as a stage.
+         * The COMMERCIAL stratum when the public rail knows one, and only then the who-spoke-last
+         * proxy. That ordering is the point of the join: stratifying on outcome is what lets the
+         * draw put booked conversations next to lost ones, which is the comparison the whole
+         * diagnosis rests on. The proxy stays as the fallback for a thread whose contact has no
+         * appointment and no opportunity, where there is genuinely nothing commercial to say.
          */
-        stage: ref('stage', 'last-direction', last?.direction ?? 'unknown'),
-        outcome: 'unknown',
+        stage: outcome === 'unknown'
+          ? ref('stage', 'last-direction', last?.direction ?? 'unknown')
+          : outcomeStratumRef(outcome),
+        outcome,
         responseTimeBand: responseTimeBand(group),
         callDurationBand: callDurationBand(group),
         handoffState: 'unknown',
@@ -343,6 +384,13 @@ function transcriptOf(thread) {
   return {
     conversationId: thread.conversationId,
     channels: thread.channels,
+    /*
+     * What commercially happened to this person, joined from the public rail. `outcomeBasis` says
+     * WHICH record decided it, because on an account that does not maintain its pipeline an
+     * opportunity-based outcome means much less than an appointment-based one.
+     */
+    outcome: thread.outcome,
+    outcomeBasis: thread.outcomeBasis,
     inboundCount: thread.inboundCount,
     outboundCount: thread.outboundCount,
     flags: thread.flags,
@@ -368,6 +416,36 @@ function transcriptOf(thread) {
 
 function transcriptSize(transcript) {
   return canonicalJson(transcript).length;
+}
+
+/**
+ * Bring ONE thread under the per-thread ceiling by eliding its middle.
+ *
+ * Elision, not truncation: a conversation cut off at the top loses how it opened and a conversation
+ * cut off at the bottom loses how it ended, and those are the two things a copy analyst is reading
+ * for. The marker is a real entry in the message list so the gap cannot be mistaken for a jump in
+ * the conversation itself.
+ */
+function elideToFit(transcript, limits) {
+  if (transcriptSize(transcript) <= limits.maxThreadChars) return transcript;
+  const { messages } = transcript;
+  const head = limits.threadHeadMessages;
+  const tail = limits.threadTailMessages;
+  if (messages.length <= head + tail) {
+    // Few messages, so the size is in the bodies rather than the count. Nothing to elide that
+    // would help; the thread is declared oversized and the analyst is told.
+    return { ...transcript, oversized: true };
+  }
+  const omitted = messages.length - head - tail;
+  return {
+    ...transcript,
+    elided: true,
+    messages: [
+      ...messages.slice(0, head),
+      { elidedMessages: omitted, note: `${omitted} messages omitted from the middle of this thread to fit the size budget. The opening and the ending are complete.` },
+      ...messages.slice(-tail),
+    ],
+  };
 }
 
 /** The bounded envelope every governed read carries. Identical in shape to the journey collector's. */
@@ -455,7 +533,7 @@ export function createConversationTranscriptCollector({
   const toMs = Date.parse(toDate);
 
   return {
-    async collectTranscripts({ signal } = {}) {
+    async collectTranscripts({ signal, publicEvidence = null } = {}) {
       const limitations = new Set();
 
       let page;
@@ -499,7 +577,13 @@ export function createConversationTranscriptCollector({
         });
       }
 
-      const threads = threadsFromMessages(messages, { fromMs, toMs });
+      /*
+       * THE JOIN. Built here rather than in `threadsFromMessages` so the pure function stays pure
+       * and testable, and so a run with no public evidence degrades to every outcome `unknown`
+       * rather than failing — which is exactly what this rail did before the join existed.
+       */
+      const outcomes = publicEvidence === null ? null : buildOutcomeIndex(publicEvidence);
+      const threads = threadsFromMessages(messages, { fromMs, toMs, outcomes });
       if (threads.length === 0) {
         return Object.freeze({
           schemaVersion: CONVERSATION_TRANSCRIPTS_SCHEMA,
@@ -555,22 +639,46 @@ export function createConversationTranscriptCollector({
         || byteOrder(left.interactionRef, right.interactionRef)
       ));
 
+      /*
+       * TWO bounds, and the total is a REAL ceiling.
+       *
+       * The first version admitted the first thread unconditionally, so that a budget smaller than
+       * one conversation could not return nothing. That made the documented hard ceiling soft: one
+       * 10,000-character thread sailed past a 1,000-character budget reporting no limitation at
+       * all. The per-thread elision above is what makes the unconditional case unnecessary — a
+       * thread is brought under `maxThreadChars` first, so admitting it cannot blow the total by
+       * more than one bounded thread, and if even that does not fit it is dropped and SAID.
+       */
       const transcripts = [];
       let characters = 0;
       let dropped = 0;
+      let droppedFlagged = 0;
+      let elided = 0;
       for (const selection of ordered) {
         const thread = byRef.get(selection.interactionRef);
         if (thread === undefined) continue;
-        const transcript = transcriptOf(thread);
+        const transcript = elideToFit(transcriptOf(thread), limits);
+        if (transcript.elided === true || transcript.oversized === true) elided += 1;
         const size = transcriptSize(transcript);
-        if (characters + size > limits.maxTranscriptChars && transcripts.length > 0) {
+        if (characters + size > limits.maxTranscriptChars) {
           dropped += 1;
+          if (flagged.has(selection.interactionRef)) droppedFlagged += 1;
           continue;
         }
         characters += size;
         transcripts.push(transcript);
       }
       if (dropped > 0) limitations.add('CONVERSATION_TRANSCRIPT_CHAR_BUDGET_EXHAUSTED');
+      if (elided > 0) limitations.add('CONVERSATION_TRANSCRIPT_THREAD_ELIDED');
+      /*
+       * THE RECONCILIATION. The manifest is a claim about what the analyst received, and until now
+       * nothing checked it against what was actually handed over. If a flagged thread did not fit,
+       * the mandatory guarantee DID NOT HOLD, and that has to be said in those words rather than
+       * left to be inferred from two counts that do not match — every downstream sentence about
+       * complaints depends on it.
+       */
+      const mandatoryGuaranteeHeld = droppedFlagged === 0;
+      if (!mandatoryGuaranteeHeld) limitations.add('CONVERSATION_MANDATORY_THREAD_DROPPED');
       transcripts.sort((left, right) => byteOrder(left.conversationId, right.conversationId));
 
       return Object.freeze({
@@ -583,6 +691,28 @@ export function createConversationTranscriptCollector({
         /** How many of the drawn threads the analyst is actually handed. */
         sampledCount: transcripts.length,
         droppedForSizeCount: dropped,
+        /**
+         * 🔴 The honest reconciliation of the manifest against the delivery. When this is false the
+         * sample manifest still reports its `mandatoryCount`, but the analyst did NOT receive that
+         * many flagged threads, and no sentence claiming every complaint was included may be
+         * written. The brief reads this field and changes what it says.
+         */
+        mandatoryGuaranteeHeld,
+        droppedFlaggedCount: droppedFlagged,
+        /**
+         * How well the commercial join landed, and how many threads it could say nothing about.
+         * A lane that stratifies on outcome without reading this will describe an account that
+         * simply does not record attendance as an account whose leads do not attend.
+         */
+        outcomeCoverage: outcomes === null
+          ? { joined: false, reason: 'No public evidence was available to this rail, so every conversation outcome is unknown.' }
+          : {
+              joined: true,
+              ...outcomes.coverage,
+              threadsWithOutcome: threads.filter(({ outcome }) => outcome !== 'unknown').length,
+              threadsTotal: threads.length,
+            },
+        elidedThreadCount: elided,
         unparsedMessageCount: unparsed,
         transcripts: Object.freeze(transcripts),
         // The full manifest, including the strata and inclusion probabilities. It carries opaque

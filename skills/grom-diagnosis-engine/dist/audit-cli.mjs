@@ -5898,6 +5898,15 @@ async function collectInternalEvidencePhase({
     window,
     applicability,
     stepRosterRequests,
+    /*
+     * READ-ONLY, and passed as a CLONE so an adapter cannot reach back and edit the public
+     * evidence this phase is required to preserve byte-for-byte. The transcript rail joins
+     * conversations to their commercial outcome from it; nothing else consumes it, and nothing may
+     * write to it. Deliberately NOT `preservedPublic`: that object is what travels onward, and
+     * handing the adapter the very reference this phase promises to preserve is how a preserved
+     * copy stops being one.
+     */
+    publicEvidence: jsonClone(publicEvidence),
     signal
   });
   const authBoundary = internalEvidence?.checkpoint?.phase === "awaiting_internal_auth" && internalEvidence?.checkpoint?.reason === AUTH_REQUIRED;
@@ -9986,6 +9995,8 @@ function conversationsOf(internal) {
     };
   }
   const mode = collection.sample?.mode ?? "UNKNOWN";
+  const sampledCount = collection.sampledCount ?? (collection.transcripts ?? []).length;
+  const guaranteeHeld = collection.mandatoryGuaranteeHeld === true;
   return {
     ran: true,
     complete: collection.complete === true,
@@ -9993,15 +10004,20 @@ function conversationsOf(internal) {
     mode,
     universeCount: collection.universeCount ?? null,
     messageCount: collection.messageCount ?? null,
-    sampledCount: collection.sampledCount ?? (collection.transcripts ?? []).length,
+    sampledCount,
     droppedForSizeCount: collection.droppedForSizeCount ?? 0,
+    droppedFlaggedCount: collection.droppedFlaggedCount ?? 0,
+    elidedThreadCount: collection.elidedThreadCount ?? 0,
     unparsedMessageCount: collection.unparsedMessageCount ?? 0,
+    mandatoryGuaranteeHeld: guaranteeHeld,
+    // How many threads the commercial join could place, and on what. See `conversation-outcomes`.
+    outcomeCoverage: collection.outcomeCoverage ?? null,
     limitations: [...collection.limitations ?? []],
     /*
      * Stated as a sentence and not only as fields, because this is the one place a lane most
      * reliably overclaims, and the sentence is what ends up quoted back in a finding.
      */
-    howToReadThis: mode === "CENSUS" ? "Every conversation in the window is below. A count you take from these threads is the real count for the week." : `These are ${collection.sampledCount ?? 0} threads drawn from ${collection.universeCount ?? 0}. Every complaint and opt-out the flagging caught is included, so complaints are OVER-represented on purpose. Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
+    howToReadThis: mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
     threads: [...collection.transcripts ?? []]
   };
 }
@@ -10894,18 +10910,27 @@ function buildWorkflowReviewPrompts({ briefs, map: map2 } = {}) {
     reviews: reviewed
   };
 }
-function threadsForSurface(copy, surface) {
+function normalizeChannel(value) {
+  return String(value ?? "").replace(/^TYPE_/iu, "").trim().toLowerCase();
+}
+function threadsForSurface(copy, surface, agent) {
   const threads = copy?.conversations?.threads ?? [];
   if (threads.length === 0) return { available: false, basis: null, threads: [] };
   const wantsVoice = /voice|call/iu.test(surface);
+  const declared = new Set(
+    (Array.isArray(agent?.channels) ? agent.channels : []).map(normalizeChannel).filter(Boolean)
+  );
   const matching = threads.filter((thread) => {
-    const isVoice = (thread.channels ?? []).some((channel) => VOICE_CHANNEL.test(channel));
-    return wantsVoice ? isVoice : !isVoice;
+    const channels = (thread.channels ?? []).map(normalizeChannel);
+    const isVoice = channels.some((channel) => VOICE_CHANNEL.test(channel));
+    if (wantsVoice) return isVoice;
+    if (isVoice) return false;
+    return declared.size === 0 || channels.some((channel) => declared.has(channel));
   });
   const ordered = [...matching].sort((left, right) => (right.flags ?? []).length - (left.flags ?? []).length || (right.inboundCount ?? 0) - (left.inboundCount ?? 0));
   return {
     available: matching.length > 0,
-    basis: wantsVoice ? "Threads in the sample whose channel is a call. NOT attributed to this agent: nothing in the evidence records which agent answered." : "Threads in the sample on a text channel. NOT attributed to this agent: nothing in the evidence records which agent answered.",
+    basis: wantsVoice ? "Threads in the sample whose channel is a call. NOT attributed to this agent: nothing in the evidence records which agent answered." : declared.size === 0 ? "Threads in the sample on a text channel. This agent declares no channels, so this is NOT narrowed to what it can handle, and it is NOT attributed to this agent either: nothing in the evidence records which agent answered." : `Threads in the sample on a channel this agent is configured for (${[...declared].sort().join(", ")}). NOT attributed to this agent: nothing in the evidence records which agent answered, only that this agent could have.`,
     matchingCount: matching.length,
     shownCount: Math.min(ordered.length, AGENT_THREAD_LIMIT),
     threads: ordered.slice(0, AGENT_THREAD_LIMIT)
@@ -10939,7 +10964,7 @@ function buildAgentReviewPrompts({ briefs, map: map2 } = {}) {
         // The agent's copy only means something against where conversations actually end.
         engagement: copy.engagement,
         // And it means far more against conversations that actually happened.
-        conversationsOnThisChannel: threadsForSurface(copy, surface)
+        conversationsOnThisChannel: threadsForSurface(copy, surface, agent)
       };
       const prompt = [
         `You are reviewing the instructions of ONE AI agent: ${name}, on the ${surface} surface.`,
@@ -44919,11 +44944,131 @@ var init_sampling = __esm({
   }
 });
 
+// lib/conversation-outcomes.mjs
+function isPlainObject18(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+function* recordsOf(publicEvidence) {
+  const scopes = [
+    ...Array.isArray(publicEvidence?.scopes) ? publicEvidence.scopes : [],
+    ...Array.isArray(publicEvidence?.collections) ? publicEvidence.collections : [],
+    ...Array.isArray(publicEvidence) ? publicEvidence : []
+  ];
+  for (const scope of scopes) {
+    const actionId = scope?.actionId ?? scope?.action ?? scope?.operationId ?? null;
+    const items = [
+      ...Array.isArray(scope?.items) ? scope.items : [],
+      ...Array.isArray(scope?.records) ? scope.records : [],
+      ...Array.isArray(scope?.pages) ? scope.pages.flatMap((page) => page?.items ?? []) : []
+    ];
+    for (const item of items) {
+      const record2 = isPlainObject18(item?.record) ? item.record : item;
+      if (isPlainObject18(record2)) yield { actionId, record: record2 };
+    }
+  }
+}
+function contactIdOf(record2) {
+  const value = record2.contactId ?? record2.contact_id ?? null;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+function better(left, right) {
+  return (RANK[right] ?? 0) > (RANK[left] ?? 0) ? right : left;
+}
+function buildOutcomeIndex(publicEvidence) {
+  const byContact = /* @__PURE__ */ new Map();
+  let appointmentsSeen = 0;
+  let opportunitiesSeen = 0;
+  let statusesRecorded = 0;
+  for (const { record: record2 } of recordsOf(publicEvidence)) {
+    const contactId = contactIdOf(record2);
+    if (contactId === null) continue;
+    const appointmentStatus = record2.appointmentStatus ?? record2.appoinmentStatus ?? null;
+    const isAppointment = typeof appointmentStatus === "string" || typeof record2.startTime === "string" && typeof record2.calendarId === "string";
+    if (isAppointment) {
+      appointmentsSeen += 1;
+      if (record2.deleted === true) continue;
+      const mapped = typeof appointmentStatus === "string" ? APPOINTMENT_OUTCOME[appointmentStatus.toLowerCase()] ?? null : null;
+      if (mapped === null) continue;
+      statusesRecorded += 1;
+      const current = byContact.get(contactId);
+      byContact.set(contactId, {
+        outcome: current === void 0 ? mapped : better(current.outcome, mapped),
+        basis: "appointment"
+      });
+      continue;
+    }
+    if (typeof record2.status === "string" && typeof record2.pipelineId === "string") {
+      opportunitiesSeen += 1;
+      const mapped = OPPORTUNITY_OUTCOME[record2.status.toLowerCase()] ?? null;
+      if (mapped === null) continue;
+      const current = byContact.get(contactId);
+      if (current !== void 0 && current.basis === "appointment") continue;
+      byContact.set(contactId, {
+        outcome: current === void 0 ? mapped : better(current.outcome, mapped),
+        basis: "opportunity"
+      });
+    }
+  }
+  return {
+    byContact,
+    coverage: {
+      contactsWithOutcome: byContact.size,
+      appointmentsSeen,
+      opportunitiesSeen,
+      /**
+       * 🔴 How many appointments carried a status the account actually maintains. On SK Skin this
+       * was 1 of 21, which is why a zero show rate there is a 5% RECORDING rate and not a
+       * conversion problem. A lane that stratifies on outcome without reading this number will
+       * describe an unrecorded account as a failing one.
+       */
+      appointmentStatusesRecorded: statusesRecorded
+    }
+  };
+}
+function outcomeStratumRef(outcome) {
+  return `stage_${sha256(["outcome", outcome])}`;
+}
+var APPOINTMENT_OUTCOME, OPPORTUNITY_OUTCOME, RANK;
+var init_conversation_outcomes = __esm({
+  "lib/conversation-outcomes.mjs"() {
+    init_canonical();
+    APPOINTMENT_OUTCOME = Object.freeze({
+      showed: "won",
+      confirmed: "booked",
+      new: "booked",
+      booked: "booked",
+      noshow: "no_show",
+      no_show: "no_show",
+      "no-show": "no_show",
+      cancelled: "cancelled",
+      canceled: "cancelled",
+      invalid: "cancelled"
+    });
+    OPPORTUNITY_OUTCOME = Object.freeze({
+      open: "open",
+      won: "won",
+      lost: "lost",
+      abandoned: "lost"
+    });
+    RANK = Object.freeze({
+      unknown: 0,
+      open: 1,
+      booked: 2,
+      cancelled: 3,
+      no_show: 4,
+      lost: 5,
+      won: 6
+    });
+  }
+});
+
 // lib/adapters/conversation-transcripts.mjs
 function codedError17(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject18(value) {
+function isPlainObject19(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -44950,7 +45095,7 @@ function epochMs(value) {
   return null;
 }
 function messageRecord(entry, maxBodyChars) {
-  if (!isPlainObject18(entry)) return null;
+  if (!isPlainObject19(entry)) return null;
   const conversationId = firstString(entry, ["conversationId", "conversation_id"]);
   if (conversationId === null) return null;
   const at2 = epochMs(entry.dateAdded ?? entry.createdAt ?? entry.dateUpdated ?? entry.timestamp);
@@ -44985,10 +45130,13 @@ function isCall(message) {
 function flagsFor(messages) {
   const flags = /* @__PURE__ */ new Set();
   for (const message of messages) {
-    if (typeof message.status === "string" && FAILED_STATUS.has(message.status.toLowerCase())) {
+    const call = isCall(message);
+    if (!call && typeof message.status === "string" && FAILED_STATUS.has(message.status.toLowerCase())) {
       flags.add("failure");
     }
-    if (isCall(message) && (message.callDuration === 0 || typeof message.callStatus === "string" && UNANSWERED_CALL.has(message.callStatus.toLowerCase()))) flags.add("abandoned_call");
+    if (call && (message.callDuration === 0 || [message.callStatus, message.status].some(
+      (value) => typeof value === "string" && UNANSWERED_CALL.has(value.toLowerCase())
+    ))) flags.add("abandoned_call");
     if (message.direction !== "inbound" || typeof message.body !== "string") continue;
     if (OPT_OUT.test(message.body)) flags.add("opt_out");
     if (COMPLAINT.test(message.body)) flags.add("complaint");
@@ -45021,13 +45169,16 @@ function occurredAtBand(at2, fromMs, toMs) {
   if (position < 1 / 3) return "early_week";
   return position < 2 / 3 ? "mid_week" : "late_week";
 }
-function threadsFromMessages(messages, { fromMs, toMs }) {
+function threadsFromMessages(messages, { fromMs, toMs, outcomes = null }) {
   const byConversation = /* @__PURE__ */ new Map();
   for (const message of messages) {
     byConversation.set(message.conversationId, [...byConversation.get(message.conversationId) ?? [], message]);
   }
   const threads = [];
   for (const [conversationId, group] of byConversation) {
+    const contactId = group.find((message) => message.contactId !== null)?.contactId ?? null;
+    const joined = contactId === null ? null : outcomes?.byContact?.get(contactId) ?? null;
+    const outcome = joined?.outcome ?? "unknown";
     group.sort((left, right) => (left.at ?? 0) - (right.at ?? 0));
     const last = group.at(-1);
     const lastOutbound = [...group].reverse().find((message) => message.direction === "outbound");
@@ -45037,6 +45188,9 @@ function threadsFromMessages(messages, { fromMs, toMs }) {
       messages: group,
       flags: flagsFor(group),
       channels,
+      // Readable on the transcript, opaque in the manifest. Both are deliberate.
+      outcome,
+      outcomeBasis: joined?.basis ?? null,
       inboundCount: group.filter((message) => message.direction === "inbound").length,
       outboundCount: group.filter((message) => message.direction === "outbound").length,
       lastAt: last?.at ?? null,
@@ -45048,18 +45202,19 @@ function threadsFromMessages(messages, { fromMs, toMs }) {
         interactionRef: ref("obj", "conversation", conversationId),
         // The contact, when the export named one. A thread with no contact id still has a subject:
         // itself. Inventing a shared placeholder would collapse unrelated threads into one person.
-        subjectRef: ref("psn", "contact", group.find((message) => message.contactId !== null)?.contactId ?? conversationId),
+        subjectRef: ref("psn", "contact", contactId ?? conversationId),
         evidenceRefs: [ref("ev", "conversation-transcript", conversationId)],
         occurredAtBand: occurredAtBand(last?.at ?? null, fromMs, toMs),
         source: ref("src", "channels", channels.join(",")),
         /*
-         * NOT a journey stage. The sampler wants a stage to stratify on and this rail has no
-         * journey projection to read one from, so the discriminator is who spoke last — the single
-         * most decisive thing about an unfinished conversation. Named `stage` because that is the
-         * field's name, opaque like every other, and never reported as a stage.
+         * The COMMERCIAL stratum when the public rail knows one, and only then the who-spoke-last
+         * proxy. That ordering is the point of the join: stratifying on outcome is what lets the
+         * draw put booked conversations next to lost ones, which is the comparison the whole
+         * diagnosis rests on. The proxy stays as the fallback for a thread whose contact has no
+         * appointment and no opportunity, where there is genuinely nothing commercial to say.
          */
-        stage: ref("stage", "last-direction", last?.direction ?? "unknown"),
-        outcome: "unknown",
+        stage: outcome === "unknown" ? ref("stage", "last-direction", last?.direction ?? "unknown") : outcomeStratumRef(outcome),
+        outcome,
         responseTimeBand: responseTimeBand(group),
         callDurationBand: callDurationBand(group),
         handoffState: "unknown",
@@ -45080,6 +45235,13 @@ function transcriptOf(thread) {
   return {
     conversationId: thread.conversationId,
     channels: thread.channels,
+    /*
+     * What commercially happened to this person, joined from the public rail. `outcomeBasis` says
+     * WHICH record decided it, because on an account that does not maintain its pipeline an
+     * opportunity-based outcome means much less than an appointment-based one.
+     */
+    outcome: thread.outcome,
+    outcomeBasis: thread.outcomeBasis,
     inboundCount: thread.inboundCount,
     outboundCount: thread.outboundCount,
     flags: thread.flags,
@@ -45105,6 +45267,25 @@ function transcriptOf(thread) {
 function transcriptSize(transcript) {
   return canonicalJson(transcript).length;
 }
+function elideToFit(transcript, limits) {
+  if (transcriptSize(transcript) <= limits.maxThreadChars) return transcript;
+  const { messages } = transcript;
+  const head = limits.threadHeadMessages;
+  const tail = limits.threadTailMessages;
+  if (messages.length <= head + tail) {
+    return { ...transcript, oversized: true };
+  }
+  const omitted = messages.length - head - tail;
+  return {
+    ...transcript,
+    elided: true,
+    messages: [
+      ...messages.slice(0, head),
+      { elidedMessages: omitted, note: `${omitted} messages omitted from the middle of this thread to fit the size budget. The opening and the ending are complete.` },
+      ...messages.slice(-tail)
+    ]
+  };
+}
 function exportRequest(capability, locationId, fromDate, toDate) {
   return {
     name: "execute_action",
@@ -45127,9 +45308,9 @@ function exportRequest(capability, locationId, fromDate, toDate) {
 }
 function pageOf(response) {
   const outer = response?.structuredContent ?? response;
-  if (!isPlainObject18(outer)) return null;
+  if (!isPlainObject19(outer)) return null;
   if (Array.isArray(outer.items)) return outer;
-  if (isPlainObject18(outer.data) && Array.isArray(outer.data.items)) return outer.data;
+  if (isPlainObject19(outer.data) && Array.isArray(outer.data.items)) return outer.data;
   return null;
 }
 function emptyResult(boundLocationId, limitations, extra = {}) {
@@ -45155,12 +45336,12 @@ function createConversationTranscriptCollector({
 } = {}) {
   const fromDate = runWindow?.fromDate;
   const toDate = runWindow?.toDate;
-  if (typeof client?.callTool !== "function" || !isPlainObject18(capability) || capability.actionId !== MESSAGE_EXPORT_ACTION || typeof boundLocationId !== "string" || boundLocationId.length === 0 || typeof fromDate !== "string" || typeof toDate !== "string" || !Number.isFinite(Date.parse(fromDate)) || !Number.isFinite(Date.parse(toDate)) || Date.parse(fromDate) >= Date.parse(toDate)) throw codedError17("CONVERSATION_TRANSCRIPTS_CONFIG_INVALID", TypeError);
+  if (typeof client?.callTool !== "function" || !isPlainObject19(capability) || capability.actionId !== MESSAGE_EXPORT_ACTION || typeof boundLocationId !== "string" || boundLocationId.length === 0 || typeof fromDate !== "string" || typeof toDate !== "string" || !Number.isFinite(Date.parse(fromDate)) || !Number.isFinite(Date.parse(toDate)) || Date.parse(fromDate) >= Date.parse(toDate)) throw codedError17("CONVERSATION_TRANSCRIPTS_CONFIG_INVALID", TypeError);
   const limits = { ...DEFAULT_BUDGETS3, ...budgets };
   const fromMs = Date.parse(fromDate);
   const toMs = Date.parse(toDate);
   return {
-    async collectTranscripts({ signal } = {}) {
+    async collectTranscripts({ signal, publicEvidence = null } = {}) {
       const limitations = /* @__PURE__ */ new Set();
       let page;
       try {
@@ -45179,7 +45360,7 @@ function createConversationTranscriptCollector({
       let unparsed = 0;
       for (const entry of raw) {
         const record2 = messageRecord(
-          isPlainObject18(entry?.record) ? entry.record : entry,
+          isPlainObject19(entry?.record) ? entry.record : entry,
           limits.maxBodyChars
         );
         if (record2 === null || record2.unreadable) {
@@ -45194,7 +45375,8 @@ function createConversationTranscriptCollector({
           messageCount: 0
         });
       }
-      const threads = threadsFromMessages(messages, { fromMs, toMs });
+      const outcomes = publicEvidence === null ? null : buildOutcomeIndex(publicEvidence);
+      const threads = threadsFromMessages(messages, { fromMs, toMs, outcomes });
       if (threads.length === 0) {
         return Object.freeze({
           schemaVersion: CONVERSATION_TRANSCRIPTS_SCHEMA,
@@ -45231,19 +45413,26 @@ function createConversationTranscriptCollector({
       const transcripts = [];
       let characters = 0;
       let dropped = 0;
+      let droppedFlagged = 0;
+      let elided = 0;
       for (const selection of ordered) {
         const thread = byRef.get(selection.interactionRef);
         if (thread === void 0) continue;
-        const transcript = transcriptOf(thread);
+        const transcript = elideToFit(transcriptOf(thread), limits);
+        if (transcript.elided === true || transcript.oversized === true) elided += 1;
         const size = transcriptSize(transcript);
-        if (characters + size > limits.maxTranscriptChars && transcripts.length > 0) {
+        if (characters + size > limits.maxTranscriptChars) {
           dropped += 1;
+          if (flagged.has(selection.interactionRef)) droppedFlagged += 1;
           continue;
         }
         characters += size;
         transcripts.push(transcript);
       }
       if (dropped > 0) limitations.add("CONVERSATION_TRANSCRIPT_CHAR_BUDGET_EXHAUSTED");
+      if (elided > 0) limitations.add("CONVERSATION_TRANSCRIPT_THREAD_ELIDED");
+      const mandatoryGuaranteeHeld = droppedFlagged === 0;
+      if (!mandatoryGuaranteeHeld) limitations.add("CONVERSATION_MANDATORY_THREAD_DROPPED");
       transcripts.sort((left, right) => byteOrder7(left.conversationId, right.conversationId));
       return Object.freeze({
         schemaVersion: CONVERSATION_TRANSCRIPTS_SCHEMA,
@@ -45255,6 +45444,26 @@ function createConversationTranscriptCollector({
         /** How many of the drawn threads the analyst is actually handed. */
         sampledCount: transcripts.length,
         droppedForSizeCount: dropped,
+        /**
+         * 🔴 The honest reconciliation of the manifest against the delivery. When this is false the
+         * sample manifest still reports its `mandatoryCount`, but the analyst did NOT receive that
+         * many flagged threads, and no sentence claiming every complaint was included may be
+         * written. The brief reads this field and changes what it says.
+         */
+        mandatoryGuaranteeHeld,
+        droppedFlaggedCount: droppedFlagged,
+        /**
+         * How well the commercial join landed, and how many threads it could say nothing about.
+         * A lane that stratifies on outcome without reading this will describe an account that
+         * simply does not record attendance as an account whose leads do not attend.
+         */
+        outcomeCoverage: outcomes === null ? { joined: false, reason: "No public evidence was available to this rail, so every conversation outcome is unknown." } : {
+          joined: true,
+          ...outcomes.coverage,
+          threadsWithOutcome: threads.filter(({ outcome }) => outcome !== "unknown").length,
+          threadsTotal: threads.length
+        },
+        elidedThreadCount: elided,
         unparsedMessageCount: unparsed,
         transcripts: Object.freeze(transcripts),
         // The full manifest, including the strata and inclusion probabilities. It carries opaque
@@ -45274,6 +45483,7 @@ var init_conversation_transcripts = __esm({
   "lib/adapters/conversation-transcripts.mjs"() {
     init_canonical();
     init_sampling();
+    init_conversation_outcomes();
     CONVERSATION_TRANSCRIPTS_SCHEMA = "1.0.0";
     MESSAGE_EXPORT_ACTION = "conversations-v3__export-messages-by-location";
     DEFAULT_BUDGETS3 = Object.freeze({
@@ -45301,7 +45511,20 @@ var init_conversation_transcripts = __esm({
        * rather than every thread being trimmed, because half a conversation teaches nothing and the
        * manifest can then state exactly how many threads the analyst did not see.
        */
-      maxTranscriptChars: 12e4
+      maxTranscriptChars: 12e4,
+      /**
+       * Characters of ONE thread. A genuinely hard per-thread bound, and it exists because the total
+       * budget alone is not one: an early implementation admitted the first thread unconditionally so
+       * that a budget smaller than a single conversation could not produce an empty result, and a
+       * single 10,000-character thread then blew a documented 1,000-character ceiling silently.
+       *
+       * A thread over this keeps its OPENING and its ENDING and elides the middle with a visible
+       * marker, because how a conversation starts and how it dies are the two things being judged.
+       */
+      maxThreadChars: 24e3,
+      /** Messages kept at each end of an elided thread. */
+      threadHeadMessages: 6,
+      threadTailMessages: 6
     });
     RESPONSE_BANDS = Object.freeze([
       ["instant", 5 * 6e4],
@@ -45312,10 +45535,10 @@ var init_conversation_transcripts = __esm({
       ["short", 60],
       ["medium", 300]
     ]);
-    OPT_OUT = /\b(?:stop|unsubscribe|opt[\s-]?out|remove me|take me off|do not (?:contact|call|text)|don'?t contact me)\b/iu;
-    COMPLAINT = /\b(?:complain(?:t|ing)?|unhappy|disappointed|refund|terrible|awful|rude|appalling|waste of (?:my )?time|scam|misleading|report you|never (?:got|received)|still waiting|no ?one (?:has )?(?:called|replied|got back))\b/iu;
+    OPT_OUT = /\b(?:stop|unsubscribe|opt[\s-]?out|remove me|take me off|delete my (?:number|details)|lose my number|leave me alone|do ?n[o']?t (?:contact|call|text|message|email|ring)|do not (?:contact|call|text|message|email|ring)|stop (?:contacting|calling|texting|messaging|emailing))\b/iu;
+    COMPLAINT = /\b(?:complain(?:t|ing)?|unhappy|dissatisfied|disappointed|refund|terrible|awful|rude|appalling|useless|shambles|disgrace(?:ful)?|furious|angry|annoyed|fed up|waste of (?:my )?time|scam|misleading|report you|trading standards|never (?:got|received|heard)|still waiting|been waiting|ignored me|ignoring me|no ?one (?:has )?(?:called|replied|responded|got back|been in touch))\b/iu;
     FAILED_STATUS = /* @__PURE__ */ new Set(["failed", "undelivered", "rejected", "error", "bounced"]);
-    UNANSWERED_CALL = /* @__PURE__ */ new Set(["no-answer", "no_answer", "noanswer", "busy", "failed", "canceled", "cancelled", "voicemail"]);
+    UNANSWERED_CALL = /* @__PURE__ */ new Set(["no-answer", "no_answer", "noanswer", "busy", "failed", "canceled", "cancelled", "voicemail", "missed"]);
   }
 });
 
@@ -46188,14 +46411,14 @@ var init_trusted_public_policy = __esm({
 });
 
 // lib/adapters/mcp-transport.mjs
-function isPlainObject19(value) {
+function isPlainObject20(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function validateCredentialRef(reference) {
   if (reference === null) return null;
-  if (!isPlainObject19(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject20(reference)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(reference).sort();
   if (reference.kind === "environment" && keys.length === 2 && keys[0] === "kind" && keys[1] === "name" && typeof reference.name === "string" && /^[A-Z][A-Z0-9_]{0,127}$/u.test(reference.name)) return Object.freeze({ kind: reference.kind, name: reference.name });
   if (reference.kind === "secret-store" && keys.length === 4 && keys[0] === "kind" && keys[1] === "provenance" && keys[2] === "provider" && keys[3] === "reference" && typeof reference.provider === "string" && Object.hasOwn(SECRET_STORE_REGISTRY, reference.provider) && reference.provenance === SECRET_STORE_REGISTRY[reference.provider].provenance && typeof reference.reference === "string" && SECRET_STORE_REGISTRY[reference.provider].locator.test(reference.reference) && !RAW_CREDENTIAL_SHAPE.test(reference.reference) && !/authorization|bearer|cookie|password|eyJ[a-zA-Z0-9_-]*\.|(?:^|[/:])(?:ghp|sk)_[a-zA-Z0-9_-]{8,}/iu.test(
@@ -46209,7 +46432,7 @@ function validateCredentialRef(reference) {
   throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
 }
 function validateProviderConfig(config2) {
-  if (!isPlainObject19(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
+  if (!isPlainObject20(config2)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   const keys = Object.keys(config2).sort();
   if (keys.length !== 6 || keys[0] !== "capabilityManifestHash" || keys[1] !== "credentialRef" || keys[2] !== "expectedLocationId" || keys[3] !== "providerId" || keys[4] !== "publicCatalogSnapshotHash" || keys[5] !== "publicReadAllowlistHash" || keys.some((key) => FORBIDDEN_CONFIG_KEY.test(key) && key !== "credentialRef") || typeof config2.providerId !== "string" || !SAFE_ID.test(config2.providerId) || typeof config2.expectedLocationId !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !SHA256.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !SHA256.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !SHA256.test(config2.publicReadAllowlistHash)) throw codedError("PROVIDER_CONFIG_INVALID", TypeError);
   return Object.freeze({
@@ -46250,7 +46473,7 @@ function collectLocationIndicators2(value, indicators = [], stack = /* @__PURE__
   }
 }
 function validateTransport(transport) {
-  if (!isPlainObject19(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
+  if (!isPlainObject20(transport)) throw codedError("MCP_TRANSPORT_INVALID", TypeError);
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).some((key) => !["connect", "fetch", "kind", "url"].includes(key))) {
       throw codedError("MCP_TRANSPORT_INVALID", TypeError);
@@ -46374,10 +46597,10 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
     publicCatalogSnapshotHash: trustedPolicy.snapshotHash,
     publicReadAllowlistHash: trustedPolicy.allowlistHash,
     async callTool(request, options) {
-      if (!isPlainObject19(request) || !ALLOWED_TOOLS.has(request.name)) {
+      if (!isPlainObject20(request) || !ALLOWED_TOOLS.has(request.name)) {
         throw codedError("TOOL_NOT_AVAILABLE");
       }
-      if (!isPlainObject19(request.arguments) || containsForbiddenArgument(request.arguments)) {
+      if (!isPlainObject20(request.arguments) || containsForbiddenArgument(request.arguments)) {
         throw codedError("MUTATION_ARGUMENT_NOT_ALLOWED");
       }
       const policy = request.arguments.policy;
@@ -46387,7 +46610,7 @@ async function connectMcp({ transport, providerConfig, credentialResolver } = {}
         throw codedError("ACTION_NOT_ALLOWED");
       }
       if (request.arguments.action !== policy.actionId || policy.providerId !== config2.providerId || policy.capabilityManifestHash !== config2.capabilityManifestHash || policy.sourceSnapshotHash !== config2.publicCatalogSnapshotHash || policy.allowlistHash !== config2.publicReadAllowlistHash) throw codedError("ACTION_NOT_ALLOWED");
-      if (!isPlainObject19(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
+      if (!isPlainObject20(request.arguments.params) || request.arguments.params.locationId !== config2.expectedLocationId || collectLocationIndicators2(request.arguments.params).some(
         (locationId) => locationId !== config2.expectedLocationId
       )) throw codedError("LOCATION_MISMATCH");
       try {
@@ -46444,16 +46667,16 @@ var init_mcp_transport = __esm({
 });
 
 // lib/adapters/public-ghl.mjs
-function isPlainObject20(value) {
+function isPlainObject21(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
 }
 function parseToolResult(response) {
   let value = response;
-  if (isPlainObject20(response) && isPlainObject20(response.structuredContent)) {
+  if (isPlainObject21(response) && isPlainObject21(response.structuredContent)) {
     value = response.structuredContent;
-  } else if (isPlainObject20(response) && Array.isArray(response.content)) {
+  } else if (isPlainObject21(response) && Array.isArray(response.content)) {
     const text3 = response.content.find((entry) => entry?.type === "text")?.text;
     if (typeof text3 !== "string") throw codedError("PUBLIC_RESPONSE_INVALID");
     try {
@@ -46462,7 +46685,7 @@ function parseToolResult(response) {
       throw codedError("PUBLIC_RESPONSE_INVALID");
     }
   }
-  if (!isPlainObject20(value) || !Array.isArray(value.items) || !isPlainObject20(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
+  if (!isPlainObject21(value) || !Array.isArray(value.items) || !isPlainObject21(value.page) || typeof value.page.reportedCount !== "number" || !Number.isInteger(value.page.reportedCount) || value.page.reportedCount < 0 || typeof value.page.complete !== "boolean" || typeof value.page.truncated !== "boolean" || !(value.page.cursor === null || typeof value.page.cursor === "string") || !(value.page.nextCursor === null || typeof value.page.nextCursor === "string")) throw codedError("PUBLIC_RESPONSE_INVALID");
   return cloneJson(value, "PUBLIC_RESPONSE_INVALID");
 }
 function withRequestTimeout(invoke, timeoutMs, timeoutReason, runtime, externalSignal) {
@@ -46516,7 +46739,7 @@ function startTime(runtime) {
   return typeof runtime.now === "function" ? runtime.now() : Date.now();
 }
 function normalizeCapability(capability, allowlist, allowlistHash, client) {
-  if (!isPlainObject20(capability) || typeof capability.actionId !== "string") {
+  if (!isPlainObject21(capability) || typeof capability.actionId !== "string") {
     throw codedError("ACTION_NOT_ALLOWED");
   }
   const listed = allowlist.actions.find(({ actionId }) => actionId === capability.actionId);
@@ -46593,7 +46816,7 @@ function normalizeRawPageSink(rawPageSink) {
   });
 }
 function validateSealedPage(sealed, payloadHash) {
-  if (!isPlainObject20(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
+  if (!isPlainObject21(sealed) || Object.keys(sealed).sort().join(",") !== "opaqueRef,payloadHash" || typeof sealed.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(sealed.opaqueRef) || sealed.payloadHash !== payloadHash) throw codedError("RAW_PAGE_SEAL_FAILED");
   return Object.freeze({
     opaqueRef: sealed.opaqueRef,
     payloadHash: sealed.payloadHash
@@ -46628,7 +46851,7 @@ function validateCheckpointArtifact(artifact, index, expectedCursor, reportedCou
     "reportedCount",
     "responseBytes"
   ];
-  if (!isPlainObject20(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject21(artifact) || canonicalJson(Object.keys(artifact).sort()) !== canonicalJson(keys) || artifact.pageIndex !== index + 1 || artifact.cursor !== expectedCursor || !(artifact.nextCursor === null || typeof artifact.nextCursor === "string") || typeof artifact.opaqueRef !== "string" || !/^raw_[a-f0-9]{32}$/u.test(artifact.opaqueRef) || typeof artifact.artifactHash !== "string" || !SHA2562.test(artifact.artifactHash) || !Number.isInteger(artifact.collectedCount) || artifact.collectedCount < 0 || artifact.reportedCount !== reportedCount || !Number.isInteger(artifact.responseBytes) || artifact.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   return artifact.nextCursor;
 }
 function validateResumeCheckpoint(checkpoint, {
@@ -46657,7 +46880,7 @@ function validateResumeCheckpoint(checkpoint, {
     "scopeHash",
     "source"
   ];
-  if (!isPlainObject20(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
+  if (!isPlainObject21(checkpoint) || canonicalJson(Object.keys(checkpoint).sort()) !== canonicalJson(keys) || checkpoint.schemaVersion !== "1.0.0" || checkpoint.source !== "public_ghl" || checkpoint.operationId !== action.operationId || checkpoint.boundLocationId !== expectedLocationId || checkpoint.resumeCursor !== cursor || checkpoint.initialCursor !== null || checkpoint.scopeHash !== scopeHash || checkpoint.inputHash !== scopeHash || canonicalJson(checkpoint.requestedWindow) !== canonicalJson(requestedWindow) || !Array.isArray(checkpoint.pageArtifacts) || checkpoint.pageArtifacts.length === 0 || checkpoint.pageArtifactsHash !== sha256(checkpoint.pageArtifacts) || checkpoint.pageCount !== checkpoint.pageArtifacts.length || !Number.isInteger(checkpoint.collectedCount) || checkpoint.collectedCount < 0 || !Number.isInteger(checkpoint.reportedCount) || checkpoint.reportedCount < checkpoint.collectedCount || !Number.isInteger(checkpoint.responseBytes) || checkpoint.responseBytes < 0) throw codedError("RESUME_CHECKPOINT_INVALID");
   let appliedWindow;
   try {
     appliedWindow = validateCollectionWindow(
@@ -48836,7 +49059,7 @@ var init_evidence_graph = __esm({
 function codedError20(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject21(value) {
+function isPlainObject22(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
   );
@@ -48854,7 +49077,7 @@ function byteCompare(left, right) {
 function readPath(record2, path) {
   let current = record2;
   for (const key of path.split(".")) {
-    if (!isPlainObject21(current) || !Object.hasOwn(current, key)) return void 0;
+    if (!isPlainObject22(current) || !Object.hasOwn(current, key)) return void 0;
     current = current[key];
   }
   return current;
@@ -49053,7 +49276,7 @@ function orderingKey(value, seen = /* @__PURE__ */ new WeakSet()) {
   }
 }
 function envelopeOrderingKey(collection) {
-  if (!isPlainObject21(collection)) return orderingKey(collection);
+  if (!isPlainObject22(collection)) return orderingKey(collection);
   const rows = Array.isArray(collection.items) ? collection.items : [];
   const withoutRows = Object.fromEntries(
     Object.entries(collection).filter(([key]) => key !== "items")
@@ -49071,22 +49294,22 @@ function talliedAnnotations(counter) {
   return [...counter.entries()].sort(([left], [right]) => byteCompare(left, right)).map(([code, count]) => ({ code, count }));
 }
 function assertInput({ collections, context, profile, projection }) {
-  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject21(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject21(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject21(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject21(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError20("PROJECTION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject22(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject22(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject22(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject22(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError20("PROJECTION_INPUT_INVALID", TypeError);
 }
 function assertWindowShape(window) {
-  if (!isPlainObject21(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (!isPlainObject22(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
 }
 function copyWindow(window) {
   return { ...window };
 }
 function assertSourceCollection(collection, locationId) {
-  if (!isPlainObject21(collection)) {
+  if (!isPlainObject22(collection)) {
     throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   }
   if (collection.boundLocationId !== locationId) {
     throw codedError20("PROJECTION_LOCATION_MISMATCH");
   }
-  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject21(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject22(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   assertWindowShape(collection.requestedWindow);
   assertWindowShape(collection.appliedWindow);
   if (Date.parse(collection.appliedWindow.from) < Date.parse(collection.requestedWindow.from) || Date.parse(collection.appliedWindow.to) > Date.parse(collection.requestedWindow.to)) throw codedError20("PROJECTION_WINDOW_MISMATCH");
@@ -49115,7 +49338,7 @@ function resolveJourneyInstances(profile, projection) {
       if (typeof entity?.recordType !== "string" || entity.recordType.length === 0) {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject21(entity.when) || typeof entity.when.kind !== "string") {
+      if (!isPlainObject22(entity.when) || typeof entity.when.kind !== "string") {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
     }
@@ -49127,7 +49350,7 @@ function resolveJourneyInstances(profile, projection) {
       if (!Array.isArray(event.eventTimeField) || event.eventTimeField.length === 0) {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject21(event.when) || typeof event.when.kind !== "string") {
+      if (!isPlainObject22(event.when) || typeof event.when.kind !== "string") {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
       if (Object.hasOwn(event, "revenueFrom") && !Array.isArray(event.revenueFrom)) {
@@ -49168,7 +49391,7 @@ function projectJourneyEvents({ collections, context, profile, projection } = {}
     const entities = plan.spec.entities ?? [];
     const events = plan.spec.events ?? [];
     for (const record2 of plan.collection.items) {
-      if (!isPlainObject21(record2)) {
+      if (!isPlainObject22(record2)) {
         tally2(plan.suppressed, REASON_NOT_AN_OBJECT);
         continue;
       }
@@ -50099,7 +50322,7 @@ var init_metrics = __esm({
 function codedError22(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject22(value) {
+function isPlainObject23(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
@@ -50137,10 +50360,10 @@ function assertLocation(value, locationId, seen = /* @__PURE__ */ new WeakSet())
   }
 }
 function assertWindow(window, code) {
-  if (!isPlainObject22(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError22(code, TypeError);
+  if (!isPlainObject23(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError22(code, TypeError);
 }
 function validateCollection(collection, locationId) {
-  if (!isPlainObject22(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject22(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError22(
+  if (!isPlainObject23(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject23(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError22(
     collection?.boundLocationId !== locationId ? "EVIDENCE_LOCATION_MISMATCH" : "EVIDENCE_COLLECTION_INVALID",
     TypeError
   );
@@ -50153,7 +50376,7 @@ function validateCollection(collection, locationId) {
   }
 }
 function normalizeItem(item, provenance, occurrenceOrdinal) {
-  if (!isPlainObject22(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
+  if (!isPlainObject23(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
     throw codedError22("EVIDENCE_RECORD_INVALID", TypeError);
   }
   if (Object.hasOwn(item, "eventTime") && !isCanonicalTimestamp2(item.eventTime) || Object.hasOwn(item, "evidenceRef") && (typeof item.evidenceRef !== "string" || !/^ev_[a-f0-9]{16,64}$/u.test(item.evidenceRef)) || Object.hasOwn(item, "definitionHash") && !/^[a-f0-9]{64}$/u.test(item.definitionHash) || Object.hasOwn(item, "effectiveDefinitionHash") && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash) || Object.hasOwn(item, "cohortInstanceRef") && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef) || Object.hasOwn(item, "revenueAmount") && (typeof item.revenueAmount !== "number" || !Number.isFinite(item.revenueAmount) || item.revenueAmount < 0)) throw codedError22("EVIDENCE_RECORD_INVALID", TypeError);
@@ -50209,7 +50432,7 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
   return canonical;
 }
 function normalizeEvidence(records, context) {
-  if (!Array.isArray(records) || records.length === 0 || !isPlainObject22(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError22("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(records) || records.length === 0 || !isPlainObject23(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError22("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
   const pending = [];
   for (const collection of records) {
     validateCollection(collection, context.locationId);
@@ -50273,7 +50496,7 @@ var init_normalize = __esm({
 function codedError23(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject23(value) {
+function isPlainObject24(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -50281,7 +50504,7 @@ function isPlainObject23(value) {
 function readPath2(row, path) {
   let current = row;
   for (const segment of path.split(".")) {
-    if (!isPlainObject23(current)) return void 0;
+    if (!isPlainObject24(current)) return void 0;
     current = current[segment];
   }
   return current;
@@ -50296,7 +50519,7 @@ function isPresent(value, { requirePositiveNumber = false } = {}) {
   }
   if (typeof value === "boolean") return !requirePositiveNumber;
   if (Array.isArray(value)) return value.length > 0;
-  if (isPlainObject23(value)) return Object.keys(value).length > 0;
+  if (isPlainObject24(value)) return Object.keys(value).length > 0;
   return false;
 }
 function bucketFor(value) {
@@ -51221,7 +51444,7 @@ import {
 function codedError27(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject24(value) {
+function isPlainObject25(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -51249,7 +51472,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync12(descriptor, "utf8"));
-    if (!isPlainObject24(parsed)) throw new Error();
+    if (!isPlainObject25(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError27(code);
@@ -51258,7 +51481,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject24(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject24(config2.frozenInputs) || !isPlainObject24(config2.context) || !isPlainObject24(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject25(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject25(config2.frozenInputs) || !isPlainObject25(config2.context) || !isPlainObject25(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -51266,7 +51489,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject24(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject24(rail.capabilityProofIndex) || !isPlainObject24(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject24(transport.responses) || !isPlainObject24(transport.toolsList))) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject25(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject25(rail.capabilityProofIndex) || !isPlainObject25(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject25(transport.responses) || !isPlainObject25(transport.toolsList))) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -51296,7 +51519,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
     throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject24(frozenInputs)) fail2();
+  if (!isPlainObject25(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -51366,7 +51589,7 @@ function assertSealDocumentShape(document) {
   const fail2 = () => {
     throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject24(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject24(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject25(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject25(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -51412,7 +51635,7 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject24(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  if (!isPlainObject25(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve6(projectRoot);
   const pathname = resolve6(project, declaration.relativePath);
   if (!isWithin3(project, pathname)) fail2();
@@ -51470,7 +51693,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject24(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject25(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve6(projectRoot);
   const pathname = resolve6(project, descriptor.relativePath);
   if (!isWithin3(project, pathname)) {
@@ -51671,7 +51894,7 @@ function publicConfigError() {
   throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject24(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject25(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -51691,7 +51914,7 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 function validatePublicInternalAudit(value) {
-  if (!isPlainObject24(value)) publicConfigError();
+  if (!isPlainObject25(value)) publicConfigError();
   if (Object.keys(value).some((key) => !PUBLIC_INTERNAL_AUDIT_KEYS.includes(key))) {
     publicConfigError();
   }
@@ -51710,7 +51933,7 @@ function validatePublicInternalAudit(value) {
     if (!Array.isArray(value.runtimeWorkflowIds) || value.runtimeWorkflowIds.some((id) => typeof id !== "string" || id.length === 0)) publicConfigError();
   }
   if (Object.hasOwn(value, "budgets")) {
-    if (!isPlainObject24(value.budgets)) publicConfigError();
+    if (!isPlainObject25(value.budgets)) publicConfigError();
     for (const [key, limit] of Object.entries(value.budgets)) {
       if (!Object.hasOwn(DEFAULT_BUDGETS, key)) publicConfigError();
       if (!Number.isSafeInteger(limit) || limit < 1) publicConfigError();
@@ -51722,9 +51945,9 @@ function validatePublicInternalAudit(value) {
   if (Object.hasOwn(value, "conversationTranscripts") && value.conversationTranscripts !== true && value.conversationTranscripts !== false) publicConfigError();
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject24(config2)) publicConfigError();
+  if (!isPlainObject25(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject24(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject24(config2.frozenInputs) || !isPlainObject24(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject25(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject25(config2.frozenInputs) || !isPlainObject25(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
   if (Object.hasOwn(config2, "internalAudit")) validatePublicInternalAudit(config2.internalAudit);
   if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
@@ -51732,7 +51955,7 @@ function validatePublicConfig(config2) {
   }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject24(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject25(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -51760,7 +51983,7 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject24(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject25(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve6(projectRoot);
   const pathname = resolve6(project, descriptor.relativePath);
   if (!isWithin3(project, pathname)) {
@@ -52051,7 +52274,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject24(sealed)) return null;
+    if (!isPlainObject25(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -52170,13 +52393,13 @@ function buildConversationTranscriptRail({
   });
   if (session === null) return null;
   return {
-    async collectTranscripts({ window, signal }) {
+    async collectTranscripts({ window, publicEvidence, signal }) {
       return withCopySession(session, (client) => createConversationTranscriptCollector({
         client,
         capability: session.capability,
         boundLocationId: config2.expectedLocationId,
         window: { fromDate: window?.from, toDate: window?.to }
-      }).collectTranscripts({ signal }));
+      }).collectTranscripts({ signal, publicEvidence }));
     }
   };
 }
@@ -52188,7 +52411,7 @@ function buildInternalAuditAdapter({
   transcriptRail = null,
   runtime
 }) {
-  if (!isPlainObject24(internalAudit)) return null;
+  if (!isPlainObject25(internalAudit)) return null;
   const connect = connectOverride ?? createInternalAuditConnect({
     serverPath: internalAudit.transport.serverPath,
     tokenFilePath: internalAudit.transport.tokenFilePath
@@ -52214,11 +52437,14 @@ function buildInternalAuditAdapter({
         }
       }
       let withTranscripts = evidence;
-      if (transcriptRail !== null && isPlainObject24(evidence)) {
+      if (transcriptRail !== null && isPlainObject25(evidence)) {
         let conversationTranscripts;
         try {
           conversationTranscripts = await transcriptRail.collectTranscripts({
             window: request?.window,
+            // The JOIN input. Already collected and already in hand at this phase; see
+            // `lib/conversation-outcomes.mjs` for why an outcome is read from it and never derived.
+            publicEvidence: request?.publicEvidence ?? null,
             signal: request?.signal
           });
         } catch (error51) {
