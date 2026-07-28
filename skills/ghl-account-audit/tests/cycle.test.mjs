@@ -29,6 +29,7 @@ import {
   readLaneAnswers,
   renderBacklog,
   renderInvestigation,
+  renderSolutionPackage,
   runInvestigation,
 } from '../lib/cycle.mjs';
 import { parseAuditCliArgs, runAuditCli } from '../cli/audit.mjs';
@@ -598,4 +599,125 @@ test('a run id that could climb out of the audit root is refused', () => {
   for (const runId of ['../escape', 'a/b', '', '.']) {
     assert.throws(() => briefsDirectory(paths, runId), /CYCLE_RUN_ID_INVALID/u, runId);
   }
+});
+
+// ---- the package points at the rewrite that already exists -----------------
+
+/**
+ * THE GAP THIS CLOSES.
+ *
+ * A package said "the text at the highest-intent moment leaves out the rebooking link" while the
+ * stage-2 review of that same workflow, written earlier in the SAME run, already held all ten
+ * messages rewritten in full. They sat in two directories with nothing connecting them, so whoever
+ * picked up the package was told to rewrite copy that was already written.
+ */
+function causeAnchoredTo(anchors) {
+  return {
+    causeId: 'c_1',
+    confidence: 'C2',
+    corroboratingLanes: ['lead_journey_kpi'],
+    anchors,
+    findings: [{
+      lane: 'lead_journey_kpi',
+      findingId: 'f1',
+      title: 'The recovery sequence keeps messaging people who rebooked',
+      fix: 'Stop the sequence on reply.',
+      competingExplanations: [],
+      discriminatingTest: { check: 'c', supportsIf: 's', refutesIf: 'r' },
+    }],
+  };
+}
+
+const REVIEW_INDEX = [
+  { kind: 'workflow', object: '05 No-Show Recovery', slug: '05-no-show-recovery', answerFile: 'reviews/05-no-show-recovery.md', messageCount: 10 },
+  { kind: 'workflow', object: '08 Long Term Nurture', slug: '08-long-term-nurture', answerFile: 'reviews/08-long-term-nurture.md', messageCount: 12 },
+  { kind: 'agent', object: 'voice_ai Arthur', slug: 'voice-ai-arthur', answerFile: 'reviews/voice-ai-arthur.md', messageCount: null },
+];
+
+test('a package names the review holding the rewritten copy for its own workflows', () => {
+  const page = renderSolutionPackage({
+    index: { runId: RUN, locationId: LOCATION },
+    cause: causeAnchoredTo(['workflow:05 No-Show Recovery', 'kpi:enquiry_to_contacted', 'stage:conversation']),
+    findings: [],
+    reviews: REVIEW_INDEX,
+  });
+
+  assert.match(page, /The rewritten copy is already written/u);
+  assert.match(page, /10 messages reviewed/u);
+  assert.match(page, /reviews\/05-no-show-recovery\.md/u);
+  assert.match(page, /Do not rewrite this copy from scratch/u);
+  // Only ITS OWN workflows. A package must never advertise a rewrite for something it does not touch.
+  assert.ok(!page.includes('08 Long Term Nurture'), 'an unrelated workflow leaked into the package');
+});
+
+test('a workflow nobody reviewed is named as unreviewed, never left silent', () => {
+  /*
+   * Silence would read as "there is no rewrite for this". The truth is "no expert looked at this
+   * workflow", and those two need completely different action.
+   */
+  const page = renderSolutionPackage({
+    index: { runId: RUN, locationId: LOCATION },
+    cause: causeAnchoredTo(['workflow:05 No-Show Recovery', 'workflow:12 Tagger']),
+    findings: [],
+    reviews: REVIEW_INDEX,
+  });
+  assert.match(page, /NOT reviewed, so no replacement copy exists/u);
+  assert.match(page, /- 12 Tagger/u);
+});
+
+test('a problem about no workflow at all gets no rewrite section', () => {
+  const page = renderSolutionPackage({
+    index: { runId: RUN, locationId: LOCATION },
+    cause: causeAnchoredTo(['kpi:enquiry_to_contacted']),
+    findings: [],
+    reviews: REVIEW_INDEX,
+  });
+  assert.ok(!page.includes('The rewritten copy'), 'an empty section was written for a problem with no workflows');
+});
+
+test('the whole chain wires the reviews into the packages, end to end', () => {
+  const { paths } = project();
+  throughStageTwo(paths, { review: 'Message 1 rewritten in full: here is the replacement.' });
+  const summary = runInvestigation({
+    paths,
+    runId: RUN,
+    answers: answers({
+      lead_journey_kpi: [finding('lead_journey_kpi', 'nurture_never_stops', {
+        anchors: { kpiEdgeIds: ['enquiry_to_contacted'], workflowNames: ['08 Long Term Nurture'], journeyStages: [] },
+      })],
+      workflow_config_runtime: [],
+    }),
+  });
+
+  const record = JSON.parse(readFileSync(join(summary.directory, 'investigation.json'), 'utf8'));
+  const page = readFileSync(
+    join(summary.directory, 'packages', `${record.investigation.causes[0].causeId}.md`),
+    'utf8',
+  );
+  assert.match(page, /The rewritten copy is already written/u);
+  assert.match(page, /08 Long Term Nurture/u);
+});
+
+test('a review that was asked for but never written is not advertised as copy to paste', () => {
+  const { paths } = project();
+  prepareAnalysisArtifacts({ paths, runId: RUN, measurement, internal });
+  // Stage 2 was prepared, so the index lists a review, but no expert ever answered it.
+  ingestAccountMap({ paths, runId: RUN, map: accountMap() });
+  const summary = runInvestigation({
+    paths,
+    runId: RUN,
+    answers: answers({
+      lead_journey_kpi: [finding('lead_journey_kpi', 'unwritten', {
+        anchors: { kpiEdgeIds: ['enquiry_to_contacted'], workflowNames: ['08 Long Term Nurture'], journeyStages: [] },
+      })],
+      workflow_config_runtime: [],
+    }),
+  });
+  const record = JSON.parse(readFileSync(join(summary.directory, 'investigation.json'), 'utf8'));
+  const page = readFileSync(
+    join(summary.directory, 'packages', `${record.investigation.causes[0].causeId}.md`),
+    'utf8',
+  );
+  assert.match(page, /NOT reviewed/u);
+  assert.ok(!page.includes('Do not rewrite this copy from scratch'));
 });

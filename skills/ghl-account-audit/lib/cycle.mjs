@@ -412,6 +412,32 @@ export function readAnalystIndex({ paths, runId } = {}) {
 }
 
 /**
+ * The per-object reviews that EXIST ON DISK, so a package can point at real files.
+ *
+ * Ground truth is the file, not the index. The index records what was asked for, and a review that
+ * was asked for and never written would otherwise be advertised in a solution package as copy
+ * somebody could go and paste. Returns empty for a run that never reached stage 2, which is a
+ * legitimate state and not an error.
+ */
+function availableReviews(directory) {
+  const pathname = join(directory, 'reviews.json');
+  if (!existsSync(pathname)) return [];
+  let record;
+  try {
+    record = readJsonFile(pathname, 'CYCLE_REVIEW_INDEX_UNREADABLE');
+  } catch {
+    return [];
+  }
+  return (record.reviews ?? []).filter((review) => {
+    const answer = join(directory, review.answerFile ?? '');
+    return typeof review.answerFile === 'string'
+      && existsSync(answer)
+      && lstatSync(answer).isFile()
+      && readFileSync(answer, 'utf8').trim().length > 0;
+  });
+}
+
+/**
  * STEP 3a. Turn three model answers into evidence, or refuse them.
  *
  * `answers` is `{ <lane>: [findings] }`. A lane that found nothing must say so with an empty array:
@@ -691,8 +717,39 @@ export function renderBacklog({ index, investigation }) {
  * emit. Until it is, this package is for a human to implement and the file says so rather than
  * implying a machine could apply it.
  */
-export function renderSolutionPackage({ index, cause, findings }) {
+/**
+ * THE REWRITES THIS PROBLEM ALREADY HAS, WHICH NOBODY WAS BEING TOLD ABOUT.
+ *
+ * A package says "the text at the highest-intent moment leaves out the rebooking link". The stage-2
+ * review of that same workflow, written earlier in the same run, already contains all ten messages
+ * rewritten in full and ready to paste. They lived in two directories with nothing connecting them,
+ * so whoever picked up the package was told to rewrite copy that was already written.
+ *
+ * Matched on the workflow names the cause is anchored to, which is the same key `groupByAnchor` uses,
+ * so a package can never claim a rewrite for a workflow the problem does not actually touch.
+ *
+ * LINKED, NOT PASTED. One review of a twelve-message sequence runs several pages; inlining three of
+ * them turns a one-page plan into something nobody reads to the end.
+ */
+function rewritesFor({ cause, reviews }) {
+  const named = (cause.anchors ?? [])
+    .filter((anchor) => anchor.startsWith('workflow:'))
+    .map((anchor) => anchor.slice('workflow:'.length));
+  const byWorkflow = new Map(
+    reviews.filter(({ kind }) => kind === 'workflow').map((review) => [review.object, review]),
+  );
+  return {
+    named,
+    available: named.map((name) => byWorkflow.get(name)).filter((review) => review !== undefined),
+    // Named by the finding but never reviewed. Silence here would read as "there is no rewrite for
+    // this", when the truth is "no expert looked at this workflow", and those need different action.
+    unreviewed: named.filter((name) => !byWorkflow.has(name)).sort(),
+  };
+}
+
+export function renderSolutionPackage({ index, cause, findings, reviews = [] }) {
   const byId = new Map(findings.map((finding) => [`${finding.lane}:${finding.findingId}`, finding]));
+  const rewrites = rewritesFor({ cause, reviews });
   const lines = [
     `# Solution package: ${cause.findings[0].title}`,
     '',
@@ -730,6 +787,25 @@ export function renderSolutionPackage({ index, cause, findings }) {
       .filter((alternative) => alternative.materiality === 'MATERIAL' && alternative.addressed !== true)
       .map(({ explanation }) => `Unresolved: ${explanation}`))),
     '',
+    ...(rewrites.named.length === 0 ? [] : [
+      '## The rewritten copy is already written',
+      '',
+      ...(rewrites.available.length === 0 ? [] : [
+        'Each of these was reviewed on its own by an expert who read every message in it and wrote',
+        'the replacements in full. Do not rewrite this copy from scratch: open these and start there.',
+        '',
+        ...rewrites.available.map(({ object, answerFile, messageCount }) => (
+          `- **${object}** — ${typeof messageCount === 'number' ? `${plural(messageCount, 'message', 'messages')} reviewed` : 'reviewed'}`
+            + `, replacements in \`private/briefs/${index.runId}/${answerFile}\``
+        )),
+        '',
+      ]),
+      ...(rewrites.unreviewed.length === 0 ? [] : [
+        `NOT reviewed, so no replacement copy exists for ${rewrites.unreviewed.length === 1 ? 'this one' : 'these'}:`,
+        ...rewrites.unreviewed.map((name) => `- ${name}`),
+        '',
+      ]),
+    ]),
   ];
   return lines.join('\n');
 }
@@ -748,6 +824,12 @@ export function runInvestigation({ paths, runId, answers } = {}) {
    */
   const analysts = readAnalystRecord(briefsDir);
   const index = analysts === null ? briefsIndex : { ...briefsIndex, ...analysts, runId };
+  /*
+   * Which per-object reviews actually LANDED, checked against the disk rather than trusted from the
+   * index. A review that was asked for and never written must not be advertised in a package as
+   * copy somebody can go and paste.
+   */
+  const reviews = availableReviews(briefsDir);
   const { accepted, rejected } = ingestLaneFindings({ answers });
   const investigation = investigateRootCause({
     laneAnalyses: accepted,
@@ -780,7 +862,7 @@ export function runInvestigation({ paths, runId, answers } = {}) {
   for (const cause of investigation.causes) {
     writeOnce(
       join(packages, `${cause.causeId}.md`),
-      renderSolutionPackage({ index, cause, findings }),
+      renderSolutionPackage({ index, cause, findings, reviews }),
     );
   }
 
