@@ -173,7 +173,8 @@ test('the map has nowhere to put a diagnosis, so one cannot travel downstream', 
   const { map } = validateAccountMap(opinionated, { briefs: briefsFor() });
   assert.ok(!('findings' in map));
   assert.deepEqual(Object.keys(map).sort(), [
-    'agents', 'gaps', 'journey', 'moneyPath', 'schemaVersion', 'uncertainties', 'workflows',
+    'agents', 'gaps', 'journey', 'journeySteps', 'moneyPath', 'schemaVersion', 'uncertainties',
+    'workflows',
   ]);
 });
 

@@ -19,6 +19,9 @@ will read every message in full. Your job is to tell them where they are standin
 
 ## Read in this order
 
+`journeySteps` is what a person reads to understand the account, so write it as steps and not as a
+paragraph broken up. One line, one thing that happens, in the order it happens.
+
 **1. `situation`.** What the business sells, who it sells to, and what its own pipeline means. Read
 `knownDataCaveats` before any number, or you will explain a measurement artefact as a business fact.
 
@@ -68,7 +71,10 @@ A single JSON object and nothing else. No prose before or after it, no code fenc
 
 ```json
 {
-  "journey": "One paragraph: the path a lead takes through this business, in order, in plain words.",
+  "journey": "TWO SENTENCES MAXIMUM. What this business sells and to whom. Not the workflow list.",
+  "journeySteps": [
+    "One short line per step of the journey, in order, each readable on its own. Name the workflow or agent that does it. Aim for 8 to 14 steps and keep each under about 25 words."
+  ],
   "moneyPath": ["workflow names, in the order a lead meets them"],
   "workflows": [
     {

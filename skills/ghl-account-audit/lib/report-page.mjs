@@ -188,6 +188,69 @@ function collisionDiagram(collisions) {
 }
 
 /**
+ * A WALL OF PROSE INTO STEPS, when the map did not supply them.
+ *
+ * The first live run returned the whole journey as one 300-word paragraph and it was the least
+ * readable thing in the report: a sequence written as prose is a sequence the reader has to parse by
+ * hand. `journeySteps` fixes it going forward, and this recovers older maps rather than leaving them
+ * unreadable.
+ *
+ * Split on a full stop followed by a capital, never on any full stop, because this text is full of
+ * things like `07.5 Contract Signed` and `04 Showed Up`. A fragment shorter than a clause is glued back
+ * onto the previous one, so a stray abbreviation cannot produce a one-word bullet.
+ */
+function asSteps(paragraph) {
+  const pieces = String(paragraph ?? '').split(/(?<=\.)\s+(?=[A-Z])/u).map((piece) => piece.trim()).filter(Boolean);
+  const steps = [];
+  for (const piece of pieces) {
+    if (steps.length > 0 && piece.length < 45) steps[steps.length - 1] += ` ${piece}`;
+    else steps.push(piece);
+  }
+  return steps;
+}
+
+/**
+ * THE DELIVERY SIDE, which the six questions do not reach.
+ *
+ * All six are about a lead becoming a customer, so a report built only around them says nothing about
+ * what happens to a client after they sign, and on this account that is eleven of twenty-seven
+ * workflows. The owner asked for it explicitly and he is right: the money is only marked at the end of
+ * that rail.
+ *
+ * Findings appear here when they anchor to a workflow the map gave the `delivery` role, which is the
+ * same by-anchor attachment the questions use. No new judgement, no model call.
+ */
+function deliverySection({ map, causes, rankOf, reviews }) {
+  const delivery = (map?.workflows ?? []).filter((entry) => entry.role === 'delivery');
+  if (delivery.length === 0) return '';
+  const names = new Set(delivery.map((entry) => entry.name));
+  const related = causes.filter((cause) => cause.anchors.some((anchor) => anchor.startsWith('workflow:') && names.has(anchor.slice('workflow:'.length))));
+  const reviewed = reviews.filter((review) => review.kind === 'workflow' && names.has(review.object));
+  return `
+  <p>${delivery.length} of the account's workflows serve someone who has already signed, and
+  ${reviewed.length} of them were reviewed one by one. The six questions above are all about a lead
+  becoming a customer, so none of them covers this rail, and the money is only marked at the end of it.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Workflow</th><th>What it does</th><th class="num">Reviewed</th></tr></thead>
+      <tbody>${delivery.map((entry) => {
+    const review = reviewed.find((candidate) => candidate.object === entry.name);
+    return `<tr><td class="mono">${escapeHtml(entry.name)}</td><td>${escapeHtml(entry.job)}</td>
+      <td class="num">${review ? `${review.messageCount ?? 0} messages` : '<span class="muted">no arc to review</span>'}</td></tr>`;
+  }).join('')}</tbody>
+    </table>
+  </div>
+  ${related.length === 0
+    ? '<p class="muted">No account-wide finding points at any of these workflows this week.</p>'
+    : `<h3>What was found on this side</h3>
+  <div class="qfindings">${related.map((cause) => `
+    <div class="qf">
+      <p class="qf-title">#${rankOf.get(cause.causeId)} ${escapeHtml(cause.findings[0]?.title ?? '')}</p>
+      ${cause.findings.map((finding) => `<p class="qf-fix">${escapeHtml(finding.fix)}</p>`).join('')}
+    </div>`).join('')}</div>`}`;
+}
+
+/**
  * THE SIX QUESTIONS, ANSWERED ONE BY ONE.
  *
  * The product exists to answer six specific questions every week, and until now the report published a
@@ -391,6 +454,12 @@ export function renderReportPage({
 <section>
   <h2><span class="num">02</span>The account as we found it</h2>
   ${map?.journey ? `<p class="lead">${escapeHtml(map.journey)}</p>` : ''}
+  ${(() => {
+    const steps = (map?.journeySteps ?? []).length > 0 ? map.journeySteps : asSteps(map?.journey);
+    // One line each, numbered, because it is a sequence. The paragraph this replaces was the least
+    // readable thing in the first version of this page.
+    return steps.length <= 1 ? '' : `<ol class="steps">${steps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')}</ol>`;
+  })()}
   <h3>The money path</h3>
   ${moneyPathDiagram(map)}
   <h3>What every workflow is for</h3>
@@ -414,26 +483,32 @@ export function renderReportPage({
   })}
 </section>
 
+${deliverySection({ map, causes: investigation.causes, rankOf, reviews }) === '' ? '' : `
 <section>
-  <h2><span class="num">04</span>Where people fall out</h2>
+  <h2><span class="num">04</span>After they sign: onboarding and delivery</h2>
+  ${deliverySection({ map, causes: investigation.causes, rankOf, reviews })}
+</section>`}
+
+<section>
+  <h2><span class="num">05</span>Where people fall out</h2>
   ${funnelDiagram({ kpis: journeyBrief?.kpis, targets: journeyBrief?.targets })}
 </section>
 
 ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 <section>
-  <h2><span class="num">05</span>What starts what</h2>
+  <h2><span class="num">06</span>What starts what</h2>
   <p>One workflow finishing can start another. Where many things fire one shared event and many things
   listen for it, the wrong person receives the wrong sequence.</p>
   ${collisionDiagram(automationBrief?.collisions)}
 </section>`}
 
 <section>
-  <h2><span class="num">06</span>The plan</h2>
+  <h2><span class="num">07</span>The plan</h2>
   ${planSection(plan, titleOf, rankOf)}
 </section>
 
 <section>
-  <h2><span class="num">07</span>Every problem, ranked</h2>
+  <h2><span class="num">08</span>Every problem, ranked</h2>
   <p class="caption">The grey line under each problem is the fix its analyst proposed, in their words.</p>
   <div class="tablewrap">
     <table class="problems">
@@ -444,7 +519,7 @@ ${collisionDiagram(automationBrief?.collisions) === '' ? '' : `
 </section>
 
 <section>
-  <h2><span class="num">08</span>Where the detail is</h2>
+  <h2><span class="num">09</span>Where the detail is</h2>
   <p>This page is the overview. The working material is on disk beside it.</p>
   <div class="tablewrap">
     <table>
@@ -498,7 +573,7 @@ h2{font-family:var(--serif);font-weight:500;font-size:clamp(1.35rem,2.6vw,1.8rem
 h2 .num{font-family:var(--mono);font-size:.68rem;color:var(--accent);letter-spacing:.12em;display:block;margin-bottom:.55rem;font-weight:400}
 h3{font-size:.92rem;font-weight:650;margin:2rem 0 .6rem}
 h4{font-size:.85rem;font-weight:640;margin:0 0 .4rem}
-p{max-width:68ch}.lead{font-size:1.02rem;color:var(--soft)}
+p{max-width:74ch}.lead{font-size:1.05rem;color:var(--ink);max-width:72ch}
 .caption{font-size:.82rem;color:var(--faint)}
 .note{font-size:.88rem;background:var(--wash);padding:.7rem .9rem;border-left:2px solid var(--accent);max-width:68ch}
 code{font-family:var(--mono);font-size:.85em;background:var(--rule-soft);padding:.08em .3em;border-radius:3px}
@@ -558,6 +633,10 @@ th.num,td.num{text-align:right}
 .qn{font-family:var(--mono);font-size:.68rem;color:var(--accent);letter-spacing:.08em}
 .qstate{font-family:var(--mono);font-size:.64rem;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);margin-left:auto;white-space:nowrap}
 .q-answered .qstate{color:var(--bad)}.q-unmeasured .qstate{color:var(--warn)}.q-none .qstate{color:var(--good)}
+ol.steps{counter-reset:s;list-style:none;padding:0;margin:1rem 0 0;max-width:76ch;display:flex;flex-direction:column;gap:.1rem}
+ol.steps>li{counter-increment:s;position:relative;padding:.5rem .6rem .5rem 2.4rem;font-size:.9rem;line-height:1.5;border-bottom:1px solid var(--rule-soft)}
+ol.steps>li:last-child{border-bottom:none}
+ol.steps>li::before{content:counter(s);position:absolute;left:.6rem;top:.52rem;font-family:var(--mono);font-size:.68rem;color:var(--accent)}
 ul.nums{font-size:.84rem;gap:.2rem;margin-bottom:.6rem}
 ul.nums code{font-size:.78rem}
 .qfindings{display:flex;flex-direction:column;gap:.55rem;margin-top:.6rem;border-top:1px solid var(--rule-soft);padding-top:.6rem}
@@ -572,5 +651,5 @@ ul.nums code{font-size:.78rem}
 .batches .meta{font-family:var(--mono);font-size:.7rem;color:var(--faint);margin:0 0 .5rem;text-transform:uppercase;letter-spacing:.06em}
 .batches p{font-size:.88rem;margin:.3rem 0 .5rem}
 footer{margin-top:4rem;padding-top:1.2rem;border-top:1px solid var(--rule);font-size:.8rem;color:var(--faint)}
-footer p{max-width:68ch}
+footer p{max-width:74ch}
 </style>`;

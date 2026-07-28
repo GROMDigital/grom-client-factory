@@ -241,6 +241,13 @@ export function validateAccountMap(map, { briefs } = {}) {
 
   const journey = text(map.journey);
   if (journey.length === 0) refuse('ACCOUNT_MAP_JOURNEY_MISSING');
+  /*
+   * THE JOURNEY AS STEPS. Optional, because maps produced before this field existed are still valid,
+   * and the report falls back to splitting the paragraph. Asked for because the first live run returned
+   * a single 300-word paragraph and it was the least readable thing in the whole report: a sequence
+   * written as prose is a sequence somebody has to parse by hand.
+   */
+  const journeySteps = stringList(map.journeySteps ?? [], 'ACCOUNT_MAP_JOURNEY_STEPS_INVALID');
 
   if (!Array.isArray(map.workflows)) refuse('ACCOUNT_MAP_WORKFLOWS_INVALID');
   const seen = new Set();
@@ -306,6 +313,7 @@ export function validateAccountMap(map, { briefs } = {}) {
   const normalized = {
     schemaVersion: ACCOUNT_MAP_SCHEMA,
     journey,
+    journeySteps,
     moneyPath,
     workflows: workflows.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)),
     agents,
