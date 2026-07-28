@@ -31,7 +31,7 @@
  *     --project ~/.grom-audit-runs/<label> --location <locationId> --run-id <runId> \
  *     --into "/path/to/<client folder>" [--account "SK Skin"] [--date YYYY-MM-DD]
  */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -173,6 +173,7 @@ copy(facts, join(configOut, `account-facts-${flags.location}.v1.json`), { option
  * had six is the same class of error as having no caveats at all, because the reader trusts it.
  */
 const { loadProfile } = await import(join(SKILL, 'schemas/v1.mjs'));
+const { causeFingerprint } = await import(join(SKILL, 'lib/recurrence.mjs'));
 let caveats = [];
 try {
   caveats = loadProfile(briefIndex.profileId, flags.location).situation?.knownDataCaveats ?? [];
@@ -271,10 +272,20 @@ const batches = plan?.batches ?? [];
 const placed = new Set(batches.flatMap((b) => b.causeIds ?? []));
 const unplaced = causes.map((c) => c.causeId).filter((id) => !placed.has(id));
 
+/*
+ * The heading is the causeId because that is what the package filenames use and what a person
+ * searches for. The JOIN KEY is the fingerprint, and they are NOT interchangeable: `causeId` hashes
+ * the anchors AND the model-invented finding ids, so it changes whenever an expert rewords a
+ * finding. Joining weeks on it reports a renamed problem as GONE, which reads as "fixed", and that
+ * is the exact confidently-wrong output this product exists to prevent. Do not swap them.
+ */
+const fingerprintOf = new Map(causes.map((c) => [c.causeId, causeFingerprint(c)]));
+
 const section = (causeId) => `### ${causeId}
 
 ${titleOf.get(causeId) ?? '(title unavailable)'}
 
+- **fingerprint:** \`${fingerprintOf.get(causeId) ?? 'unknown'}\`  _(the join key. do not edit)_
 - **Status:** NOT STARTED
 - **What was actually done:**
 - **Date done:**
@@ -342,8 +353,10 @@ let lastWeekWritten = false;
 
 if (previous) {
   const priorChanges = join(accountFolder, previous, 'CHANGES-MADE.md');
-  const thisWeeksIds = new Set(causes.map((c) => c.causeId));
+  // Match on the FINGERPRINT, never the causeId. See the note on the template above.
+  const thisWeeksPrints = new Set(causes.map((c) => causeFingerprint(c)));
   const claimed = new Map();
+  let priorHadFingerprints = false;
   if (existsSync(priorChanges)) {
     const text = readFileSync(priorChanges, 'utf8');
     // Each block is "### <causeId>" followed by its fields, up to the next heading.
@@ -351,24 +364,32 @@ if (previous) {
     for (const match of text.matchAll(/^### (cause_[a-f0-9]+)\n([\s\S]*?)(?=^#{2,3} |(?![\s\S]))/gmu)) {
       const status = (match[2].match(/\*\*Status:\*\*\s*(.+)/u)?.[1] ?? '').trim();
       const did = (match[2].match(/\*\*What was actually done:\*\*\s*(.*)/u)?.[1] ?? '').trim();
-      claimed.set(match[1], { status: status || 'NOT STARTED', did });
+      const print = (match[2].match(/\*\*fingerprint:\*\*\s*`([a-f0-9]+)`/u)?.[1] ?? '').trim();
+      if (print) priorHadFingerprints = true;
+      claimed.set(match[1], { status: status || 'NOT STARTED', did, print });
     }
   }
   const acted = [...claimed.entries()].filter(([, v]) => /^DONE/u.test(v.status));
-  const stillHere = acted.filter(([id]) => thisWeeksIds.has(id));
-  const gone = acted.filter(([id]) => !thisWeeksIds.has(id));
+  const present = (v) => v.print !== '' && thisWeeksPrints.has(v.print);
+  const stillHere = acted.filter(([, v]) => present(v));
+  const gone = acted.filter(([, v]) => !present(v));
   const untouchedGone = [...claimed.entries()]
-    .filter(([id, v]) => !/^DONE/u.test(v.status) && !thisWeeksIds.has(id));
+    .filter(([, v]) => !/^DONE/u.test(v.status) && !present(v));
 
   writeFileSync(join(destination, 'LAST-WEEK.md'), `# Against last week (${previous})
 
-${claimed.size === 0
+${claimed.size > 0 && !priorHadFingerprints
+  ? `🔴 Last week's \`CHANGES-MADE.md\` predates the stable join key, so it carries no \`fingerprint\`
+line. Weeks CANNOT be matched from it: the causeId changes whenever an expert rewords a finding, so
+matching on it would report renamed problems as fixed. Nothing below is concluded from it. From this
+week on the fingerprint is written into the template and the comparison works.`
+  : claimed.size === 0
   ? `Last week's \`CHANGES-MADE.md\` was never filled in, so nothing can be said about whether anything
 was fixed. Every problem below is simply what this run found. **Fill in this week's
 \`CHANGES-MADE.md\` as you work** and next week this page will be worth reading.`
   : `Last week recorded **${acted.length} of ${claimed.size}** problems as actioned.`}
 
-${acted.length === 0 ? '' : `## Changed, and the problem is GONE this week — ${gone.length}
+${acted.length === 0 || !priorHadFingerprints ? '' : `## Changed, and the problem is GONE this week — ${gone.length}
 
 Treat as fixed. This is the only combination that earns that word.
 
@@ -399,8 +420,72 @@ ${untouchedGone.length === 0 ? '_none_' : untouchedGone.map(([id]) => `- \`${id}
 const memoryDir = join(auditRoot, 'memory');
 if (existsSync(memoryDir)) copy(memoryDir, join(destination, 'history'));
 
+/*
+ * SECRET SCAN, AFTER EVERYTHING IS WRITTEN AND BEFORE ANYONE IS TOLD IT SUCCEEDED.
+ *
+ * Found by review, 2026-07-29: the Grom UK archive carried a live GoHighLevel private integration
+ * token in 25 places across 11 files, including the report, the packages and the sealed briefs. The
+ * engine did not leak it. Somebody had typed it into a Voice AI action's parameter description
+ * inside the account, and the audit correctly FOUND it. The failure was this script then copying it
+ * verbatim into a git workspace with no check.
+ *
+ * That is the whole reason a scan belongs here rather than at collection: the evidence is supposed
+ * to contain whatever the account contains, warts and credentials included, because a hole in the
+ * evidence is indistinguishable from a hole in the account. The deliverable is a different thing.
+ *
+ * It REDACTS rather than refuses, and redacting keeps the finding readable: "This is the bearer
+ * token and this will always be the output: pit-CREDENTIAL_REDACTED" still tells a reader exactly
+ * what is wrong and what to go and rotate. Refusing the whole archive over a secret the account
+ * genuinely has would mean the run that found the problem is the run you cannot read.
+ */
+const SECRET_PATTERNS = [
+  [/pit-[A-Za-z0-9]{8}-[A-Za-z0-9-]{12,}/gu, 'pit-CREDENTIAL_REDACTED'],
+  [/eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}/gu, 'JWT_REDACTED'],
+  [/\bsk-[A-Za-z0-9]{32,}/gu, 'API_KEY_REDACTED'],
+  [/\bAKIA[0-9A-Z]{16}\b/gu, 'AWS_KEY_REDACTED'],
+  [/\bghp_[A-Za-z0-9]{30,}/gu, 'GITHUB_TOKEN_REDACTED'],
+];
+
+/*
+ * The sealed artefacts are 0444 and the copies inherit it, so the scan could not rewrite the very
+ * files carrying the secret. It failed loudly rather than silently, which is the right way round,
+ * but it still failed. The ARCHIVE is a working copy for people to read and annotate; the immutable
+ * record stays in the run directory, so making this tree writable costs nothing and is not a
+ * weakening of the write-once guarantee.
+ */
+function scanAndRedact(directory) {
+  let files = 0;
+  let occurrences = 0;
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!entry.isFile()) continue;
+      chmodSync(full, 0o644);
+      const original = readFileSync(full, 'utf8');
+      let text = original;
+      for (const [pattern, replacement] of SECRET_PATTERNS) {
+        const found = text.match(pattern);
+        if (found) { occurrences += found.length; text = text.replace(pattern, replacement); }
+      }
+      if (text !== original) { writeFileSync(full, text); files += 1; }
+    }
+  };
+  walk(directory);
+  return { files, occurrences };
+}
+
+const scrubbed = scanAndRedact(destination);
+
 console.log(`archived to ${destination}`);
 console.log(`  ${packageCount} packages, ${reviewCount} reviews, ${caveats.length} recorded caveats`);
+if (scrubbed.occurrences > 0) {
+  console.log('');
+  console.log(`🔴 ${scrubbed.occurrences} CREDENTIAL-SHAPED VALUES REDACTED from ${scrubbed.files} archived files.`);
+  console.log('   The account itself contains these. Redacting the copy does NOT rotate them.');
+  console.log('   Go and rotate whatever was found, then remove it from the account configuration.');
+  console.log('');
+}
 console.log(`  CHANGES-MADE.md written as a TEMPLATE: fill it in as the work is done`);
 if (lastWeekWritten) console.log(`  LAST-WEEK.md compares against ${previous}`);
 console.log('  START-HERE.md written: point an agent at the FOLDER, it reads that first');
