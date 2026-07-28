@@ -43,6 +43,10 @@ import {
   createEmailCopyCollector,
 } from './adapters/email-copy.mjs';
 import {
+  createConversationTranscriptCollector,
+  MESSAGE_EXPORT_ACTION,
+} from './adapters/conversation-transcripts.mjs';
+import {
   createInternalAuditConnect,
   validateInternalAuditTransport,
 } from './adapters/internal-audit-session.mjs';
@@ -865,6 +869,9 @@ const PUBLIC_OPTIONAL_KEYS = Object.freeze([
 const PUBLIC_INTERNAL_AUDIT_KEYS = Object.freeze([
   'budgets',
   'companyId',
+  // Opt-in for the same reason as `emailCopy` below: a second live connection, reading the words
+  // the LEADS wrote rather than only our own. See `buildConversationTranscriptRail`.
+  'conversationTranscripts',
   // Opt-in, so every configuration that exists today collects exactly what it collected before.
   // See `buildEmailCopyRail`: it is a SECOND live connection and a fetch to a storage host, and
   // neither should start happening to a run because a dependency changed underneath it.
@@ -980,6 +987,11 @@ function validatePublicInternalAudit(value) {
   if (Object.hasOwn(value, 'emailCopy') && value.emailCopy !== true && value.emailCopy !== false) {
     publicConfigError();
   }
+  if (
+    Object.hasOwn(value, 'conversationTranscripts')
+    && value.conversationTranscripts !== true
+    && value.conversationTranscripts !== false
+  ) publicConfigError();
 }
 
 export function validatePublicConfig(config) {
@@ -1588,18 +1600,28 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
  * The approval that matters is shared, because the action comes out of the same checked-in
  * allowlist through `approvedPublicCapabilities`.
  */
-function buildEmailCopyRail({
+/**
+ * THE SHARED HALF OF EVERY COPY RAIL.
+ *
+ * Two rails now open a second public session to read words rather than events — the email library
+ * and the conversation transcripts — and everything about opening it is identical: the same
+ * allowlist lookup, the same native-vs-bounded transport decision, the same translating wrapper,
+ * the same close-in-`finally`. Only the action and the collector differ.
+ *
+ * Factored out rather than copied because the two failed live attempts documented below are
+ * property of the SESSION, not of the email library, and a copy would have to relearn them.
+ */
+function buildPublicCopySession({
   config,
+  actionId,
   credentialResolver,
   transportConnect,
   ghlNativeConnect,
-  emailCopyConnect,
+  connectOverride,
   runtime,
 }) {
   const policy = loadTrustedPublicReadPolicy();
-  const listed = policy.allowlist.actions.find(
-    ({ actionId }) => actionId === EMAIL_TEMPLATE_ACTION,
-  );
+  const listed = policy.allowlist.actions.find((action) => action.actionId === actionId);
   // The allowlist is the authority. If the checked-in catalog does not approve this read, the rail
   // does not exist, rather than the read happening under some other name.
   if (listed === undefined) return null;
@@ -1640,9 +1662,10 @@ function buildEmailCopyRail({
     : { kind: 'streamable-http', url: nativeTransport.url };
 
   return {
-    async collectEmailCopy({ workflows, signal }) {
-      const client = emailCopyConnect === null || emailCopyConnect === undefined
-        ? await connectMcp({
+    capability,
+    async openClient() {
+      return connectOverride === null || connectOverride === undefined
+        ? connectMcp({
             transport: effectiveConnect === null
               ? wireTransport
               : { ...wireTransport, connect: effectiveConnect },
@@ -1658,24 +1681,97 @@ function buildEmailCopyRail({
             },
             ...(credentialResolver === null ? {} : { credentialResolver }),
           })
-        : await emailCopyConnect();
-      try {
-        return await createEmailCopyCollector({
-          client,
-          capability,
-          boundLocationId: config.expectedLocationId,
-          ...(typeof runtime?.emailTemplateBodyFetch === 'function'
-            ? { fetchBody: runtime.emailTemplateBodyFetch }
-            : {}),
-        }).collectEmailCopy({ workflows, signal });
-      } finally {
-        try {
-          await client.close?.();
-        } catch {
-          // Same reasoning as the internal session below: a transport that will not close cleanly
-          // must not mask the collection's own outcome.
-        }
-      }
+        : connectOverride();
+    },
+  };
+}
+
+/**
+ * Run one copy collection on its own short-lived session, closing it whatever happens.
+ *
+ * The close lives here and not in the collectors for the same reason it lives outside the internal
+ * collector: a transport that will not close cleanly must not mask the collection's own outcome.
+ */
+async function withCopySession(session, collect) {
+  const client = await session.openClient();
+  try {
+    return await collect(client);
+  } finally {
+    try {
+      await client.close?.();
+    } catch {
+      // Deliberately swallowed. See above.
+    }
+  }
+}
+
+function buildEmailCopyRail({
+  config,
+  credentialResolver,
+  transportConnect,
+  ghlNativeConnect,
+  emailCopyConnect,
+  runtime,
+}) {
+  const session = buildPublicCopySession({
+    config,
+    actionId: EMAIL_TEMPLATE_ACTION,
+    credentialResolver,
+    transportConnect,
+    ghlNativeConnect,
+    connectOverride: emailCopyConnect,
+    runtime,
+  });
+  if (session === null) return null;
+  return {
+    async collectEmailCopy({ workflows, signal }) {
+      return withCopySession(session, (client) => createEmailCopyCollector({
+        client,
+        capability: session.capability,
+        boundLocationId: config.expectedLocationId,
+        ...(typeof runtime?.emailTemplateBodyFetch === 'function'
+          ? { fetchBody: runtime.emailTemplateBodyFetch }
+          : {}),
+      }).collectEmailCopy({ workflows, signal }));
+    },
+  };
+}
+
+/**
+ * THE TRANSCRIPT RAIL. The other half of the conversation.
+ *
+ * Same session, same allowlist, same opt-in discipline as the email library — and, unlike it, no
+ * dependency on the workflows, because which threads to read is decided from the messages
+ * themselves. It still runs at this seam rather than on the public rail because what it produces is
+ * COPY evidence and must never be projected as journey evidence; see the header of
+ * `lib/adapters/conversation-transcripts.mjs` for why that line is load-bearing.
+ */
+function buildConversationTranscriptRail({
+  config,
+  credentialResolver,
+  transportConnect,
+  ghlNativeConnect,
+  conversationTranscriptConnect,
+  runtime,
+}) {
+  const session = buildPublicCopySession({
+    config,
+    actionId: MESSAGE_EXPORT_ACTION,
+    credentialResolver,
+    transportConnect,
+    ghlNativeConnect,
+    connectOverride: conversationTranscriptConnect,
+    runtime,
+  });
+  if (session === null) return null;
+  return {
+    async collectTranscripts({ window, signal }) {
+      return withCopySession(session, (client) => createConversationTranscriptCollector({
+        client,
+        capability: session.capability,
+        boundLocationId: config.expectedLocationId,
+        window: { fromDate: window?.from, toDate: window?.to },
+      }).collectTranscripts({ signal }));
     },
   };
 }
@@ -1685,6 +1781,7 @@ function buildInternalAuditAdapter({
   expectedLocationId,
   connectOverride,
   emailCopyRail = null,
+  transcriptRail = null,
   runtime,
 }) {
   if (!isPlainObject(internalAudit)) return null;
@@ -1728,6 +1825,48 @@ function buildInternalAuditAdapter({
        * are already collected. A failure here is SWALLOWED into a limitation rather than thrown,
        * because losing the copy must never cost a run its 27 workflows and 369 steps.
        */
+      /*
+       * The transcripts, collected FIRST because they do not depend on the workflows and because a
+       * run whose email library is unreadable should still gain the lead's own words. Same
+       * swallow-into-a-limitation discipline as the copy below it, and for the same reason: nothing
+       * read here is worth the 27 workflows and 369 steps already in hand.
+       */
+      let withTranscripts = evidence;
+      if (transcriptRail !== null && isPlainObject(evidence)) {
+        let conversationTranscripts;
+        try {
+          conversationTranscripts = await transcriptRail.collectTranscripts({
+            window: request?.window,
+            signal: request?.signal,
+          });
+        } catch (error) {
+          conversationTranscripts = {
+            schemaVersion: '1.0.0',
+            boundLocationId: expectedLocationId,
+            complete: false,
+            // A machine code or nothing. A raw message here can carry a lead's own words.
+            limitations: [typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{2,63}$/u.test(error.code)
+              ? error.code
+              : 'CONVERSATION_TRANSCRIPT_COLLECTION_FAILED'],
+            universeCount: 0,
+            messageCount: 0,
+            transcripts: [],
+            sample: null,
+          };
+        }
+        withTranscripts = {
+          ...evidence,
+          conversationTranscripts,
+          limitations: [
+            ...(evidence.limitations ?? []),
+            // `evidence.complete` is NOT downgraded, for the reason spelled out under the email
+            // copy below: a non-complete internal bundle quarantines the whole run at `compiling`.
+            ...(conversationTranscripts.complete === true ? [] : ['CONVERSATION_TRANSCRIPTS_INCOMPLETE']),
+          ],
+        };
+      }
+      evidence = withTranscripts;
+
       if (emailCopyRail === null || !Array.isArray(evidence?.workflows)) return evidence;
       let emailCopy;
       try {
@@ -1790,6 +1929,9 @@ export function createPublicAuditKernel({
   // A host-owned connect for the EMAIL-COPY session, same seam and same reason as the two above: a
   // hermetic test must be able to exercise the library read without opening a socket.
   emailCopyConnect = null,
+  // The same seam for the TRANSCRIPT session. Separate from `emailCopyConnect` so a test can drive
+  // one rail without standing up the other.
+  conversationTranscriptConnect = null,
   credentialResolver = null,
   keyProvider = null,
   signal = null,
@@ -1879,6 +2021,18 @@ export function createPublicAuditKernel({
                 transportConnect,
                 ghlNativeConnect,
                 emailCopyConnect,
+                runtime,
+              })
+            : null,
+          // Opt-in on the same terms. Without it the evidence bundle carries no
+          // `conversationTranscripts` key at all and every existing run is byte-identical.
+          transcriptRail: config.internalAudit.conversationTranscripts === true
+            ? buildConversationTranscriptRail({
+                config,
+                credentialResolver,
+                transportConnect,
+                ghlNativeConnect,
+                conversationTranscriptConnect,
                 runtime,
               })
             : null,

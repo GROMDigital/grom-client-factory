@@ -336,6 +336,50 @@ function copyCoverageOf(sequences, internal) {
 }
 
 /**
+ * THE OTHER HALF OF THE CONVERSATION — what the leads themselves wrote.
+ *
+ * Everything else on this lane is copy the ACCOUNT produced. These are real threads, both
+ * directions, drawn by `lib/sampling.mjs` with every complaint and opt-out included by
+ * construction. They are the only evidence in the system that can answer "what did people actually
+ * say, and what did we never answer".
+ *
+ * The coverage block is not decoration. A sample is a claim about a population, and a lane that
+ * does not know whether it read the whole week or fifty threads out of four hundred will write
+ * "leads never ask about price" when what happened is that it read fifty threads.
+ */
+function conversationsOf(internal) {
+  const collection = internal?.conversationTranscripts ?? null;
+  if (collection === null) {
+    return {
+      ran: false,
+      reason: 'Conversation transcripts were not collected for this run. You can see the copy this account SENDS, and nothing a lead replied.',
+      threads: [],
+    };
+  }
+  const mode = collection.sample?.mode ?? 'UNKNOWN';
+  return {
+    ran: true,
+    complete: collection.complete === true,
+    // CENSUS means every thread in the window is below; SAMPLE means it is not.
+    mode,
+    universeCount: collection.universeCount ?? null,
+    messageCount: collection.messageCount ?? null,
+    sampledCount: collection.sampledCount ?? (collection.transcripts ?? []).length,
+    droppedForSizeCount: collection.droppedForSizeCount ?? 0,
+    unparsedMessageCount: collection.unparsedMessageCount ?? 0,
+    limitations: [...(collection.limitations ?? [])],
+    /*
+     * Stated as a sentence and not only as fields, because this is the one place a lane most
+     * reliably overclaims, and the sentence is what ends up quoted back in a finding.
+     */
+    howToReadThis: mode === 'CENSUS'
+      ? 'Every conversation in the window is below. A count you take from these threads is the real count for the week.'
+      : `These are ${collection.sampledCount ?? 0} threads drawn from ${collection.universeCount ?? 0}. Every complaint and opt-out the flagging caught is included, so complaints are OVER-represented on purpose. Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
+    threads: [...(collection.transcripts ?? [])],
+  };
+}
+
+/**
  * Every message a lead can receive, in send order, with the accumulated wait in front of it.
  *
  * BRANCH LEGS ARE FLATTENED, and that limitation is stated on the brief rather than hidden: a
@@ -603,10 +647,13 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
     copyCoverage: copyCoverageOf(sequences, internal),
     sequences,
     aiAgents: aiAgentsOf(internal),
+    // Real threads, both directions. See `conversationsOf`.
+    conversations: conversationsOf(internal),
     limits: [
       'MESSAGE COUNTS PER SEQUENCE ARE CEILINGS. Branch legs are flattened, so a sequence listing 16 messages may send 8 down either leg. `waitBefore` entries in square brackets mark a branch point, not a delay.',
       'Read `bodySource` on every email. `inline` means the copy is written into the workflow. `library_template` means the step points at a library template and its copy WAS fetched, so it is complete and you judge it exactly as you would an inline one. `unavailable` means the body could not be read at all and `bodyUnavailable` says why: judge those on subject, preheader, sender and placement only, and say so explicitly.',
-      'No open, click, reply, bounce or complaint statistics exist in this evidence.',
+      'No open, click or bounce statistics exist in this evidence. REPLIES do: `conversations.threads` carries real inbound messages. Read `conversations.howToReadThis` before you count anything in them, and never state a rate from a sample.',
+      '`sequences` is what this account SENDS. `conversations.threads` is what actually happened. When the two disagree, the threads win: a sequence that looks well written and produces silence is a finding, not a well-written sequence.',
     ],
   };
 
