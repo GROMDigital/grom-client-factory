@@ -55,7 +55,7 @@ Shape, verbatim:
 
 `{"defines": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}, "references": {"workflows": [], "tags": [], "fields": [], "alerts": [], "calendars": [], "products": [], "fill_tokens": []}}`
 
-- `references.fill_tokens` = EVERY token you aggregated. You own the cross-doc registry, but the tokens originate in the other docs, so they are references, not definitions.
+- `references.fill_tokens` = every token that appears in the document you wrote, which in practice is every token you aggregated, because your token registry table prints each one. They originate in the other docs, so they are references, not definitions. 🔴 If you ever decide NOT to print a token in your table, do not list it here either: guardrail 3 scopes both sidecar lists to what is literally written in your own document, and a token you declare but never write is removed as a phantom.
 - `defines.fill_tokens` = only a token you introduce yourself here that no other doc already carries.
 - You define NO structural names: no workflow, tag, field, calendar, or product. Any such name you cite goes under `references` by exact registry spelling.
 

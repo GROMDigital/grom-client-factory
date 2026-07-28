@@ -3,6 +3,20 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-28: **one meaning for a sidecar's token lists.** `conformance_fix.mjs`
+  trimmed both `defines.fill_tokens` and `references.fill_tokens` against tokens
+  literally present in that document, while `fill-guide-compiler.md` told the
+  compiler that `references` was "EVERY token you aggregated" across the build.
+  The code won, silently, by deleting entries. It never bit, because the fill
+  guide prints every token in its registry table, so they were all literally
+  present, but two meanings for one word is what produced the sidecar deletions
+  earlier the same day. Xander's call: the CODE's meaning is right, and the
+  prompts move to it. Guardrail 3 now states it once, binding on every role:
+  both lists describe THIS DOCUMENT, `defines` for tokens it introduced,
+  `references` for tokens another document introduced, and a token that does not
+  literally appear in the text belongs in neither list. `fill-guide-compiler.md`
+  and `ica-brand-voice.md` were the two prompts that implied otherwise.
+
 - 2026-07-28: **adversarial review of the lean redesign, and the eight defects it
   found.** An independent reviewer traced the rebuilt orchestration end to end.
   Every finding below was verified in the code before it was fixed.
