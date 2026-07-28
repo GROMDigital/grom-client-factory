@@ -189,9 +189,7 @@ export function validateLaneFinding(finding, { lane } = {}) {
 }
 
 /**
- * Two findings corroborate when they anchor to the same thing. Computed on anchors, never on prose:
- * matching on words would let two analysts phrase one problem differently and both survive as
- * separate findings, which is the exact failure this box exists to prevent.
+ * Everything a finding points at. Used for DISPLAY and for the cause id, never for merging.
  */
 function anchorKeys(finding) {
   const keys = [];
@@ -202,14 +200,65 @@ function anchorKeys(finding) {
 }
 
 /**
- * Group findings into CAUSES by shared anchors, transitively.
+ * ---------------------------------------------------------------------------------------------
+ * WHAT MAY BE MERGED ON: ONLY A DISCRIMINATING ANCHOR.
  *
- * Transitive on purpose: lane 1 anchors to a KPI edge, lane 3 anchors to that edge AND a workflow,
- * lane 2 anchors to the workflow only. Pairwise matching would leave lane 2 orphaned from the very
- * cause it explains. The whole point of this box is that the configuration fact and the number are
- * the same story.
+ * The first real run merged all 24 findings into ONE cause with 35 anchors and 7 contested
+ * mechanisms, which is worthless. The grouping was transitive over every anchor, and the anchors it
+ * chained through were not evidence of a shared cause at all:
+ *
+ *     stage:conversation          in 14 of 24 findings
+ *     stage:attended              in 11
+ *     stage:enquiry               in 11
+ *     kpi:contacted_to_qualified  in 11
+ *     workflow:001 - FB Lead Form in 10
+ *
+ * Any transitive closure over a graph with bridges that common yields a single component. That is
+ * arithmetic, not a tuning problem.
+ *
+ * The principle: AN ANCHOR SHARED BY MOST FINDINGS CARRIES NO CORROBORATION INFORMATION. Two lanes
+ * both mentioning `stage:conversation` on an account whose whole funnel is conversations tells you
+ * nothing; two lanes both naming `workflow:05 No-Show Recovery` tells you a great deal. So:
+ *
+ *   1. JOURNEY STAGES ARE NEVER MERGE KEYS. There are about six of them for a whole account, so
+ *      every stage is a hub by construction. They stay on the cause as context.
+ *   2. A KPI EDGE OR WORKFLOW IS A MERGE KEY ONLY IF IT IS RARE. An anchor naming more than a
+ *      quarter of the findings is a theme, not a thing.
+ *
+ * Transitivity is KEPT, because the case it was built for is real: lane 1 anchors to a KPI edge,
+ * lane 3 to that edge AND a workflow, lane 2 to the workflow only, and pairwise matching would
+ * orphan lane 2 from the cause it explains. Transitivity over rare anchors chains a genuine story;
+ * transitivity over hubs chains everything to everything.
+ * ---------------------------------------------------------------------------------------------
  */
-function groupByAnchor(findings) {
+const HUB_ANCHOR_SHARE = 0.25;
+
+function mergeCandidates(finding) {
+  const keys = [];
+  for (const edgeId of finding.anchors.kpiEdgeIds ?? []) keys.push(`kpi:${edgeId}`);
+  for (const name of finding.anchors.workflowNames ?? []) keys.push(`workflow:${name}`);
+  return [...new Set(keys)].sort(byteOrder);
+}
+
+/**
+ * The anchors too common to mean anything. Never fewer than 3 findings, so a small run cannot
+ * accidentally class a genuinely shared anchor as a hub: with 4 findings the cap is 3, not 1.
+ */
+export function hubAnchors(findings) {
+  const frequency = new Map();
+  for (const finding of findings) {
+    for (const key of mergeCandidates(finding)) frequency.set(key, (frequency.get(key) ?? 0) + 1);
+  }
+  const cap = Math.max(3, Math.ceil(findings.length * HUB_ANCHOR_SHARE));
+  return new Set([...frequency.entries()]
+    .filter(([, count]) => count > cap)
+    .map(([key]) => key));
+}
+
+/**
+ * One pass of transitive union-find over the supplied merge keys.
+ */
+function componentsBy(findings, keysFor) {
   const parent = new Map();
   const find = (key) => {
     let current = key;
@@ -222,13 +271,12 @@ function groupByAnchor(findings) {
     if (a !== b) parent.set(byteOrder(a, b) <= 0 ? b : a, byteOrder(a, b) <= 0 ? a : b);
   };
   for (const finding of findings) {
-    for (const key of [`finding:${finding.findingId}`, ...anchorKeys(finding)]) {
+    for (const key of [`finding:${finding.findingId}`, ...keysFor(finding)]) {
       if (!parent.has(key)) parent.set(key, key);
     }
   }
   for (const finding of findings) {
-    const own = `finding:${finding.findingId}`;
-    for (const key of anchorKeys(finding)) union(own, key);
+    for (const key of keysFor(finding)) union(`finding:${finding.findingId}`, key);
   }
   const groups = new Map();
   for (const finding of findings) {
@@ -237,6 +285,47 @@ function groupByAnchor(findings) {
     groups.get(root).push(finding);
   }
   return [...groups.values()];
+}
+
+/**
+ * Group findings into CAUSES by shared DISCRIMINATING anchors, transitively, RE-SPLITTING any group
+ * that is still too big to be one cause.
+ *
+ * The global hub filter alone was not enough, and the real data showed it: excluding the five
+ * account-wide anchors took 24 findings from ONE cause to five, but the largest still held 18,
+ * chained together through anchors that were individually uncommon. That is transitivity's failure
+ * mode -- A shares x with B, B shares y with C, and nothing in the pairwise test ever sees the
+ * chain.
+ *
+ * So the rule is applied RECURSIVELY and locally: a group holding most of the findings is not a
+ * cause, whatever its anchors say. Promote that group's OWN most common anchor to a hub and split
+ * again. Each pass strictly shrinks the anchor set, so it terminates; when a group runs out of
+ * anchors to split on, its members separate into individual causes, which is the honest answer for
+ * findings that share nothing specific.
+ */
+function groupByAnchor(findings) {
+  const limit = Math.max(3, Math.ceil(findings.length * HUB_ANCHOR_SHARE));
+  const hubs = hubAnchors(findings);
+
+  const split = (group, excluded) => {
+    const keysFor = (finding) => mergeCandidates(finding).filter((key) => !excluded.has(key));
+    const components = componentsBy(group, keysFor);
+    return components.flatMap((component) => {
+      if (component.length <= limit) return [component];
+      // This component's own most common anchor is what is holding it together. Take it out and
+      // look again. Ties break on byte order so the same findings always split the same way.
+      const frequency = new Map();
+      for (const finding of component) {
+        for (const key of keysFor(finding)) frequency.set(key, (frequency.get(key) ?? 0) + 1);
+      }
+      if (frequency.size === 0) return component.map((finding) => [finding]);
+      const [worst] = [...frequency.entries()]
+        .sort((left, right) => right[1] - left[1] || byteOrder(left[0], right[0]));
+      return split(component, new Set([...excluded, worst[0]]));
+    });
+  };
+
+  return split(findings, hubs);
 }
 
 /**
@@ -261,17 +350,27 @@ function scoreCause(findings) {
     .filter((alternative) => alternative.materiality === 'MATERIAL' && alternative.addressed !== true)
     .length, 0);
 
+  /*
+   * `+ 0` IS LOAD-BEARING. A `NONE` band scores 0, and a negative weight turns that into NEGATIVE
+   * ZERO, which `lib/canonical.mjs` refuses outright (`Object.is(value, -0)` -> unsupported). So a
+   * cause whose effort or risk is NONE crashed the whole investigation at the final hash.
+   *
+   * Latent since this module was written and unreachable until now: the first real run produced one
+   * enormous cause whose worst-of aggregate was never NONE. The moment grouping started producing
+   * small, honest causes, the first one with no implementation effort took the run down. Adding 0
+   * normalises -0 to 0 and leaves every other value untouched.
+   */
   const parts = {
-    commercialImpact: best('commercialImpact') * RANKING_WEIGHTS.commercialImpact,
-    evidenceStrength: evidenceStrength * RANKING_WEIGHTS.evidenceStrength,
-    leadsAffected: best('leadsAffected') * RANKING_WEIGHTS.leadsAffected,
-    urgency: best('urgency') * RANKING_WEIGHTS.urgency,
-    testability: best('testability') * RANKING_WEIGHTS.testability,
-    implementationEffort: worst('implementationEffort') * RANKING_WEIGHTS.implementationEffort,
-    risk: worst('risk') * RANKING_WEIGHTS.risk,
+    commercialImpact: best('commercialImpact') * RANKING_WEIGHTS.commercialImpact + 0,
+    evidenceStrength: evidenceStrength * RANKING_WEIGHTS.evidenceStrength + 0,
+    leadsAffected: best('leadsAffected') * RANKING_WEIGHTS.leadsAffected + 0,
+    urgency: best('urgency') * RANKING_WEIGHTS.urgency + 0,
+    testability: best('testability') * RANKING_WEIGHTS.testability + 0,
+    implementationEffort: worst('implementationEffort') * RANKING_WEIGHTS.implementationEffort + 0,
+    risk: worst('risk') * RANKING_WEIGHTS.risk + 0,
   };
   const score = Object.values(parts).reduce((total, value) => total + value, 0)
-    - Math.min(unresolvedMaterial, 3) * 2;
+    - Math.min(unresolvedMaterial, 3) * 2 + 0;
   return { score, parts, evidenceStrength, unresolvedMaterial, corroboratingLanes: [...lanes].sort(byteOrder) };
 }
 
@@ -312,9 +411,24 @@ export function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
     const ordered = [...group].sort((left, right) => byteOrder(left.findingId, right.findingId));
     const scored = scoreCause(ordered);
     return {
-      // Content-derived, so the same cause carries the same id across weeks and the verification
-      // loop can ask "did last week's cause improve".
-      causeId: `cause_${sha256({ anchors: [...new Set(ordered.flatMap(anchorKeys))].sort(byteOrder) }).slice(0, 24)}`,
+      /*
+       * Content-derived, so the same cause carries the same id across weeks and the verification
+       * loop can ask "did last week's cause improve".
+       *
+       * The FINDING IDS are part of the identity as well as the anchors, and they have to be. Once
+       * grouping started re-splitting oversized components, two distinct causes could hold
+       * identical anchor sets -- several findings all naming one hub edge and nothing else each
+       * become their own cause -- and an id derived from anchors alone collided. Two causes then
+       * wrote to the same solution-package filename with different content and the write-once guard
+       * stopped the run, which is the guard doing its job on a real defect.
+       *
+       * Cross-week stability is preserved: an analyst's `findingId` is a slug describing the
+       * problem, so a cause that recurs unchanged still hashes the same.
+       */
+      causeId: `cause_${sha256({
+        anchors: [...new Set(ordered.flatMap(anchorKeys))].sort(byteOrder),
+        findingIds: ordered.map((entry) => entry.findingId).sort(byteOrder),
+      }).slice(0, 24)}`,
       anchors: [...new Set(ordered.flatMap(anchorKeys))].sort(byteOrder),
       // The family the lanes agree on, or every family they named when they disagree. A disagreement
       // is information, not something to average away.

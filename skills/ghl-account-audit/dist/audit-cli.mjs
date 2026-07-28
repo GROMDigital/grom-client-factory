@@ -9985,7 +9985,21 @@ function anchorKeys(finding) {
   for (const stage of finding.anchors.journeyStages ?? []) keys.push(`stage:${stage}`);
   return [...new Set(keys)].sort(byteOrder2);
 }
-function groupByAnchor(findings) {
+function mergeCandidates(finding) {
+  const keys = [];
+  for (const edgeId of finding.anchors.kpiEdgeIds ?? []) keys.push(`kpi:${edgeId}`);
+  for (const name of finding.anchors.workflowNames ?? []) keys.push(`workflow:${name}`);
+  return [...new Set(keys)].sort(byteOrder2);
+}
+function hubAnchors(findings) {
+  const frequency = /* @__PURE__ */ new Map();
+  for (const finding of findings) {
+    for (const key of mergeCandidates(finding)) frequency.set(key, (frequency.get(key) ?? 0) + 1);
+  }
+  const cap = Math.max(3, Math.ceil(findings.length * HUB_ANCHOR_SHARE));
+  return new Set([...frequency.entries()].filter(([, count]) => count > cap).map(([key]) => key));
+}
+function componentsBy(findings, keysFor) {
   const parent = /* @__PURE__ */ new Map();
   const find = (key) => {
     let current = key;
@@ -9998,13 +10012,12 @@ function groupByAnchor(findings) {
     if (a2 !== b2) parent.set(byteOrder2(a2, b2) <= 0 ? b2 : a2, byteOrder2(a2, b2) <= 0 ? a2 : b2);
   };
   for (const finding of findings) {
-    for (const key of [`finding:${finding.findingId}`, ...anchorKeys(finding)]) {
+    for (const key of [`finding:${finding.findingId}`, ...keysFor(finding)]) {
       if (!parent.has(key)) parent.set(key, key);
     }
   }
   for (const finding of findings) {
-    const own = `finding:${finding.findingId}`;
-    for (const key of anchorKeys(finding)) union2(own, key);
+    for (const key of keysFor(finding)) union2(`finding:${finding.findingId}`, key);
   }
   const groups = /* @__PURE__ */ new Map();
   for (const finding of findings) {
@@ -10014,6 +10027,25 @@ function groupByAnchor(findings) {
   }
   return [...groups.values()];
 }
+function groupByAnchor(findings) {
+  const limit = Math.max(3, Math.ceil(findings.length * HUB_ANCHOR_SHARE));
+  const hubs = hubAnchors(findings);
+  const split = (group, excluded) => {
+    const keysFor = (finding) => mergeCandidates(finding).filter((key) => !excluded.has(key));
+    const components = componentsBy(group, keysFor);
+    return components.flatMap((component) => {
+      if (component.length <= limit) return [component];
+      const frequency = /* @__PURE__ */ new Map();
+      for (const finding of component) {
+        for (const key of keysFor(finding)) frequency.set(key, (frequency.get(key) ?? 0) + 1);
+      }
+      if (frequency.size === 0) return component.map((finding) => [finding]);
+      const [worst] = [...frequency.entries()].sort((left, right) => right[1] - left[1] || byteOrder2(left[0], right[0]));
+      return split(component, /* @__PURE__ */ new Set([...excluded, worst[0]]));
+    });
+  };
+  return split(findings, hubs);
+}
 function scoreCause(findings) {
   const lanes = new Set(findings.map((finding) => finding.lane));
   const best = (key) => Math.max(...findings.map((finding) => band(finding.scoring[key]) ?? 0));
@@ -10022,15 +10054,15 @@ function scoreCause(findings) {
   const evidenceStrength = Math.min(4, confidence + (lanes.size - 1));
   const unresolvedMaterial = findings.reduce((total, finding) => total + finding.competingExplanations.filter((alternative) => alternative.materiality === "MATERIAL" && alternative.addressed !== true).length, 0);
   const parts = {
-    commercialImpact: best("commercialImpact") * RANKING_WEIGHTS.commercialImpact,
-    evidenceStrength: evidenceStrength * RANKING_WEIGHTS.evidenceStrength,
-    leadsAffected: best("leadsAffected") * RANKING_WEIGHTS.leadsAffected,
-    urgency: best("urgency") * RANKING_WEIGHTS.urgency,
-    testability: best("testability") * RANKING_WEIGHTS.testability,
-    implementationEffort: worst("implementationEffort") * RANKING_WEIGHTS.implementationEffort,
-    risk: worst("risk") * RANKING_WEIGHTS.risk
+    commercialImpact: best("commercialImpact") * RANKING_WEIGHTS.commercialImpact + 0,
+    evidenceStrength: evidenceStrength * RANKING_WEIGHTS.evidenceStrength + 0,
+    leadsAffected: best("leadsAffected") * RANKING_WEIGHTS.leadsAffected + 0,
+    urgency: best("urgency") * RANKING_WEIGHTS.urgency + 0,
+    testability: best("testability") * RANKING_WEIGHTS.testability + 0,
+    implementationEffort: worst("implementationEffort") * RANKING_WEIGHTS.implementationEffort + 0,
+    risk: worst("risk") * RANKING_WEIGHTS.risk + 0
   };
-  const score = Object.values(parts).reduce((total, value) => total + value, 0) - Math.min(unresolvedMaterial, 3) * 2;
+  const score = Object.values(parts).reduce((total, value) => total + value, 0) - Math.min(unresolvedMaterial, 3) * 2 + 0;
   return { score, parts, evidenceStrength, unresolvedMaterial, corroboratingLanes: [...lanes].sort(byteOrder2) };
 }
 function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
@@ -10058,9 +10090,24 @@ function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
     const ordered = [...group].sort((left, right) => byteOrder2(left.findingId, right.findingId));
     const scored = scoreCause(ordered);
     return {
-      // Content-derived, so the same cause carries the same id across weeks and the verification
-      // loop can ask "did last week's cause improve".
-      causeId: `cause_${sha256({ anchors: [...new Set(ordered.flatMap(anchorKeys))].sort(byteOrder2) }).slice(0, 24)}`,
+      /*
+       * Content-derived, so the same cause carries the same id across weeks and the verification
+       * loop can ask "did last week's cause improve".
+       *
+       * The FINDING IDS are part of the identity as well as the anchors, and they have to be. Once
+       * grouping started re-splitting oversized components, two distinct causes could hold
+       * identical anchor sets -- several findings all naming one hub edge and nothing else each
+       * become their own cause -- and an id derived from anchors alone collided. Two causes then
+       * wrote to the same solution-package filename with different content and the write-once guard
+       * stopped the run, which is the guard doing its job on a real defect.
+       *
+       * Cross-week stability is preserved: an analyst's `findingId` is a slug describing the
+       * problem, so a cause that recurs unchanged still hashes the same.
+       */
+      causeId: `cause_${sha256({
+        anchors: [...new Set(ordered.flatMap(anchorKeys))].sort(byteOrder2),
+        findingIds: ordered.map((entry) => entry.findingId).sort(byteOrder2)
+      }).slice(0, 24)}`,
       anchors: [...new Set(ordered.flatMap(anchorKeys))].sort(byteOrder2),
       // The family the lanes agree on, or every family they named when they disagree. A disagreement
       // is information, not something to average away.
@@ -10098,7 +10145,7 @@ function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
     investigationHash: sha256(canonicalJson(causes))
   };
 }
-var ROOT_CAUSE_SCHEMA, MECHANISM_FAMILIES, LANES, CONFIDENCE2, RANKING_WEIGHTS, BAND_SCORES, CONFIDENCE_SCORES, STRENGTH_TO_CONFIDENCE;
+var ROOT_CAUSE_SCHEMA, MECHANISM_FAMILIES, LANES, CONFIDENCE2, RANKING_WEIGHTS, BAND_SCORES, CONFIDENCE_SCORES, STRENGTH_TO_CONFIDENCE, HUB_ANCHOR_SHARE;
 var init_root_cause = __esm({
   "lib/root-cause.mjs"() {
     init_canonical();
@@ -10128,6 +10175,7 @@ var init_root_cause = __esm({
     BAND_SCORES = Object.freeze({ NONE: 0, LOW: 1, MEDIUM: 2, HIGH: 3, CRITICAL: 4 });
     CONFIDENCE_SCORES = Object.freeze({ C0: 0, C1: 1, C2: 3, C3: 4 });
     STRENGTH_TO_CONFIDENCE = Object.freeze(["C0", "C1", "C1", "C2", "C3"]);
+    HUB_ANCHOR_SHARE = 0.25;
   }
 });
 

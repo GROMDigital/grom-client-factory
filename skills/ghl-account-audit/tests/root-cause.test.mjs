@@ -51,6 +51,14 @@ function finding(overrides = {}) {
 
 const emptyLanes = Object.fromEntries(LANES.map((lane) => [lane, []]));
 
+/** Bucket a flat list of findings back into the per-lane shape `investigateRootCause` requires. */
+function laneBuckets(findings) {
+  const buckets = { ...emptyLanes };
+  for (const lane of LANES) buckets[lane] = findings.filter((entry) => entry.lane === lane);
+  return buckets;
+}
+
+
 // ---------------------------------------------------------------------------
 
 test('three lanes describing one problem become ONE cause with three supports', () => {
@@ -279,4 +287,100 @@ test('the nine families are exactly the ones the mechanism layer fixes', async (
   const declared = source.match(/const FAMILIES = Object\.freeze\(\[([\s\S]*?)\]\)/u)[1]
     .match(/'([a-z_]+)'/gu).map((quoted) => quoted.slice(1, -1)).sort();
   assert.deepEqual([...MECHANISM_FAMILIES].sort(), declared);
+});
+
+test('an anchor most findings share cannot merge them, and a big group re-splits', () => {
+  /*
+   * THE FIRST REAL RUN produced ONE cause holding all 24 findings, 35 anchors and 7 contested
+   * mechanisms. `stage:conversation` appeared in 14 of them, `kpi:contacted_to_qualified` in 11,
+   * `workflow:001 - FB Lead Form` in 10, and a transitive closure over bridges that common has
+   * exactly one component. That is arithmetic, not tuning.
+   */
+  const findings = Array.from({ length: 12 }, (_, index) => finding({
+    findingId: `hub_shared_${index}`,
+    lane: LANES[index % 3],
+    anchors: {
+      // Every finding names the same account-wide edge and stage. That is a theme, not a cause.
+      kpiEdgeIds: ['enquiry_to_contacted'],
+      // Two of them ALSO name one specific workflow, and only those two belong together.
+      workflowNames: index < 2 ? ['05 No-Show Recovery'] : [],
+      journeyStages: ['conversation'],
+    },
+  }));
+
+  const result = investigateRootCause({ laneAnalyses: laneBuckets(findings), briefsHash: BRIEFS_HASH });
+
+  // Not one blob.
+  assert.ok(result.causeCount > 1, `expected a split, got ${result.causeCount}`);
+  // No cause may hold most of the findings.
+  const biggest = Math.max(...result.causes.map((cause) => cause.findings.length));
+  assert.ok(biggest <= Math.max(3, Math.ceil(findings.length * 0.25)), `largest cause held ${biggest}`);
+  // The two that named the SPECIFIC workflow are together, and they are the only pair.
+  const paired = result.causes.find((cause) => cause.findings.length === 2);
+  assert.ok(paired, 'the two findings naming one specific workflow must corroborate');
+  assert.deepEqual(
+    paired.findings.map(({ findingId }) => findingId).sort(),
+    ['hub_shared_0', 'hub_shared_1'],
+  );
+});
+
+test('a journey stage is never a merge key, however specific it looks', () => {
+  // There are about six stages for a whole account, so every stage is a hub by construction.
+  const findings = [
+    finding({ findingId: 'stage_only_a', lane: 'lead_journey_kpi', anchors: { kpiEdgeIds: [], workflowNames: [], journeyStages: ['attended'] } }),
+    finding({ findingId: 'stage_only_b', lane: 'conversation_copy_ai', anchors: { kpiEdgeIds: [], workflowNames: [], journeyStages: ['attended'] } }),
+  ];
+  const result = investigateRootCause({ laneAnalyses: laneBuckets(findings), briefsHash: BRIEFS_HASH });
+  assert.equal(result.causeCount, 2, 'a shared stage alone is not corroboration');
+  assert.equal(result.corroboratedCauseCount, 0);
+});
+
+test('a NONE band does not crash the investigation on negative zero', () => {
+  /*
+   * `0 * -2` is NEGATIVE ZERO, which `lib/canonical.mjs` refuses outright. Latent since this module
+   * was written and unreachable while one giant cause absorbed everything; the moment grouping
+   * produced small honest causes, the first one with no implementation effort took the run down at
+   * the final hash.
+   */
+  const result = investigateRootCause({
+    laneAnalyses: laneBuckets([finding({
+      findingId: 'costs_nothing_to_fix',
+      lane: 'lead_journey_kpi',
+      scoring: {
+        commercialImpact: 'NONE',
+        leadsAffected: 'NONE',
+        urgency: 'NONE',
+        implementationEffort: 'NONE',
+        risk: 'NONE',
+        testability: 'NONE',
+      },
+    })]),
+    briefsHash: BRIEFS_HASH,
+  });
+  assert.equal(result.causeCount, 1);
+  // Every band-derived part is POSITIVE zero. Negative zero is what canonical JSON refuses.
+  for (const key of ['commercialImpact', 'leadsAffected', 'urgency', 'testability', 'implementationEffort', 'risk']) {
+    assert.ok(Object.is(result.causes[0].rankParts[key], 0), `${key} must be +0, got ${result.causes[0].rankParts[key]}`);
+  }
+  // The score is not zero, and that is correct: confidence C2 scores 3 against a weight of 4, so
+  // evidence strength alone contributes 12. Only the BAND parts collapse to zero here.
+  assert.equal(result.causes[0].rankParts.evidenceStrength, 12);
+  assert.equal(result.causes[0].rankScore, 12);
+});
+
+test('two causes with identical anchors still get distinct ids', () => {
+  /*
+   * Re-splitting an oversized component can leave two causes holding the SAME anchor set -- several
+   * findings naming one hub edge and nothing else each become their own cause. A cause id derived
+   * from anchors alone collided, two solution packages wrote to one filename with different
+   * content, and the write-once guard stopped the run. It was right to.
+   */
+  const findings = Array.from({ length: 8 }, (_, index) => finding({
+    findingId: `same_anchors_${index}`,
+    lane: LANES[index % 3],
+    anchors: { kpiEdgeIds: ['enquiry_to_contacted'], workflowNames: [], journeyStages: [] },
+  }));
+  const result = investigateRootCause({ laneAnalyses: laneBuckets(findings), briefsHash: BRIEFS_HASH });
+  const ids = result.causes.map(({ causeId }) => causeId);
+  assert.equal(new Set(ids).size, ids.length, 'every cause id must be unique within a run');
 });
