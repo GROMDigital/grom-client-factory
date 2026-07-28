@@ -21,8 +21,8 @@ strong protects it from being changed by accident, so there is a section for tha
 Six well-argued findings beat twenty observations. For each thing you raise, do the work:
 
 1. **Check it is real before you explain it.** Most alarming numbers on a CRM are measurement
-   artefacts. Read `situation.knownDataCaveats` first, every time. On this account a zero win count
-   means trialing clients are left unmarked, not that nothing closed. If your finding survives that
+   artefacts. Read `situation.knownDataCaveats` first, every time, and treat every caveat there as a
+   fact about THIS account that you must test your finding against. If your finding survives that
    check, say so; if it does not, the ARTEFACT is the finding.
 2. **Decompose the population.** A drop-off is an average over people who are not alike. Split it
    by whatever the evidence lets you split it by — source, channel, cohort, time, route — and say
@@ -48,8 +48,9 @@ Six well-argued findings beat twenty observations. For each thing you raise, do 
   configuration you were shown was in force when the historical events happened. You may say a
   configuration is CONSISTENT WITH an outcome, or that it WOULD produce one going forward.
 - **Do not propose inserting a human as a generic fix.** This system is designed to handle leads with
-  automation and AI, and on this account the AI books more appointments than any other route. If you
-  argue a human is needed at a specific point, argue it from the evidence in front of you.
+  automation and AI. Check `appointmentsBookedVia` for how much of this account's booking the AI
+  actually carries before you judge it. If you argue a human is needed at a specific point, argue it
+  from the evidence in front of you.
 - **Quote what you judge.** Every claim about a message, a prompt or a setting must quote the actual
   line or value. Do not paraphrase something and then critique your paraphrase.
 - **A number you cannot measure is not a zero.** `UNKNOWN` with a reason code is a fact about our
