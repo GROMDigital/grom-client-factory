@@ -231,8 +231,39 @@ the folder:
 | `reviews/` | one per workflow and per AI agent. **THE REPLACEMENT COPY LIVES HERE**, message by message |
 | `INVESTIGATION.md` | the full argument, for when you disagree with a finding |
 | `evidence/` | the sealed briefs and every prompt an expert read, so a claim can be traced |
+| `CHANGES-MADE.md` | **A TEMPLATE. Fill it in as the work is done.** |
+| `LAST-WEEK.md` | from the second run on: what you said you changed against what the account still shows |
+| `history/` | the week-over-week ledger, so this account's past survives losing the working directory |
 
 When a package says "rewrite this message", the words are in `reviews/`, not in the package.
+
+### Week over week, and the one thing it cannot tell you
+
+`audit investigate` already records every cause in a per-account ledger and compares this run against
+every run before it, giving NEW, RECURRING and ABSENT. Identity is NOT the ids, which experts reinvent
+every week: it is the mechanism families plus the discriminating anchors, exact-matched and brittle on
+purpose, because a wrong match across weeks would let the report claim a problem recurred when it did
+not. It is automatic and there is nothing to pass in.
+
+🔴 **ABSENT IS NOT FIXED, and the engine will never say otherwise.** A cause vanishes when it is
+solved, when an expert frames it differently, when the evidence moves, or when its finding was refused
+that week. Nothing in the collected evidence can tell those apart.
+
+`CHANGES-MADE.md` is what closes that. It is emitted as a TEMPLATE, scaffolded from the run's own
+causes in the plan's batch order, so whoever does the work fills it in rather than inventing a format,
+and cannot invent a cause id because they are all pre-listed. The next run's archive reads it and
+writes `LAST-WEEK.md`:
+
+- changed, and the problem is GONE → treat as fixed. **the only combination that earns the word**
+- changed, and it is STILL HERE → the fix did not work, or did not address the cause
+- gone, and nobody changed anything → unexplained. a reason to look, not to celebrate
+
+If nobody fills it in, nothing breaks and `LAST-WEEK.md` says plainly that nothing can be concluded.
+
+It is deliberately NOT written into the hash-chained ledger. That path demands a `solutionId` and a
+`proposalHash` matching a compiled proposal, and compiled proposals were never built because these
+packages are human-implementation documents. Minting a hash to pass the check would put forged
+provenance in the one record that exists to be trusted.
 
 **The vault key is deliberately NOT copied.** It is the only thing protecting the raw record of real
 people, and filing it beside the data it protects would defeat it.

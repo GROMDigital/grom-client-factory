@@ -241,6 +241,166 @@ copied here on purpose**: it is the only thing protecting the raw record of real
 it beside the data it protects would defeat it. Lose it and the sealed evidence is unreadable.
 `);
 
+/*
+ * CHANGES-MADE.md — THE TEMPLATE, EMITTED EMPTY, FOR WHOEVER DOES THE WORK.
+ *
+ * Week over week can already tell NEW from RECURRING from ABSENT. What it cannot tell, and says so
+ * in its own header, is whether something ABSENT was FIXED or merely stopped being detected: an
+ * expert may have framed it differently, the evidence may have moved, or the finding may have been
+ * refused for a formatting slip. Only a record of what was actually changed settles that, and
+ * nothing was producing one.
+ *
+ * So the engine emits the record as a TEMPLATE rather than expecting someone to invent it. It is
+ * scaffolded from THIS run's own causes in the plan's batch order, so an agent works down it in the
+ * order the sequencing expert intended and cannot invent a cause id: they are all pre-listed.
+ *
+ * It is deliberately NOT written into the hash-chained ledger. That path demands a `solutionId` and
+ * a `proposalHash` matching a compiled proposal, and compiled proposals were deliberately never
+ * built because these packages are human-implementation documents. Minting a hash to satisfy the
+ * check would put forged provenance in the one record that exists to be trustworthy.
+ */
+const planRecord = existsSync(join(destination, 'plan.json'))
+  ? JSON.parse(readFileSync(join(destination, 'plan.json'), 'utf8'))
+  : null;
+const plan = planRecord?.plan ?? planRecord;
+const investigationRecord = JSON.parse(readFileSync(join(destination, 'investigation.json'), 'utf8'));
+const causes = investigationRecord.investigation?.causes ?? [];
+const titleOf = new Map(causes.map((c) => [c.causeId, c.findings?.[0]?.title ?? '']));
+
+const batches = plan?.batches ?? [];
+const placed = new Set(batches.flatMap((b) => b.causeIds ?? []));
+const unplaced = causes.map((c) => c.causeId).filter((id) => !placed.has(id));
+
+const section = (causeId) => `### ${causeId}
+
+${titleOf.get(causeId) ?? '(title unavailable)'}
+
+- **Status:** NOT STARTED
+- **What was actually done:**
+- **Date done:**
+- **Deviated from the package?** no
+
+`;
+
+writeFileSync(join(destination, 'CHANGES-MADE.md'), `# Changes made after the ${date} diagnosis
+
+**${accountName}** · account \`${flags.location}\` · run \`${runId}\`
+
+FILL THIS IN AS YOU DO THE WORK. It is the ONLY thing that lets next week's run tell a problem you
+FIXED from a problem that merely stopped being detected. Without it, anything that disappears is
+reported as "absent this week", which is not the same as solved and is never claimed to be.
+
+## How to fill it in
+
+Set **Status** on each problem below to one of:
+
+| Status | Means |
+|---|---|
+| \`NOT STARTED\` | untouched. leave it |
+| \`DONE\` | changed in the account, as the package describes |
+| \`DONE (DIFFERENT)\` | changed, but not the way the package said. Say what you did instead |
+| \`SKIPPED\` | deliberately not doing it. Say why |
+| \`BLOCKED\` | cannot be done yet. Say what is in the way |
+
+Be honest about \`DONE (DIFFERENT)\` and \`SKIPPED\`. A wrong record here is worse than no record: next
+week's comparison will report a fix that never happened, and the problem will look solved while it
+carries on costing money.
+
+**Do not edit the cause ids or add new ones.** They are the join key to the diagnosis, and an id that
+does not match is silently ignored.
+
+${batches.length === 0 ? '' : batches.map((batch, index) => `## Batch ${index + 1}${batch.title ? `: ${batch.title}` : ''}
+
+${(batch.causeIds ?? []).map(section).join('')}`).join('')}${unplaced.length === 0 ? '' : `## Not placed in a batch
+
+${unplaced.map(section).join('')}`}
+## Anything else you changed
+
+Changes you made that were not on this list. The diagnosis cannot see these coming, and they are the
+most likely explanation for a problem that moves next week for no visible reason.
+
+-
+`);
+
+/*
+ * LAST-WEEK.md — what you said you changed, against what the account still shows.
+ *
+ * The ledger already answers NEW / RECURRING / ABSENT. It cannot answer "did the fix work", because
+ * ABSENT is not FIXED. Crossing last week's CHANGES-MADE.md with this week's causes answers it, and
+ * the crossing happens HERE rather than inside the run because the run is sealed and byte-compared:
+ * folding a hand-edited markdown file into a sealed artefact would make the run unreproducible.
+ *
+ * Read the PREVIOUS archived week, not the ledger, because the claim is a human statement about what
+ * was done and belongs beside the diagnosis it answers.
+ */
+const accountFolder = join(into, FOLDER, accountName);
+const priorWeeks = existsSync(accountFolder)
+  ? readdirSync(accountFolder).filter((d) => /^\d{4}-\d{2}-\d{2}$/u.test(d) && d < date).sort()
+  : [];
+const previous = priorWeeks.at(-1) ?? null;
+let lastWeekWritten = false;
+
+if (previous) {
+  const priorChanges = join(accountFolder, previous, 'CHANGES-MADE.md');
+  const thisWeeksIds = new Set(causes.map((c) => c.causeId));
+  const claimed = new Map();
+  if (existsSync(priorChanges)) {
+    const text = readFileSync(priorChanges, 'utf8');
+    // Each block is "### <causeId>" followed by its fields, up to the next heading.
+    // `(?![\s\S])` is end-of-input. `\z` is Ruby and throws under the `u` flag.
+    for (const match of text.matchAll(/^### (cause_[a-f0-9]+)\n([\s\S]*?)(?=^#{2,3} |(?![\s\S]))/gmu)) {
+      const status = (match[2].match(/\*\*Status:\*\*\s*(.+)/u)?.[1] ?? '').trim();
+      const did = (match[2].match(/\*\*What was actually done:\*\*\s*(.*)/u)?.[1] ?? '').trim();
+      claimed.set(match[1], { status: status || 'NOT STARTED', did });
+    }
+  }
+  const acted = [...claimed.entries()].filter(([, v]) => /^DONE/u.test(v.status));
+  const stillHere = acted.filter(([id]) => thisWeeksIds.has(id));
+  const gone = acted.filter(([id]) => !thisWeeksIds.has(id));
+  const untouchedGone = [...claimed.entries()]
+    .filter(([id, v]) => !/^DONE/u.test(v.status) && !thisWeeksIds.has(id));
+
+  writeFileSync(join(destination, 'LAST-WEEK.md'), `# Against last week (${previous})
+
+${claimed.size === 0
+  ? `Last week's \`CHANGES-MADE.md\` was never filled in, so nothing can be said about whether anything
+was fixed. Every problem below is simply what this run found. **Fill in this week's
+\`CHANGES-MADE.md\` as you work** and next week this page will be worth reading.`
+  : `Last week recorded **${acted.length} of ${claimed.size}** problems as actioned.`}
+
+${acted.length === 0 ? '' : `## Changed, and the problem is GONE this week — ${gone.length}
+
+Treat as fixed. This is the only combination that earns that word.
+
+${gone.length === 0 ? '_none_' : gone.map(([id, v]) => `- \`${id}\`${v.did ? ` — ${v.did}` : ''}`).join('\n')}
+
+## Changed, and the problem is STILL HERE — ${stillHere.length}
+
+🔴 **The fix did not work, or did not address the cause.** Read the package again before doing more.
+
+${stillHere.length === 0 ? '_none_' : stillHere.map(([id, v]) => `- \`${id}\`${v.did ? ` — ${v.did}` : ''}`).join('\n')}
+`}
+## Gone, but nobody changed anything — ${untouchedGone.length}
+
+Do NOT read these as fixed. A problem vanishes when an expert frames it differently, when the
+evidence moves, or when its finding was refused this week for a formatting slip. Unexplained
+disappearance is a reason to look, not to celebrate.
+
+${untouchedGone.length === 0 ? '_none_' : untouchedGone.map(([id]) => `- \`${id}\``).join('\n')}
+`);
+  lastWeekWritten = true;
+}
+
+/*
+ * The week-over-week ledger itself. Small, and it is the ONLY record of what this account looked
+ * like in previous weeks. Leaving it solely in the working directory means losing that directory
+ * silently restarts every account at week one.
+ */
+const memoryDir = join(auditRoot, 'memory');
+if (existsSync(memoryDir)) copy(memoryDir, join(destination, 'history'));
+
 console.log(`archived to ${destination}`);
 console.log(`  ${packageCount} packages, ${reviewCount} reviews, ${caveats.length} recorded caveats`);
+console.log(`  CHANGES-MADE.md written as a TEMPLATE: fill it in as the work is done`);
+if (lastWeekWritten) console.log(`  LAST-WEEK.md compares against ${previous}`);
 console.log('  START-HERE.md written: point an agent at the FOLDER, it reads that first');
