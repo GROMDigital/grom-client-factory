@@ -316,17 +316,19 @@
   </section>
 
   <section>
-    <h2><span class="num">The shape</span>Four stages of expert, with a deterministic command between every one</h2>
+    <h2><span class="num">The shape</span>Four stages of expert, with a predictable step between every one</h2>
     <p>
       A model call is the only unpredictable step in the whole product. The audit kernel is the
-      opposite: it checkpoints every phase, canonicalises the output, and byte-compares it if the run
-      resumes. A run that answered differently the second time quarantines itself. So a kernel that
-      called an expert mid-run would quarantine itself on the first resume, every time.
+      opposite. It saves the result of every step, and if a run gets interrupted and picks up again
+      later it re-does that step and checks it came out identical. A run that answers differently the
+      second time stops itself, on the grounds that something it depended on has moved. Which means
+      if an expert were called from inside the run, the run would stop itself every single time it
+      resumed, because no expert answers a question exactly the same way twice.
     </p>
     <p>
-      The answer is a seam that repeats: a deterministic command writes the question, the experts
-      answer it as files, and the next deterministic command reads those answers and writes the next
-      question. Hand the same answers back and you get byte-identical results.
+      The answer is a handover that repeats: a predictable step writes the question, the experts
+      answer it as files, and the next predictable step reads those answers and writes the next
+      question. Hand the same answers back and you get exactly the same result, down to the character.
     </p>
 
     <div class="band">
@@ -334,7 +336,7 @@
         <div class="pnode">
           <div class="kind">Command</div>
           <div class="name">audit run</div>
-          <div class="what">Collects both rails, measures the journey, writes the evidence briefs and the stage-1 question.</div>
+          <div class="what">Reads the account from both sources, measures the journey, writes the evidence and the first question.</div>
           <div class="count">588 records</div>
         </div>
         <div class="pnode model">
@@ -376,7 +378,7 @@
       </div>
     </div>
     <div class="legend">
-      <span><i class="swatch det"></i> Deterministic. Same input, same bytes, every time.</span>
+      <span><i class="swatch det"></i> Predictable code. Same input, same output, every time.</span>
       <span><i class="swatch mod"></i> A model call. Always outside the kernel.</span>
     </div>
   </section>
@@ -384,10 +386,11 @@
   <section>
     <h2><span class="num">Before any of it</span>What the evidence actually is</h2>
     <p>
-      Two rails feed the run. The <strong>public rail</strong> goes through a governed allowlist and
-      brings back contacts, opportunities, appointments, conversations and calendars: the movement of
-      real people, which becomes the KPI table. The <strong>internal rail</strong> is a read-only
-      server over the account's own session and brings back what the public API does not expose: the
+      Two separate connections feed the run. The <strong>official one</strong> is the documented
+      GoHighLevel interface, locked to a fixed list of things we are allowed to read, and it brings
+      back contacts, opportunities, appointments, conversations and calendars: the movement of real
+      people, which becomes the numbers. The <strong>second one</strong> logs in the way a browser
+      does and reads what the documented interface simply does not offer: the
       full step graph of every workflow, the runtime of those workflows, the AI agents' instructions,
       and the email library so a send step that points at a template arrives with its actual words
       rather than just a subject line.
@@ -433,8 +436,8 @@
           </p>
           <p>
             The answer is refused unless it covers <strong>every workflow exactly once</strong> and
-            names only workflows and KPI edges the account actually has. That check is what makes the
-            map safe to hand to everyone else.
+            names only workflows and journey steps the account actually has. That check is what makes
+            the map safe to hand to everyone else.
           </p>
           <div class="quote">
             <b>On Grom UK, first attempt, accepted with no repair</b>
@@ -467,15 +470,19 @@
             The count comes from the account, and the map decides it: a one-message workflow on the
             money path gets an expert, a one-message receipt does not, and every exclusion is listed
             with its reason. The output is prose against a rubric, including <strong>full replacement
-            copy</strong> for anything it would change. Not findings in a schema, because there is no
-            shape in that schema for "this asks permission to make a second ask".
+            copy</strong> for anything it would change. It writes prose rather than filling in a
+            form, because no form has a box for "this message asks permission to make a second ask",
+            and forcing a craft judgement into one either inflates it into something bigger than it
+            is or loses it entirely.
           </p>
           <div class="quote">
             <b>What one expert wrote about 05 No-Show Recovery</b>
-            <em>stopOnResponse is false and nothing removes anybody, so a lead who rebooks on day one
-            still receives "Last follow-up from me" on day 14 and "Closing this one out" on day 21,
-            while 02 Booking Confirmation is confirming the same call to the same person.</em>
-            Configuration, copy and placement in one thought. No single lane could reach it.
+            <em>The sequence is not set to stop when someone replies, and nothing takes them out of
+            it, so a lead who rebooks on day one still receives "Last follow-up from me" on day 14
+            and "Closing this one out" on day 21, while 02 Booking Confirmation is confirming the
+            same call to the same person.</em>
+            Settings, wording and placement in one thought. No single expert could reach that before,
+            because no single expert could see all three.
           </div>
         </div>
       </article>
@@ -509,14 +516,16 @@
         </div>
         <div class="stage-body">
           <p>
-            Pure code. It validates every finding, groups the survivors into causes by what they
-            anchor to, scores them, and writes the deliverables. Two findings from different experts
-            that point at the same KPI edge or the same workflow become one cause with two
-            independent supports, and corroboration is most of what evidence strength means here.
+            Pure code. It checks every finding, groups the survivors by what they point at, scores
+            them, and writes the documents. Two findings from different experts that point at the
+            same journey step or the same workflow become one problem with two independent
+            witnesses, and two experts arriving somewhere separately is most of what makes a finding
+            believable.
           </p>
           <p>
-            It merges on <em>discriminating</em> anchors only. Journey stages are near-universal, so
-            grouping on those once collapsed all 24 findings into a single useless blob.
+            It only groups on things specific enough to mean something. Grouping on broad ones, like
+            "this is about the conversation stage", once merged all 24 findings into one useless
+            blob, because almost everything is about the conversation stage.
           </p>
         </div>
       </article>
@@ -575,19 +584,21 @@
       </table>
     </div>
     <p style="margin-top:1.25rem">
-      Targets are set only where the step's denominator is unambiguous. The published "lead to
-      booked" bands are measured across all leads, while this account measures it across
-      <em>qualified</em> leads, and a target quietly carrying the wrong denominator would be worse
-      than no target at all.
+      Targets are only set where it is clear what the percentage is measured out of. The published
+      "lead to booked" figures count every lead, while this account counts only the leads it marked
+      as qualified. Those are different sums, and a target quietly measuring the wrong one would be
+      worse than having no target at all.
     </p>
 
     <div class="quote" style="max-width:var(--measure)">
       <b>What this immediately surfaced on Grom UK</b>
-      Two of the three targets cannot be measured at all. <em>Booked call attends</em> reads
-      ALL_SUBJECTS_EXCLUDED in every window, because 21 of 64 appointments were never resolved past
-      their own start time. The raw counts say 17 attended against 26 no-shows, roughly a 40% show
-      rate against a 65% target, but the system correctly refuses to publish that as a rate while a
-      third of the appointments sit unclosed. The first fix is record hygiene, not marketing.
+      Two of the three targets cannot be measured at all. The system refuses to put a number on
+      <em>booked call attends</em> over any period, because 21 of 64 appointments were never marked
+      as attended or missed after the fact and are still sitting in a before-the-call status. The
+      raw counts say 17 attended against 26 no-shows, roughly 40% against a 65% target, but it will
+      not publish that as a rate while a third of the appointments are unaccounted for, and it is
+      right not to: some of those 21 probably showed up. <em>The first fix here is closing out
+      appointments, not marketing.</em>
     </div>
   </section>
 
@@ -595,7 +606,7 @@
     <h2><span class="num">The contract</span>Why a finding can be thrown out</h2>
     <p>
       An expert's answer is a claim, not evidence. Every finding must name one of nine mechanism
-      families, anchor to a measured step, state a numeric benchmark and where that standard comes
+      families, point at a measured step, state a number for what good looks like and where that came
       from, and carry three things that make it possible to disagree with:
     </p>
     <ul>
@@ -631,8 +642,8 @@
             <td>Anyone who wants to disagree</td>
           </tr>
           <tr>
-            <td><code>packages/&lt;causeId&gt;.md</code></td>
-            <td>One per cause. What is wrong, what to change, where it applies, how you will know it worked, and what to check before touching anything.</td>
+            <td>One file per problem, in <code>packages/</code></td>
+            <td>What is wrong, what to change, where it applies, how you will know it worked, and what to check before touching anything.</td>
             <td>Whoever implements it</td>
           </tr>
           <tr>
@@ -659,9 +670,9 @@
       <div class="answer">
         <div class="q">Does it produce solution packages? <span class="pill built">Yes</span></div>
         <p>
-          One per ranked cause, written to <code>investigations/&lt;runId&gt;/packages/</code>. The
-          last live run produced fifteen. Each carries the acceptance test that decides whether the
-          fix worked, written by the expert who found the problem rather than invented afterwards.
+          One per ranked problem, saved in that run's own folder. The last live run produced fifteen.
+          Each carries the test that decides whether the fix actually worked, written by the expert
+          who found the problem rather than made up afterwards.
         </p>
       </div>
 
@@ -676,33 +687,32 @@
       <div class="answer">
         <div class="q">Does it compare this week against last week? <span class="pill no">Not wired</span></div>
         <p>
-          No, and I would rather say that plainly than let the ledger's existence imply otherwise.
-          There <em>is</em> a built and tested component for it, <code>lib/memory.mjs</code>: an
-          append-only, hash-chained event ledger with a backlog projection that already models a
-          finding opening, being approved, being implemented, being verified, and regressing. It has
-          its own test file.
+          No, and I would rather say that plainly than let the half-built part of it imply otherwise.
+          There <em>is</em> a finished, tested piece for this: a running history that can already
+          track a problem being found, approved, fixed, checked, and coming back. It only ever gets
+          added to, never edited, so the history cannot be quietly rewritten.
         </p>
         <p>
-          Nothing calls it. I grepped every file in <code>lib/</code> and <code>cli/</code> and the
-          only importer is its own test. So no run has ever written a finding into it, and no run has
-          ever read one back. Week-over-week is a component sitting on the bench, not a feature.
+          Nothing uses it. I searched every file in the project and the only thing that touches it is
+          its own test. So no run has ever recorded a problem in it, and no run has ever looked one
+          up. Comparing weeks is a finished part sitting on the bench, not a working feature.
         </p>
       </div>
 
       <div class="answer">
         <div class="q">Does it save this week's data so next week can read it? <span class="pill pending">Half</span></div>
         <p>
-          The <em>data</em> persists completely. Every run seals its evidence, its briefs, its map,
-          all nineteen reviews, the investigation and every package on disk under its own run id, and
-          a local database records the run, its checkpoints and its provenance. Nothing is thrown
-          away, and two runs can never overwrite each other: the artefacts are write-once and
-          byte-compared, so re-running the same run id either produces the identical bytes or stops.
+          The <em>data</em> is all kept. Every run saves its evidence, the map, all nineteen reviews,
+          the investigation and every package into its own dated folder, and a small local database
+          records the run and how it went. Nothing is thrown away, and two runs cannot overwrite each
+          other: once a file is written it is never changed, and re-running the same one either
+          produces exactly the same file or stops and tells you something upstream has moved.
         </p>
         <p>
-          What is missing is the <em>join</em>. Nothing turns this week's causes into ledger events,
-          and nothing loads last week's to compare. Next week's run will not know this week happened.
-          Wiring it is a real piece of work, not a switch, and it is the obvious next build after the
-          first live run through the new chain.
+          What is missing is the <em>link between them</em>. Nothing records this week's problems into
+          that history, and nothing reads last week's back out to compare. Next week's run will not
+          know this week happened. Connecting the two is real work rather than a switch, and it is
+          the obvious next build once the new four-stage version has had one live run.
         </p>
       </div>
 
@@ -717,15 +727,15 @@
           <tr><th>Part</th><th>State</th><th>Evidence</th></tr>
         </thead>
         <tbody>
-          <tr><td>Collection, both rails</td><td><span class="pill built">Live</span></td><td>588 real records, byte-identical across two fresh runs</td></tr>
-          <tr><td>KPI measurement and journey projection</td><td><span class="pill built">Live</span></td><td>Reproduces every hand-derived number, and found three nobody had</td></tr>
+          <tr><td>Reading the account, both connections</td><td><span class="pill built">Live</span></td><td>588 real records, identical across two separate runs</td></tr>
+          <tr><td>Measuring the journey</td><td><span class="pill built">Live</span></td><td>Reproduces every hand-derived number, and found three nobody had</td></tr>
           <tr><td>Stage 1, the map</td><td><span class="pill built">Proven</span></td><td>27 of 27 workflows, first attempt, on real Grom UK evidence</td></tr>
           <tr><td>Stage 2, per-object review</td><td><span class="pill built">Proven</span></td><td>One agent on 05 No-Show Recovery produced the whole-object finding</td></tr>
           <tr><td>Stage 3, account-wide experts</td><td><span class="pill built">Built</span></td><td>Wired and tested; not yet run against the enriched prompts</td></tr>
           <tr><td>Stage 4, causes and ranking</td><td><span class="pill built">Live</span></td><td>24 findings to 15 ranked causes on the last full run</td></tr>
-          <tr><td>A live run through the new four-stage chain</td><td><span class="pill pending">Owed</span></td><td>Needs a fresh token. Nothing else proves the seams under a real resume</td></tr>
-          <tr><td>Week-over-week comparison</td><td><span class="pill no">Not wired</span></td><td>Ledger built and tested, zero callers</td></tr>
-          <tr><td>Executable change sets</td><td><span class="pill no">By decision</span></td><td>Needs the finding contract extended; your call, not a task</td></tr>
+          <tr><td>A live run through the new four-stage chain</td><td><span class="pill pending">Owed</span></td><td>Needs a fresh login. Nothing else proves the handovers hold when a run is interrupted and picks up again</td></tr>
+          <tr><td>Week-over-week comparison</td><td><span class="pill no">Not wired</span></td><td>The history is built and tested, and nothing uses it</td></tr>
+          <tr><td>Executable change sets</td><td><span class="pill no">By decision</span></td><td>Needs experts to record exactly which object and version they would change; your call, not a task</td></tr>
           <tr><td>Pushed to a remote</td><td><span class="pill no">Never</span></td><td>Twenty-four commits, local only</td></tr>
         </tbody>
       </table>
