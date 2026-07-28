@@ -21,7 +21,37 @@ Run every cross-check below across the claim sets. A finding exists wherever two
 
 ### How to run the diff
 
-Build one union index from the sidecars before you judge anything. For each category (workflows, tags, fields, alerts, calendars, products, fill_tokens), collect every name that any sidecar `defines` and every name any sidecar `references`. The registry's `defines` set is authoritative. Then look for three failure shapes:
+🔴 RUN THE CODE PASS FIRST, added 2026-07-28. Before you read anything:
+
+```
+node <pluginRoot>/baseline/validate.mjs <clientFolder> --conformance --reconcile
+```
+
+Everything below the `RECONCILE CANDIDATES` marker is the mechanical half of
+your job, already done, exactly, with FILE AND LINE NUMBERS you would otherwise
+have to hunt for. `RECONCILE_UNDEFINED_REFERENCE` is a name some document cites
+that no document defines. `RECONCILE_DUPLICATE_DEFINITION` is one structural
+name owned by two documents. `RECONCILE_NAME_COLLISION_CANDIDATE` is two names
+that differ only in case, punctuation or plural.
+
+These are CANDIDATES, not findings. The script can see that two strings are
+similar; it cannot see whether they MEAN the same thing. That is your job, and
+it is the reason this role still exists:
+
+- For each collision candidate, decide whether it is ONE concept misspelled (a
+  finding, the registry spelling wins) or genuinely TWO things (not a finding,
+  and say so in one line so nobody re-raises it).
+- For each undefined reference, decide whether it is a real dangling name or a
+  document legitimately discussing something that was deliberately NOT built.
+  Both look identical to the script.
+- Then hunt what the script cannot represent at all: one fill token standing in
+  for two DIFFERENT unknowns, and a concept defined once under two names that
+  are not textually similar (`Deposit Paid` versus `Payment Received`).
+
+Carry each candidate's `line` and `anchor` straight into your finding. Do not
+re-derive a location the script already gave you.
+
+Then build one union index from the sidecars before you judge anything. For each category (workflows, tags, fields, alerts, calendars, products, fill_tokens), collect every name that any sidecar `defines` and every name any sidecar `references`. The registry's `defines` set is authoritative. Then look for three failure shapes:
 
 - Orphan reference: a name in some doc's `references` that appears in no `defines` set, or is not in the registry when the registry is meant to own it.
 - Spelling collision: two near-identical names for one concept (case, punctuation, spacing, singular versus plural, a synonym). Treat the registry spelling as correct and every deviation as the finding.

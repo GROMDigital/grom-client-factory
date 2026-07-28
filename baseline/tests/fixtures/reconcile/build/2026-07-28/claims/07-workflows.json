@@ -1,0 +1,4 @@
+{
+  "defines": { "tags": ["deposit-paid"], "fill_tokens": [] },
+  "references": { "tags": ["Booking Confirmed"], "fill_tokens": [] }
+}

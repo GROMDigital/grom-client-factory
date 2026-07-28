@@ -277,6 +277,31 @@ test("--dry-run reports the same actions and writes nothing", () => {
   assert.doesNotMatch(dry.out, /^CREATED_SIDECAR\t.*01-thing\.json/m, dry.out);
 });
 
+// --- cross-document name reconciliation, in code -------------------------
+
+test("--reconcile finds an undefined reference and a spelling collision, with lines", () => {
+  const r = run(fixture("reconcile"), "--conformance", "--reconcile");
+  assert.match(r.out, /^RECONCILE_UNDEFINED_REFERENCE\tdesign\/07-workflows\.md:4\t.*Booking Confirmed/m, r.out);
+  assert.match(r.out, /^RECONCILE_NAME_COLLISION_CANDIDATE\tdesign\/07-workflows\.md:3\t.*Deposit Paid.*deposit-paid/m, r.out);
+  // the line is the point: the agent could never produce one cheaply
+  assert.match(r.out, /anchor: /, r.out);
+});
+
+test("--reconcile candidates never fail the build", () => {
+  // Whether two similar names mean one thing is a judgement no script can make,
+  // and failing a build on a guess is worse than not checking. Candidates are
+  // reported below a marker and leave the exit code alone.
+  const r = run(fixture("reconcile"), "--conformance", "--reconcile");
+  assert.equal(r.code, 0, r.out);
+  assert.match(r.out, /^validate: PASS/m);
+  assert.match(r.out, /RECONCILE CANDIDATES \(judgement required, not violations/);
+});
+
+test("--reconcile is off unless asked for", () => {
+  const r = run(fixture("reconcile"), "--conformance");
+  assert.doesNotMatch(r.out, /RECONCILE/, r.out);
+});
+
 test("coverage is reported, so a check that inspected nothing cannot hide", () => {
   const clean = run(fixture("valid-v2"));
   assert.match(clean.err, /validate coverage:/);

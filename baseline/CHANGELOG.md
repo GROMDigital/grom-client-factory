@@ -3,6 +3,34 @@
 Newest first. One line per change: date, what changed, which client's
 divergence log motivated it.
 
+- 2026-07-28: **cross-document name reconciliation moves into code, ALONGSIDE the
+  agent.** `validate.mjs --reconcile` (new `baseline/lib/reconcile.mjs`) does the
+  set-comparison half of the `registry-reconciler` role: a name some document
+  references that no document defines, one structural name owned by two
+  documents, and names differing only in case, punctuation or plural. It reports
+  file, LINE and anchor for each, which is the thing the agent could never do
+  cheaply: on 2026-07-28 a fix pass spent 56 shell commands to make 23 edits
+  purely on locating things.
+
+  🔴 **Report-only, and the agent stays.** Candidates print below a marker and do
+  NOT affect the exit code, because whether "Deposit Paid" and "deposit-paid" are
+  one tag misspelled or two real tags is a judgement no script can make, and
+  failing a build on a guess is worse than not checking. The reconciler prompt
+  now runs the command first and spends its turns on exactly the residue: is a
+  collision one concept or two, is an undefined reference dangling or a document
+  legitimately discussing something deliberately not built, is one fill token
+  standing in for two different unknowns, and is a concept defined twice under
+  names that are not textually similar. Whether the agent can then be dropped is
+  a question for ONE real build to answer by comparison, not for a guess: this
+  estate has now twice been wrong about what an agent was contributing.
+
+  Scoped by measurement on the real Better By Ati build. Applying
+  duplicate-definition to fill tokens produced 15 findings of one shape (several
+  documents each writing {{FILL_OPENING_HOURS}} and each calling it a
+  definition), which is ordinary and which the fill guide dedupes, so that rule
+  is structural names only. After scoping, a whole real build yields 3
+  candidates. Baseline suite 22 tests to 25.
+
 - 2026-07-28: **one meaning for a sidecar's token lists.** `conformance_fix.mjs`
   trimmed both `defines.fill_tokens` and `references.fill_tokens` against tokens
   literally present in that document, while `fill-guide-compiler.md` told the

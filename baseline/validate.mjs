@@ -14,6 +14,7 @@ import {
   AUTHORED_EXT, bareToken, claimsDirs as claimsDirsFor, docTokenIndex,
   isClaimsPath, malformedTokenOn, scannedFiles,
 } from "./lib/docscan.mjs";
+import { reconcile } from "./lib/reconcile.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const schema = JSON.parse(fs.readFileSync(path.join(here, "client-manifest.schema.json"), "utf8"));
@@ -55,6 +56,11 @@ const UPDATE_OPP_TYPES = new Set(["update_opportunity", "internal_update_opportu
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith("--")));
 const positional = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const CONFORMANCE_ONLY = flags.has("--conformance");
+// --reconcile adds the cross-document name pass: names referenced but never
+// defined, one name owned by two documents, and names that differ only in case
+// or punctuation. It runs ALONGSIDE the registry-reconciler agent, not instead
+// of it, until one real build has compared what each catches.
+const RECONCILE = flags.has("--reconcile");
 
 // --docs=<comma separated client-relative paths> asserts that documents the
 // registry's doc index promised actually exist. The factory had no notion of
@@ -73,7 +79,7 @@ const DOC_STUB_BYTES = 400;
 
 const root = positional[0];
 if (!root || !fs.existsSync(root)) {
-  console.error("usage: validate.mjs <client-folder> [--conformance] [--docs=a.md,b.md]");
+  console.error("usage: validate.mjs <client-folder> [--conformance] [--reconcile] [--docs=a.md,b.md]");
   process.exit(2);
 }
 const violations = [];
@@ -477,6 +483,24 @@ for (const [key, entry] of docIndex) {
   }
 }
 
+// ------------------------------------------ 3bb. Cross-document names
+// 🔴 REPORT ONLY. These are CANDIDATES for a human or the reconciler agent to
+// judge, not violations, and they deliberately do not affect the exit code.
+// Whether "Deposit Paid" and "deposit-paid" are one tag misspelled or two real
+// tags is a judgement no script can make, and failing a build on a guess is
+// worse than not checking. The output is a shorter list for the agent to start
+// from, with the line numbers the agent could never produce cheaply.
+const reconcileLines = [];
+if (RECONCILE) {
+  const { findings, inspected } = reconcile(root);
+  saw("reconciled sidecars", inspected);
+  for (const f of findings) {
+    const at = f.line ? `${f.file}:${f.line}` : (f.sidecar || "unlocated");
+    reconcileLines.push(`${f.rule}\t${at}\t${f.anchor ? `${f.detail} | anchor: ${f.anchor}` : f.detail}`);
+  }
+  saw("reconcile candidates", findings.length);
+}
+
 // ------------------------------------------- 3c. Promised documents exist
 // The doc index is a promise. This is the only check in the factory that can
 // catch an agent dying mid-write, because every other check reads what WAS
@@ -511,5 +535,11 @@ if (!cov["claims sidecars"]) {
 coverageLines.push("  not implemented here:", ...NOT_IMPLEMENTED.map((s) => `    - ${s}`));
 console.error(coverageLines.join("\n"));
 
-if (violations.length) { console.log(violations.join("\n")); process.exit(1); }
-console.log("validate: PASS");
+// Candidates print AFTER the violations and BELOW a marker, so a parser reading
+// violations cannot mistake one for the other.
+const candidateBlock = reconcileLines.length
+  ? `\n--- RECONCILE CANDIDATES (judgement required, not violations, exit code unaffected) ---\n${reconcileLines.join("\n")}`
+  : (RECONCILE ? "\n--- RECONCILE CANDIDATES: none ---" : "");
+
+if (violations.length) { console.log(violations.join("\n") + candidateBlock); process.exit(1); }
+console.log("validate: PASS" + candidateBlock);

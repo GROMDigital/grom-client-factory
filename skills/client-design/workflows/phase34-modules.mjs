@@ -278,7 +278,13 @@ const FIX_RESULT = {
 }
 
 const auditorIds = ['registry-reconciler', 'journey-leak-auditor', 'compliance-brand-auditor']
-const auditResults = await parallel(auditorIds.map((id) => () => agent(boot(id), { model: 'sonnet', label: id, phase: 'Audit', schema: FINDINGS })))
+// The reconciler runs the code pass first: its prompt says so, and this gives
+// it the exact command with the paths filled in. The mechanical half arrives
+// done, with line numbers, so the agent spends its turns on judgement.
+const auditExtra = (id) => id !== 'registry-reconciler' ? null
+  : `Run this FIRST, before reading anything else, and use everything below its RECONCILE CANDIDATES marker as your mechanical starting list:
+cd "${A.clientFolder}" && node "${A.pluginRoot}/baseline/validate.mjs" "${A.clientFolder}" --conformance --reconcile`
+const auditResults = await parallel(auditorIds.map((id) => () => agent(boot(id, auditExtra(id)), { model: 'sonnet', label: id, phase: 'Audit', schema: FINDINGS })))
 const deadAuditors = auditorIds.filter((_, i) => !auditResults[i])
 if (deadAuditors.length) log(`audit: ${deadAuditors.join(', ')} returned nothing, so those lenses did NOT run on this build`)
 let findings = auditResults.filter(Boolean).flatMap((r) => r.findings)
