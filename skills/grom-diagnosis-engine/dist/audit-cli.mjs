@@ -44713,6 +44713,13 @@ function templatePreviewUrlsFromWorkflows(workflows) {
   }
   return urls;
 }
+function tokenlessBodyUrlFor({ locationId, templateId }) {
+  if (typeof locationId !== "string" || locationId.length === 0) return null;
+  if (typeof templateId !== "string" || !OBJECT_ID.test(templateId)) return null;
+  const url2 = new URL(`https://${TEMPLATE_BODY_HOST}${templateObjectPath(locationId, templateId)}`);
+  url2.searchParams.set("alt", "media");
+  return url2.toString();
+}
 function bodyUrlFor({ locationId, templateId, previewUrl }) {
   if (typeof previewUrl !== "string" || previewUrl.length === 0) return null;
   if (!OBJECT_ID.test(templateId)) return null;
@@ -44874,7 +44881,7 @@ function createEmailCopyCollector({
             locationId: boundLocationId,
             templateId,
             previewUrl: stepPreviewUrls.get(templateId)
-          });
+          }) ?? tokenlessBodyUrlFor({ locationId: boundLocationId, templateId });
           if (orphanUrl === null || fetched >= limits.maxBodies) {
             templates.push({ ...orphan, body: null, bodyUnavailable: "NOT_IN_SHARED_LIBRARY" });
             limitations.add("EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY");

@@ -17,6 +17,7 @@ import {
   bodyUrlFor,
   createEmailCopyCollector,
   templateIdsFromWorkflows,
+  tokenlessBodyUrlFor,
 } from '../lib/adapters/email-copy.mjs';
 
 const LOCATION = 'yoQVVJFp6wyjxcxilA2H';
@@ -220,18 +221,39 @@ test('no workflow email means no call at all', async () => {
   assert.deepEqual(result.templates, []);
 });
 
-test('a template the shared library does not hold is reported per template, not as a failure', async () => {
-  // OBSERVED on a prior engagement: some send steps use a workflow-embedded builder template whose
-  // id never appears in the library index.
+test('a template the index does not hold is still read, because the object is', async () => {
+  /*
+   * This used to assert the opposite, and the opposite was the bug. A template id the index does not
+   * list was reported unreadable, and 19 of 81 emails on the Grom UK run of 2026-07-27 went unjudged
+   * on that basis. Eighteen were merely in a folder; the last one's object was sitting there all
+   * along, readable, at a URL derivable from ids this run is already sealed with.
+   */
   const client = listClient([builder(OTHER_TEMPLATE, 'Something else')]);
   const result = await collector(client).collectEmailCopy({
+    workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])],
+  });
+
+  assert.match(result.templates[0].body, /contact\.first_name/u);
+  assert.equal(result.templates[0].bodyUnavailable, null);
+  // Readable, but the library cannot name or date it, and the reviewer is told so.
+  assert.equal(result.templates[0].name, null);
+  assert.equal(result.templates[0].unlistedInLibrary, true);
+  assert.ok(result.limitations.includes('EMAIL_TEMPLATE_RECOVERED_UNLISTED'));
+});
+
+test('an orphan whose object is genuinely gone is reported per template, not as a failure', async () => {
+  // A deleted template with a deleted object. The run keeps every other template and says why.
+  const client = listClient([builder(OTHER_TEMPLATE, 'Something else')]);
+  const result = await collector(client, {
+    fetchBody: async () => { throw Object.assign(new Error('x'), { code: 'EMAIL_TEMPLATE_BODY_STATUS' }); },
+  }).collectEmailCopy({
     workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])],
   });
 
   assert.equal(result.complete, false);
   assert.ok(result.limitations.includes('EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY'));
   assert.equal(result.templates[0].body, null);
-  assert.equal(result.templates[0].bodyUnavailable, 'NOT_IN_SHARED_LIBRARY');
+  assert.equal(result.templates[0].bodyUnavailable, 'EMAIL_TEMPLATE_BODY_STATUS');
 });
 
 test('the index is asked for TEMPLATES, not the root listing that hides foldered ones', async () => {
@@ -276,12 +298,16 @@ test('a template missing from the index is recovered from the sending step, and 
   assert.ok(result.limitations.includes('EMAIL_TEMPLATE_RECOVERED_UNLISTED'));
 });
 
-test('an unlisted template whose step URL points elsewhere is refused, not followed', async () => {
-  // The recovery path is not a hole in the URL pin: it goes through the same rebuild and check.
+test('an unlisted template whose step URL points elsewhere is never followed there', async () => {
+  /*
+   * The recovery path is not a hole in the URL pin. A previewUrl for someone else's object is
+   * discarded, and what gets fetched is the object THIS location's THIS template lives at, built
+   * from sealed values with nothing taken from the wire.
+   */
   const client = listClient([builder(OTHER_TEMPLATE, 'Something else')]);
   const fetched = [];
-  const result = await collector(client, {
-    fetchBody: async (url) => { fetched.push(url); return '<p>should never happen</p>'; },
+  await collector(client, {
+    fetchBody: async (url) => { fetched.push(url); return '<p>ours</p>'; },
   }).collectEmailCopy({
     workflows: [workflow([{
       type: 'email',
@@ -290,9 +316,39 @@ test('an unlisted template whose step URL points elsewhere is refused, not follo
     }])],
   });
 
-  assert.deepEqual(fetched, []);
-  assert.equal(result.templates[0].body, null);
-  assert.equal(result.templates[0].bodyUnavailable, 'NOT_IN_SHARED_LIBRARY');
+  assert.equal(fetched.length, 1);
+  assert.doesNotMatch(fetched[0], /someOtherLocation1234/u);
+  assert.ok(fetched[0].includes(encodeURIComponent(`location/${LOCATION}/emails/${TEMPLATE}/index.html`)));
+  // Nothing from the response survived, not even the token it tried to supply.
+  assert.doesNotMatch(fetched[0], /token=/u);
+});
+
+test('an orphan is recovered even when the rail redacted the token, which it always does', async () => {
+  /*
+   * The internal audit rail strips the signed token out of a workflow export. That is correct of it,
+   * and it meant the first version of this recovery could never fire: verified on the live re-run of
+   * 2026-07-29, where 18 of 19 unreadable emails came back and the one true orphan did not.
+   */
+  const client = listClient([builder(OTHER_TEMPLATE, 'Something else')]);
+  const result = await collector(client, {
+    fetchBody: async () => '<p>the orphaned copy</p>',
+  }).collectEmailCopy({
+    workflows: [workflow([{
+      type: 'email',
+      attributes: { template_id: TEMPLATE, previewUrl: previewUrl(LOCATION, TEMPLATE, '<redacted>') },
+    }])],
+  });
+
+  assert.equal(result.templates[0].body, '<p>the orphaned copy</p>');
+  assert.equal(result.templates[0].unlistedInLibrary, true);
+});
+
+test('a tokenless URL is built only for a plausible id, and never for another host', () => {
+  const url = tokenlessBodyUrlFor({ locationId: LOCATION, templateId: TEMPLATE });
+  assert.ok(url.startsWith(`https://${TEMPLATE_BODY_HOST}/`));
+  assert.doesNotMatch(url, /token=/u);
+  assert.equal(tokenlessBodyUrlFor({ locationId: LOCATION, templateId: '../../etc/passwd' }), null);
+  assert.equal(tokenlessBodyUrlFor({ locationId: '', templateId: TEMPLATE }), null);
 });
 
 test('an unreadable body degrades to a stated reason and keeps every other template', async () => {

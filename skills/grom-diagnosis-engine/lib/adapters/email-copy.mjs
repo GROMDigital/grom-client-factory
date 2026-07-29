@@ -175,6 +175,27 @@ export function templatePreviewUrlsFromWorkflows(workflows) {
 }
 
 /**
+ * The same object's URL built from SEALED VALUES ONLY, with nothing taken from any response.
+ *
+ * The signed token is not a permission here, it is a hint. VERIFIED live 2026-07-29: the storage
+ * object answers 200 to a tokenless `?alt=media` for a template that exists, and 404 for an id that
+ * does not, so the bucket serves these publicly and the token adds nothing to what we can read.
+ *
+ * This exists for the orphan path. The internal audit rail REDACTS the token when it returns a
+ * workflow export, which is correct of it, but it means the sending step's `previewUrl` can never
+ * satisfy `bodyUrlFor`. Rather than lose the copy, the URL is built entirely from the bound location
+ * id and the template id, which is strictly stronger than the signed path: there is no wire input to
+ * be talked into pointing somewhere else. A 403 here simply degrades to "body unavailable".
+ */
+export function tokenlessBodyUrlFor({ locationId, templateId }) {
+  if (typeof locationId !== 'string' || locationId.length === 0) return null;
+  if (typeof templateId !== 'string' || !OBJECT_ID.test(templateId)) return null;
+  const url = new URL(`https://${TEMPLATE_BODY_HOST}${templateObjectPath(locationId, templateId)}`);
+  url.searchParams.set('alt', 'media');
+  return url.toString();
+}
+
+/**
  * Rebuild the body URL from sealed values, taking ONLY the signed token from the supplied one.
  *
  * This is the whole security argument of this module. Returns `null` rather than throwing when the
@@ -430,11 +451,16 @@ export function createEmailCopyCollector({
             isPlainText: false,
             lastUpdated: null,
           };
+          /*
+           * The signed URL first when the step carried a usable one, and the sealed tokenless URL
+           * when it did not. The internal rail redacts the token on export, so in practice this is
+           * almost always the second: see `tokenlessBodyUrlFor`.
+           */
           const orphanUrl = bodyUrlFor({
             locationId: boundLocationId,
             templateId,
             previewUrl: stepPreviewUrls.get(templateId),
-          });
+          }) ?? tokenlessBodyUrlFor({ locationId: boundLocationId, templateId });
           if (orphanUrl === null || fetched >= limits.maxBodies) {
             templates.push({ ...orphan, body: null, bodyUnavailable: 'NOT_IN_SHARED_LIBRARY' });
             limitations.add('EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY');
