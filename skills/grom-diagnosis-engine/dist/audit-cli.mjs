@@ -31748,18 +31748,26 @@ var init_ghl_public_translator = __esm({
         upstreamAction: "conversations-v3__export-messages-by-location",
         category: "conversations",
         recordKeys: ["messages"],
-        // `startDate`/`endDate` exist here too but the spec types them only as `string` and pins no
-        // format. Sending a guessed format risks a 422 that fails the whole scope, so nothing
-        // unverified is sent; the window is applied here and `sortOrder: desc` (a VERIFIED enum) lets
-        // the walk stop as soon as it passes the start of the window.
+        /*
+         * 🔴 `startDate`/`endDate` ARE SENT, as ISO strings, and they DO filter. VERIFIED live against
+         * SK Skin 2026-07-29: the same call with an ISO window returns only in-window records, and the
+         * same call with epoch millis returns ZERO, so the format matters and ISO is the right one.
+         * The previous comment here declined to send them at all rather than guess the format, which
+         * left the whole week to be reached by paging backwards through unfiltered history.
+         *
+         * `windowFilter: 'client'` STAYS as belt and braces. The server filter is now the thing that
+         * makes the walk short; the client filter is what makes the window claim true.
+         */
         windowFilter: "client",
         earlyStopOlderThanFrom: true,
-        initialState: () => ({ cursor: null }),
-        request: (state, { locationId }) => ({
+        initialState: () => ({ cursor: null, lastFirstId: null }),
+        request: (state, { locationId, fromMs, toMs }) => ({
           locationId,
           limit: UPSTREAM_PAGE_LIMIT,
           sortBy: "createdAt",
           sortOrder: "desc",
+          startDate: new Date(fromMs).toISOString(),
+          endDate: new Date(toMs).toISOString(),
           ...state.cursor === null ? {} : { cursor: state.cursor }
         }),
         advance: (state, body, records) => {
@@ -31767,8 +31775,10 @@ var init_ghl_public_translator = __esm({
           if (typeof nextCursor !== "string" || nextCursor.length === 0) {
             return records.length < UPSTREAM_PAGE_LIMIT ? null : "EXHAUSTED_WITHOUT_CURSOR";
           }
-          if (nextCursor === state.cursor) return null;
-          return { cursor: nextCursor };
+          const firstId = recordId(records[0]) ?? null;
+          if (firstId !== null && firstId === state.lastFirstId) return null;
+          if (records.length < UPSTREAM_PAGE_LIMIT) return null;
+          return { cursor: nextCursor, lastFirstId: firstId };
         }
       },
       "calendars-v3__get-calendar-events": {

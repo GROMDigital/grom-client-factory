@@ -374,9 +374,16 @@ test('pipelines send the location alone', async () => {
 });
 
 test('location-scoped message export sends its planned params and nothing generic', async () => {
-  // NOT among the five calls confirmed live. The ENVELOPE is pinned like every other plan; the
-  // params are pinned to what the plan states so a silent drift is visible, and they stay marked
-  // as unconfirmed until a live probe says otherwise.
+  /*
+   * CONFIRMED LIVE 2026-07-29, against SK Skin. The probe settled the one thing this test used to
+   * mark unconfirmed: `startDate`/`endDate` as ISO strings DO filter server-side, and the same call
+   * with epoch millis returns zero rows, so the format is load-bearing and pinned here.
+   *
+   * Before the probe nothing was sent, on the theory that a guessed format risked a 422. The cost
+   * of that caution was the whole week: the walk had to reach it by paging backwards through
+   * unfiltered history, and it stopped after two pages. See the stable-scroll-handle test in
+   * `tests/ghl-public-translator.test.mjs`.
+   */
   const { wire } = await captureWire('conversations-v3__export-messages-by-location');
   assert.deepEqual(wire, [{
     action_id: 'conversations-v3__export-messages-by-location',
@@ -385,6 +392,8 @@ test('location-scoped message export sends its planned params and nothing generi
       limit: 100,
       sortBy: 'createdAt',
       sortOrder: 'desc',
+      startDate: WINDOW.from,
+      endDate: WINDOW.to,
     },
   }]);
 });

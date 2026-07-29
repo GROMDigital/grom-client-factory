@@ -671,29 +671,51 @@ const PLANS = Object.freeze({
     upstreamAction: 'conversations-v3__export-messages-by-location',
     category: 'conversations',
     recordKeys: ['messages'],
-    // `startDate`/`endDate` exist here too but the spec types them only as `string` and pins no
-    // format. Sending a guessed format risks a 422 that fails the whole scope, so nothing
-    // unverified is sent; the window is applied here and `sortOrder: desc` (a VERIFIED enum) lets
-    // the walk stop as soon as it passes the start of the window.
+    /*
+     * 🔴 `startDate`/`endDate` ARE SENT, as ISO strings, and they DO filter. VERIFIED live against
+     * SK Skin 2026-07-29: the same call with an ISO window returns only in-window records, and the
+     * same call with epoch millis returns ZERO, so the format matters and ISO is the right one.
+     * The previous comment here declined to send them at all rather than guess the format, which
+     * left the whole week to be reached by paging backwards through unfiltered history.
+     *
+     * `windowFilter: 'client'` STAYS as belt and braces. The server filter is now the thing that
+     * makes the walk short; the client filter is what makes the window claim true.
+     */
     windowFilter: 'client',
     earlyStopOlderThanFrom: true,
-    initialState: () => ({ cursor: null }),
-    request: (state, { locationId }) => ({
+    initialState: () => ({ cursor: null, lastFirstId: null }),
+    request: (state, { locationId, fromMs, toMs }) => ({
       locationId,
       limit: UPSTREAM_PAGE_LIMIT,
       sortBy: 'createdAt',
       sortOrder: 'desc',
+      startDate: new Date(fromMs).toISOString(),
+      endDate: new Date(toMs).toISOString(),
       ...(state.cursor === null ? {} : { cursor: state.cursor }),
     }),
     advance: (state, body, records) => {
-      // The one endpoint in the set with a REAL opaque cursor: the request parameter's own
-      // description says to pass `nextCursor` from the previous response. Drop-in.
       const nextCursor = pickPath(body, 'nextCursor');
       if (typeof nextCursor !== 'string' || nextCursor.length === 0) {
         return records.length < UPSTREAM_PAGE_LIMIT ? null : 'EXHAUSTED_WITHOUT_CURSOR';
       }
-      if (nextCursor === state.cursor) return null;
-      return { cursor: nextCursor };
+      /*
+       * 🔴 A REPEATED CURSOR IS NOT A LOOP HERE, and treating it as one is what silently truncated
+       * every transcript read. This endpoint hands back a STABLE scroll handle: the identical
+       * `nextCursor` string comes back on every page, and passing it again correctly returns the
+       * NEXT page. The old guard (`nextCursor === state.cursor` -> stop) therefore ended the walk
+       * after exactly two pages, cleanly and with no truncation flag, so the corpus was whatever
+       * happened to sit in the newest 200 records and SHRANK as new traffic arrived. Measured on SK
+       * Skin: 40 messages and 15 conversations reported for a week that really held 438 across 68,
+       * published as a CENSUS.
+       *
+       * Progress is judged on the DATA instead: a page that opens on the same record as the last
+       * one is not advancing, which is the real non-progress signal. A short page is the last page.
+       * The walker's page and record budgets remain the outer bound.
+       */
+      const firstId = recordId(records[0]) ?? null;
+      if (firstId !== null && firstId === state.lastFirstId) return null;
+      if (records.length < UPSTREAM_PAGE_LIMIT) return null;
+      return { cursor: nextCursor, lastFirstId: firstId };
     },
   },
 

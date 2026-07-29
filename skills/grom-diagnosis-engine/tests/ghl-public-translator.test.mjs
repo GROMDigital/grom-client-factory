@@ -247,8 +247,19 @@ test('each of our action ids dispatches its endpoint-native upstream request', a
       actionId: 'conversations-v3__export-messages-by-location',
       upstreamAction: 'conversations-v3__export-messages-by-location',
       body: { messages: [] },
-      // No date parameter is sent: the spec types them only as `string` and pins no format.
-      expect: { locationId: 'L1', limit: 100, sortBy: 'createdAt', sortOrder: 'desc' },
+      /*
+       * The dates ARE sent, as ISO strings. Verified live 2026-07-29: an ISO window filters
+       * server-side and epoch millis return nothing, so the format is load-bearing. Not sending
+       * them left the week to be reached by paging back through unfiltered history.
+       */
+      expect: {
+        locationId: 'L1',
+        limit: 100,
+        sortBy: 'createdAt',
+        sortOrder: 'desc',
+        startDate: WINDOW.from,
+        endDate: WINDOW.to,
+      },
     },
   ];
   for (const { actionId, upstreamAction, body, expect } of cases) {
@@ -890,3 +901,59 @@ test('declaring BOTH transport seams at once is refused', async () => withProjec
     },
   );
 }));
+
+/*
+ * THE STABLE-CURSOR WALK.
+ *
+ * `conversations-v3__export-messages-by-location` hands back the SAME `nextCursor` string on every
+ * page: it is a scroll handle, not a per-page token, and passing it again correctly returns the
+ * next page. Treating a repeated cursor as a pagination loop ended the walk after two pages,
+ * cleanly and with no truncation flag, so the corpus was whatever sat in the newest 200 records and
+ * shrank as new traffic arrived. Measured on SK Skin 2026-07-29: 40 messages and 15 conversations
+ * published as a CENSUS of a week that really held 438 messages across 68 conversations.
+ */
+test('a repeated cursor keeps paging, because this endpoint hands back a stable scroll handle', async () => {
+  const page = (n, count = 100) => ({
+    messages: Array.from({ length: count }, (_, i) => ({
+      id: `p${n}m${i}`,
+      conversationId: `c${n}`,
+      dateAdded: IN_WINDOW,
+      body: 'hello',
+    })),
+    // IDENTICAL on every page. This is the real shape.
+    nextCursor: 'STABLE-SCROLL-HANDLE',
+  });
+  let served = 0;
+  const { body, upstream } = await translate(
+    'conversations-v3__export-messages-by-location',
+    {
+      'conversations-v3__export-messages-by-location': () => {
+        served += 1;
+        return served < 3 ? page(served) : page(served, 7);
+      },
+    },
+  );
+
+  assert.equal(upstream.length, 3, 'the walk must not stop while full pages keep arriving');
+  assert.equal(body.items.length, 207, 'every record from every page is kept');
+  assert.equal(body.page.truncated, false, 'a short final page is completion, not truncation');
+});
+
+test('a page that opens on the same record as the last one stops the walk', async () => {
+  // The real non-progress signal. Without it a stable cursor plus a server that never advances
+  // would spin until the page budget, which is a slower version of the same silence.
+  const stuck = {
+    messages: Array.from({ length: 100 }, (_, i) => ({
+      id: `same${i}`,
+      conversationId: 'c1',
+      dateAdded: IN_WINDOW,
+      body: 'hello',
+    })),
+    nextCursor: 'STABLE-SCROLL-HANDLE',
+  };
+  const { upstream } = await translate(
+    'conversations-v3__export-messages-by-location',
+    { 'conversations-v3__export-messages-by-location': () => stuck },
+  );
+  assert.equal(upstream.length, 2, 'one page to read, one to notice it did not move');
+});
