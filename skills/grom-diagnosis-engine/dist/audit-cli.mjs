@@ -10034,9 +10034,22 @@ function conversationsOf(internal) {
      * Stated as a sentence and not only as fields, because this is the one place a lane most
      * reliably overclaims, and the sentence is what ends up quoted back in a finding.
      */
-    howToReadThis: mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" && collection.complete === true && (collection.universeCount ?? 0) === 0 ? "The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
+    /*
+     * 🔴 The whole ternary is PARENTHESISED and the caveat concatenated outside it. Without the
+     * parens `+` binds to the final template literal only, so the SAMPLE branch got the attendance
+     * warning and every CENSUS brief silently went without it. Caught by its own test.
+     */
+    howToReadThis: (mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" && collection.complete === true && (collection.universeCount ?? 0) === 0 ? "The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`) + attendanceCaveat(collection.outcomeCoverage),
     threads: [...collection.transcripts ?? []]
   };
+}
+function attendanceCaveat(coverage) {
+  if (!coverage || coverage.joined !== true) return "";
+  const seen = Number(coverage.appointmentsSeen);
+  const attendance = Number(coverage.attendanceDispositionsRecorded);
+  if (!Number.isFinite(seen) || !Number.isFinite(attendance) || seen === 0) return "";
+  if (attendance >= seen) return "";
+  return ` \u{1F534} ATTENDANCE: ${attendance} of ${seen} appointments carry a showed or no-show disposition${attendance === 0 ? ", meaning NONE" : ""}. Attendance is what a human records after the visit; \`appointmentStatusesRecorded\` counts scheduling states the platform sets by itself and is NOT attendance coverage. On this evidence a low or zero show rate is a RECORDING rate, so no finding may say leads are failing to attend. That the outcome cannot be measured, and why, is a legitimate finding; the show rate itself is not.`;
 }
 function messagesOf(workflow, emailCopy = null) {
   const messages = [];
@@ -45070,6 +45083,7 @@ function buildOutcomeIndex(publicEvidence) {
   let appointmentsSeen = 0;
   let opportunitiesSeen = 0;
   let statusesRecorded = 0;
+  let attendanceRecorded = 0;
   for (const { record: record2 } of recordsOf(publicEvidence)) {
     const contactId = contactIdOf(record2);
     if (contactId === null) continue;
@@ -45081,6 +45095,7 @@ function buildOutcomeIndex(publicEvidence) {
       const mapped = typeof appointmentStatus === "string" ? APPOINTMENT_OUTCOME[appointmentStatus.trim().toLowerCase()] ?? null : null;
       if (mapped === null) continue;
       statusesRecorded += 1;
+      if (mapped === "showed" || mapped === "no_show") attendanceRecorded += 1;
       const current = recordsByContact.get(contactId) ?? { appointment: null, opportunity: null };
       recordsByContact.set(contactId, {
         ...current,
@@ -45109,12 +45124,26 @@ function buildOutcomeIndex(publicEvidence) {
       appointmentsSeen,
       opportunitiesSeen,
       /**
-       * 🔴 How many appointments carried a status the account actually maintains. On SK Skin this
-       * was 1 of 21, which is why a zero show rate there is a 5% RECORDING rate and not a
-       * conversion problem. A lane that stratifies on outcome without reading this number will
-       * describe an unrecorded account as a failing one.
+       * How many appointments carried ANY status this module recognises. Near-always equal to
+       * `appointmentsSeen`, because GHL always sets a scheduling state. It says the field is
+       * readable, and NOTHING about whether the account records outcomes.
+       *
+       * 🔴 DO NOT read this as attendance coverage. It counts `new`, `confirmed` and `cancelled`,
+       * which the platform and the customer set on their own. On SK Skin it reads 21 of 21 on an
+       * account where a human has recorded attendance exactly ONCE, so on its own it says an
+       * unrecorded account is fully recorded, which is the precise inversion of the safety net
+       * this coverage block exists to be.
        */
-      appointmentStatusesRecorded: statusesRecorded
+      appointmentStatusesRecorded: statusesRecorded,
+      /**
+       * 🔴 THE SAFETY NET. How many appointments carry an ATTENDANCE disposition, meaning `showed`
+       * or `no_show`: the two a human has to record after the visit. On SK Skin this is 1 of 21.
+       *
+       * A lane that stratifies on outcome without reading THIS number will describe an account
+       * that simply does not record attendance as an account whose leads do not attend. When it is
+       * low, a zero show rate is a RECORDING rate and no finding may claim otherwise.
+       */
+      attendanceDispositionsRecorded: attendanceRecorded
     }
   };
 }

@@ -188,6 +188,7 @@ export function buildOutcomeIndex(publicEvidence) {
   let appointmentsSeen = 0;
   let opportunitiesSeen = 0;
   let statusesRecorded = 0;
+  let attendanceRecorded = 0;
 
   for (const { record } of recordsOf(publicEvidence)) {
     const contactId = contactIdOf(record);
@@ -209,6 +210,14 @@ export function buildOutcomeIndex(publicEvidence) {
         : null;
       if (mapped === null) continue;
       statusesRecorded += 1;
+      /*
+       * 🔴 ATTENDANCE, which is a SEPARATE and much smaller thing than "carries a status".
+       * `showed` and `no_show` are the only two dispositions that require a human to record what
+       * happened AFTER the visit. `booked` (from `new`/`confirmed`) and `cancelled` are scheduling
+       * states the platform and the customer set by themselves, so counting them answers a
+       * question nobody asked and answers the real one wrongly.
+       */
+      if (mapped === 'showed' || mapped === 'no_show') attendanceRecorded += 1;
       const current = recordsByContact.get(contactId) ?? { appointment: null, opportunity: null };
       recordsByContact.set(contactId, {
         ...current,
@@ -240,12 +249,26 @@ export function buildOutcomeIndex(publicEvidence) {
       appointmentsSeen,
       opportunitiesSeen,
       /**
-       * 🔴 How many appointments carried a status the account actually maintains. On SK Skin this
-       * was 1 of 21, which is why a zero show rate there is a 5% RECORDING rate and not a
-       * conversion problem. A lane that stratifies on outcome without reading this number will
-       * describe an unrecorded account as a failing one.
+       * How many appointments carried ANY status this module recognises. Near-always equal to
+       * `appointmentsSeen`, because GHL always sets a scheduling state. It says the field is
+       * readable, and NOTHING about whether the account records outcomes.
+       *
+       * 🔴 DO NOT read this as attendance coverage. It counts `new`, `confirmed` and `cancelled`,
+       * which the platform and the customer set on their own. On SK Skin it reads 21 of 21 on an
+       * account where a human has recorded attendance exactly ONCE, so on its own it says an
+       * unrecorded account is fully recorded, which is the precise inversion of the safety net
+       * this coverage block exists to be.
        */
       appointmentStatusesRecorded: statusesRecorded,
+      /**
+       * 🔴 THE SAFETY NET. How many appointments carry an ATTENDANCE disposition, meaning `showed`
+       * or `no_show`: the two a human has to record after the visit. On SK Skin this is 1 of 21.
+       *
+       * A lane that stratifies on outcome without reading THIS number will describe an account
+       * that simply does not record attendance as an account whose leads do not attend. When it is
+       * low, a zero show rate is a RECORDING rate and no finding may claim otherwise.
+       */
+      attendanceDispositionsRecorded: attendanceRecorded,
     },
   };
 }

@@ -387,7 +387,12 @@ function conversationsOf(internal) {
      * Stated as a sentence and not only as fields, because this is the one place a lane most
      * reliably overclaims, and the sentence is what ends up quoted back in a finding.
      */
-    howToReadThis: mode === 'UNKNOWN'
+    /*
+     * 🔴 The whole ternary is PARENTHESISED and the caveat concatenated outside it. Without the
+     * parens `+` binds to the final template literal only, so the SAMPLE branch got the attendance
+     * warning and every CENSUS brief silently went without it. Caught by its own test.
+     */
+    howToReadThis: (mode === 'UNKNOWN'
       ? 'NO VALID SAMPLE WAS PRODUCED for this run — the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included.'
       : mode === 'CENSUS' && collection.complete === true && (collection.universeCount ?? 0) === 0
         ? 'The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure.'
@@ -397,9 +402,33 @@ function conversationsOf(internal) {
           guaranteeHeld
             ? 'Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent.'
             : `🔴 THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`
-        } Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
+        } Never turn a count of these threads into a rate for the account: say "in the sampled threads".`)
+      + attendanceCaveat(collection.outcomeCoverage),
     threads: [...(collection.transcripts ?? [])],
   };
+}
+
+/**
+ * The attendance sentence, appended to `howToReadThis`.
+ *
+ * 🔴 Stated as PROSE and not left to a field, because the field was there and it did not work: the
+ * coverage block already carried the numbers and a lane still had to be rescued by a hand-written
+ * account caveat. `appointmentStatusesRecorded` reads 21 of 21 on an account where attendance was
+ * recorded ONCE, so a lane skimming coverage sees full marks. This is the sentence that ends up
+ * quoted back in a finding, so the warning belongs in it.
+ */
+function attendanceCaveat(coverage) {
+  if (!coverage || coverage.joined !== true) return '';
+  const seen = Number(coverage.appointmentsSeen);
+  const attendance = Number(coverage.attendanceDispositionsRecorded);
+  if (!Number.isFinite(seen) || !Number.isFinite(attendance) || seen === 0) return '';
+  if (attendance >= seen) return '';
+  return ` 🔴 ATTENDANCE: ${attendance} of ${seen} appointments carry a showed or no-show disposition`
+    + `${attendance === 0 ? ', meaning NONE' : ''}. Attendance is what a human records after the visit;`
+    + ' `appointmentStatusesRecorded` counts scheduling states the platform sets by itself and is NOT'
+    + ' attendance coverage. On this evidence a low or zero show rate is a RECORDING rate, so no'
+    + ' finding may say leads are failing to attend. That the outcome cannot be measured, and why,'
+    + ' is a legitimate finding; the show rate itself is not.';
 }
 
 /**
