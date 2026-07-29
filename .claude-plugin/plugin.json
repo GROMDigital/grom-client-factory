@@ -1,7 +1,7 @@
 {
   "name": "grom-client-factory",
   "description": "Grom Digital client setup factory. Skills: client-design (design-doc orchestration, 22 roles, two human gates + system-guide HTML renderer), ghl-account-audit (read-only live capture/verify/harvest), grom-diagnosis-engine (read-only weekly commercial diagnostic of ONE live sub-account: five stages of expert analysis producing a ranked backlog and a running order; shares the ghl-account-audit codebase and never mutates or applies anything), create-ghl-workflows (drafts-only, delegates to the uxie-ghl-factory engine), reconcile-lp-tracking (advise-only: reconcile a hand-built landing page on disk against the client's tracking design), doctor (environment + prerequisite checks). Landing pages are built outside the factory, directly with the user, then reconciled to tracking.",
-  "version": "1.9.6",
+  "version": "1.9.7",
   "author": {
     "name": "Grom Digital"
   }

@@ -234,6 +234,67 @@ test('a template the shared library does not hold is reported per template, not 
   assert.equal(result.templates[0].bodyUnavailable, 'NOT_IN_SHARED_LIBRARY');
 });
 
+test('the index is asked for TEMPLATES, not the root listing that hides foldered ones', async () => {
+  /*
+   * REGRESSION, live on Grom UK 2026-07-29. Without `templatesOnly` the endpoint answers with a
+   * directory listing of the library root: 60 entries of which five were FOLDERS, so 55 templates
+   * were visible and the 18 inside a folder were not. Those 18 then read as NOT_IN_SHARED_LIBRARY,
+   * indistinguishable from a template that does not exist, and the copy lane judged a whole
+   * delivery ladder on subject lines alone.
+   */
+  const calls = [];
+  const client = listClient([builder(TEMPLATE, 'A')], { calls });
+  await collector(client).collectEmailCopy({
+    workflows: [workflow([{ type: 'email', attributes: { template_id: TEMPLATE } }])],
+  });
+
+  const params = calls[0].arguments.params;
+  assert.equal(params.templatesOnly, 'true');
+});
+
+test('a template missing from the index is recovered from the sending step, and flagged as unlisted', async () => {
+  /*
+   * OBSERVED live: `001 - FB Lead Form` points at a template id in neither the root listing nor the
+   * full one. The object is still stored and still readable, so the library RECORD was deleted while
+   * the reference survived. The email still sends, so it must still be judged.
+   */
+  const client = listClient([builder(OTHER_TEMPLATE, 'Something else')]);
+  const result = await collector(client, {
+    fetchBody: async () => '<p>the orphaned copy</p>',
+  }).collectEmailCopy({
+    workflows: [workflow([{
+      type: 'email',
+      attributes: { template_id: TEMPLATE, templatesource: 'email-builder', previewUrl: previewUrl() },
+    }])],
+  });
+
+  assert.equal(result.templates[0].body, '<p>the orphaned copy</p>');
+  assert.equal(result.templates[0].bodyUnavailable, null);
+  // The library cannot name it, and the reviewer is told that rather than shown a nameless normal one.
+  assert.equal(result.templates[0].name, null);
+  assert.equal(result.templates[0].unlistedInLibrary, true);
+  assert.ok(result.limitations.includes('EMAIL_TEMPLATE_RECOVERED_UNLISTED'));
+});
+
+test('an unlisted template whose step URL points elsewhere is refused, not followed', async () => {
+  // The recovery path is not a hole in the URL pin: it goes through the same rebuild and check.
+  const client = listClient([builder(OTHER_TEMPLATE, 'Something else')]);
+  const fetched = [];
+  const result = await collector(client, {
+    fetchBody: async (url) => { fetched.push(url); return '<p>should never happen</p>'; },
+  }).collectEmailCopy({
+    workflows: [workflow([{
+      type: 'email',
+      // A previewUrl for a DIFFERENT location's object.
+      attributes: { template_id: TEMPLATE, previewUrl: previewUrl('someOtherLocation1234', TEMPLATE) },
+    }])],
+  });
+
+  assert.deepEqual(fetched, []);
+  assert.equal(result.templates[0].body, null);
+  assert.equal(result.templates[0].bodyUnavailable, 'NOT_IN_SHARED_LIBRARY');
+});
+
 test('an unreadable body degrades to a stated reason and keeps every other template', async () => {
   const client = listClient([builder(TEMPLATE, 'A'), builder(OTHER_TEMPLATE, 'B')]);
   const result = await collector(client, {

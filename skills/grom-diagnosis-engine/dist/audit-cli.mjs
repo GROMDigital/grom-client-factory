@@ -9671,9 +9671,24 @@ function buildAccountMapEvidence({ briefs } = {}) {
         surface,
         {
           applicable: detail?.applicable ?? null,
+          /*
+           * TWO SURFACES, TWO VOCABULARIES, and reading only one of them anonymises the other.
+           *
+           * Conversation AI names its fields `name` and `goal`. VOICE AI does not have either: it
+           * calls them `agentName` and `agentPrompt`, with the discovery row carrying `name`. Reading
+           * only the Conversation AI shape gave every voice agent `name: null, goal: null`, so on the
+           * Grom UK run of 2026-07-27 stage 1 could not tell two live voice agents apart and their
+           * review files were emitted as "voice_ai-agent" and "voice_ai-agent-2".
+           *
+           * That is not cosmetic. This account's own facts say one voice agent is a deliberate test
+           * agent and that the thing to check before dismissing it is whether INBOUND CALLING is on.
+           * An auditor that cannot name the agent cannot apply that caveat to the right one, so
+           * `inboundActive` is carried here too: it is the single fact the caveat turns on.
+           */
           agents: (detail?.agents ?? []).map((agent) => ({
-            name: agent?.name ?? null,
-            goal: agent?.goal ?? agent?.description ?? null
+            name: agent?.name ?? agent?.agentName ?? agent?.row?.name ?? null,
+            goal: agent?.goal ?? agent?.description ?? agent?.agentPrompt ?? null,
+            ...typeof agent?.isInboundActive === "boolean" ? { inboundActive: agent.isInboundActive } : {}
           }))
         }
       ]))
@@ -10090,6 +10105,32 @@ function messagesOf(workflow, emailCopy = null) {
         waitBefore: [...waiting],
         body: String(attributes.message ?? attributes.body ?? attributes.text ?? "").trim(),
         bodyIsInline: Boolean(attributes.message ?? attributes.body ?? attributes.text)
+      });
+      waiting = [];
+    } else if (step.type === "internal_notification") {
+      const email3 = isPlainObject4(attributes.email) ? attributes.email : {};
+      const inline = plainText(email3.html);
+      const templateId = typeof email3.template_id === "string" && email3.template_id.length > 0 ? email3.template_id : null;
+      const fromLibrary = inline.length === 0 && templateId !== null ? emailCopy?.get(templateId) ?? null : null;
+      const libraryBody = typeof fromLibrary?.body === "string" ? plainText(fromLibrary.body) : "";
+      const recipients = email3.userType === "user" ? [...Array.isArray(email3.selectedUser) ? email3.selectedUser : [], ...email3.cc ? [String(email3.cc)] : []] : [...email3.to ? [String(email3.to)] : []];
+      messages.push({
+        order: step.order ?? null,
+        channel: "internal_notification",
+        audience: "internal",
+        waitBefore: [...waiting],
+        recipientType: email3.userType ?? null,
+        recipients,
+        from: `${email3.from_name ?? ""} <${email3.from_email ?? ""}>`.trim(),
+        subject: email3.subject ?? null,
+        preHeader: email3.preHeader ?? null,
+        body: inline.length > 0 ? inline : libraryBody,
+        bodyIsInline: inline.length > 0,
+        bodySource: inline.length > 0 ? "inline" : libraryBody.length > 0 ? "library_template" : "unavailable",
+        ...inline.length > 0 ? {} : {
+          templateName: fromLibrary?.name ?? null,
+          bodyUnavailable: libraryBody.length > 0 ? null : fromLibrary?.bodyUnavailable ?? (templateId === null ? "NO_TEMPLATE_REFERENCE" : "TEMPLATE_NOT_COLLECTED")
+        }
       });
       waiting = [];
     } else if (["if_else", "goto", "remove_from_workflow", "workflow_goal", "workflow_ai_intent_detection", "workflow_split"].includes(step.type)) {
@@ -44599,17 +44640,35 @@ function byteOrder6(left, right) {
 }
 function templateIdsFromWorkflows(workflows) {
   const ids = /* @__PURE__ */ new Set();
+  for (const { attributes } of sendingSteps(workflows)) {
+    if (typeof attributes.html === "string" && attributes.html.length > 0) continue;
+    const id = attributes.template_id;
+    if (typeof id === "string" && OBJECT_ID.test(id)) ids.add(id);
+  }
+  return [...ids].sort(byteOrder6);
+}
+function* sendingSteps(workflows) {
   for (const workflow of Array.isArray(workflows) ? workflows : []) {
     const templates = workflow?.definition?.data?.workflow?.workflowData?.templates;
     for (const step of Array.isArray(templates) ? templates : []) {
-      if (step?.type !== "email") continue;
-      const attributes = isPlainObject17(step.attributes) ? step.attributes : {};
-      if (typeof attributes.html === "string" && attributes.html.length > 0) continue;
-      const id = attributes.template_id;
-      if (typeof id === "string" && OBJECT_ID.test(id)) ids.add(id);
+      if (step?.type !== "email" && step?.type !== "internal_notification") continue;
+      const outer = isPlainObject17(step.attributes) ? step.attributes : {};
+      const attributes = step.type === "internal_notification" ? isPlainObject17(outer.email) ? outer.email : {} : outer;
+      yield { step, attributes };
     }
   }
-  return [...ids].sort(byteOrder6);
+}
+function templatePreviewUrlsFromWorkflows(workflows) {
+  const urls = /* @__PURE__ */ new Map();
+  for (const { attributes } of sendingSteps(workflows)) {
+    if (typeof attributes.html === "string" && attributes.html.length > 0) continue;
+    const id = attributes.template_id;
+    const previewUrl = attributes.previewUrl;
+    if (typeof id !== "string" || !OBJECT_ID.test(id)) continue;
+    if (typeof previewUrl !== "string" || previewUrl.length === 0) continue;
+    if (!urls.has(id)) urls.set(id, previewUrl);
+  }
+  return urls;
 }
 function bodyUrlFor({ locationId, templateId, previewUrl }) {
   if (typeof previewUrl !== "string" || previewUrl.length === 0) return null;
@@ -44655,7 +44714,7 @@ async function fetchBodyOverHttps(url2, { timeoutMs, maxBytes, signal }) {
   }
 }
 function listRequest(capability, locationId, limit, offset, dialect) {
-  const params = { locationId, limit, offset };
+  const params = { locationId, limit, offset, templatesOnly: "true" };
   if (dialect === "native") {
     return { name: "execute_action", arguments: { action_id: EMAIL_TEMPLATE_ACTION, params } };
   }
@@ -44712,6 +44771,7 @@ function createEmailCopyCollector({
     async collectEmailCopy({ workflows, signal } = {}) {
       const limitations = /* @__PURE__ */ new Set();
       const wanted = templateIdsFromWorkflows(workflows);
+      const stepPreviewUrls = templatePreviewUrlsFromWorkflows(workflows);
       if (wanted.length === 0) {
         return Object.freeze({
           schemaVersion: EMAIL_COPY_SCHEMA,
@@ -44760,16 +44820,36 @@ function createEmailCopyCollector({
       for (const templateId of wanted) {
         const record2 = listed.get(templateId);
         if (record2 === void 0) {
-          templates.push({
+          const orphan = {
             templateId,
             name: null,
             templateType: null,
             isPlainText: false,
-            lastUpdated: null,
-            body: null,
-            bodyUnavailable: "NOT_IN_SHARED_LIBRARY"
+            lastUpdated: null
+          };
+          const orphanUrl = bodyUrlFor({
+            locationId: boundLocationId,
+            templateId,
+            previewUrl: stepPreviewUrls.get(templateId)
           });
-          limitations.add("EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY");
+          if (orphanUrl === null || fetched >= limits.maxBodies) {
+            templates.push({ ...orphan, body: null, bodyUnavailable: "NOT_IN_SHARED_LIBRARY" });
+            limitations.add("EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY");
+            continue;
+          }
+          fetched += 1;
+          try {
+            const html = await fetchBody(orphanUrl, {
+              timeoutMs: limits.bodyTimeoutMs,
+              maxBytes: limits.maxBodyBytes,
+              signal
+            });
+            templates.push({ ...orphan, body: String(html ?? ""), bodyUnavailable: null, unlistedInLibrary: true });
+            limitations.add("EMAIL_TEMPLATE_RECOVERED_UNLISTED");
+          } catch (error51) {
+            templates.push({ ...orphan, body: null, bodyUnavailable: boundedCode(error51) });
+            limitations.add("EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY");
+          }
           continue;
         }
         if (fetched >= limits.maxBodies) {

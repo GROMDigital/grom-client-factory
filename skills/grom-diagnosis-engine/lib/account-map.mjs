@@ -163,9 +163,24 @@ export function buildAccountMapEvidence({ briefs } = {}) {
         surface,
         {
           applicable: detail?.applicable ?? null,
+          /*
+           * TWO SURFACES, TWO VOCABULARIES, and reading only one of them anonymises the other.
+           *
+           * Conversation AI names its fields `name` and `goal`. VOICE AI does not have either: it
+           * calls them `agentName` and `agentPrompt`, with the discovery row carrying `name`. Reading
+           * only the Conversation AI shape gave every voice agent `name: null, goal: null`, so on the
+           * Grom UK run of 2026-07-27 stage 1 could not tell two live voice agents apart and their
+           * review files were emitted as "voice_ai-agent" and "voice_ai-agent-2".
+           *
+           * That is not cosmetic. This account's own facts say one voice agent is a deliberate test
+           * agent and that the thing to check before dismissing it is whether INBOUND CALLING is on.
+           * An auditor that cannot name the agent cannot apply that caveat to the right one, so
+           * `inboundActive` is carried here too: it is the single fact the caveat turns on.
+           */
           agents: (detail?.agents ?? []).map((agent) => ({
-            name: agent?.name ?? null,
-            goal: agent?.goal ?? agent?.description ?? null,
+            name: agent?.name ?? agent?.agentName ?? agent?.row?.name ?? null,
+            goal: agent?.goal ?? agent?.description ?? agent?.agentPrompt ?? null,
+            ...(typeof agent?.isInboundActive === 'boolean' ? { inboundActive: agent.isInboundActive } : {}),
           })),
         },
       ])),

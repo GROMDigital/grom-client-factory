@@ -499,6 +499,57 @@ function messagesOf(workflow, emailCopy = null) {
         bodyIsInline: Boolean(attributes.message ?? attributes.body ?? attributes.text),
       });
       waiting = [];
+    } else if (step.type === 'internal_notification') {
+      /*
+       * AN INTERNAL NOTIFICATION KEEPS ITS CONTENT ONE LEVEL DEEPER THAN EVERY OTHER SEND STEP.
+       *
+       * A normal email step puts `subject`, `html` and `template_id` directly on `attributes`. An
+       * internal notification puts NOTHING there except `{type, email}`, and every content field
+       * lives in `attributes.email`. So a reader written against the normal shape finds an empty
+       * step and reports the notification as having no recipient, no subject and no body, which is
+       * exactly what three separate reviews said on the Grom UK run of 2026-07-27.
+       *
+       * VERIFIED against four live exports 2026-07-29. Two variants, both handled here:
+       *   custom_email -- `to` is an address or merge tag, body by `template_id`.
+       *   user         -- `selectedUser` is GHL user ids, `cc` an address, body inline as `html`.
+       *
+       * These are labelled `audience: 'internal'` because they are NOT customer copy. An analyst
+       * that reads a staff alert as a lead-facing message will judge its tone against the wrong
+       * reader and recommend rewriting something no customer will ever see.
+       */
+      const email = isPlainObject(attributes.email) ? attributes.email : {};
+      const inline = plainText(email.html);
+      const templateId = typeof email.template_id === 'string' && email.template_id.length > 0
+        ? email.template_id
+        : null;
+      const fromLibrary = inline.length === 0 && templateId !== null ? emailCopy?.get(templateId) ?? null : null;
+      const libraryBody = typeof fromLibrary?.body === 'string' ? plainText(fromLibrary.body) : '';
+      const recipients = email.userType === 'user'
+        ? [...(Array.isArray(email.selectedUser) ? email.selectedUser : []), ...(email.cc ? [String(email.cc)] : [])]
+        : [...(email.to ? [String(email.to)] : [])];
+      messages.push({
+        order: step.order ?? null,
+        channel: 'internal_notification',
+        audience: 'internal',
+        waitBefore: [...waiting],
+        recipientType: email.userType ?? null,
+        recipients,
+        from: `${email.from_name ?? ''} <${email.from_email ?? ''}>`.trim(),
+        subject: email.subject ?? null,
+        preHeader: email.preHeader ?? null,
+        body: inline.length > 0 ? inline : libraryBody,
+        bodyIsInline: inline.length > 0,
+        bodySource: inline.length > 0
+          ? 'inline'
+          : libraryBody.length > 0 ? 'library_template' : 'unavailable',
+        ...(inline.length > 0 ? {} : {
+          templateName: fromLibrary?.name ?? null,
+          bodyUnavailable: libraryBody.length > 0
+            ? null
+            : fromLibrary?.bodyUnavailable ?? (templateId === null ? 'NO_TEMPLATE_REFERENCE' : 'TEMPLATE_NOT_COLLECTED'),
+        }),
+      });
+      waiting = [];
     } else if (['if_else', 'goto', 'remove_from_workflow', 'workflow_goal', 'workflow_ai_intent_detection', 'workflow_split'].includes(step.type)) {
       // A branch marker, not a delay. It tells the analyst where the flattening happened.
       waiting.push(`[${step.type}: ${step.name ?? ''}]`);

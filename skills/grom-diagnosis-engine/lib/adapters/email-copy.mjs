@@ -108,18 +108,70 @@ function byteOrder(left, right) {
  */
 export function templateIdsFromWorkflows(workflows) {
   const ids = new Set();
+  for (const { attributes } of sendingSteps(workflows)) {
+    // An inline step carries its own `html` and needs nothing from the library.
+    if (typeof attributes.html === 'string' && attributes.html.length > 0) continue;
+    const id = attributes.template_id;
+    if (typeof id === 'string' && OBJECT_ID.test(id)) ids.add(id);
+  }
+  return [...ids].sort(byteOrder);
+}
+
+/**
+ * Every step that sends an email, with its content fields brought to one level.
+ *
+ * TWO SHAPES, and reading only the first loses every internal notification's body. A normal `email`
+ * step keeps `template_id`, `html` and `subject` directly on `attributes`. An `internal_notification`
+ * keeps `attributes` as `{type, email}` and puts all of that inside `attributes.email`. Verified
+ * against four live exports 2026-07-29.
+ *
+ * Internal notifications are collected because a template-backed one is otherwise unreadable
+ * downstream, and a staff alert that promises a sanction nothing carries out is a real finding.
+ */
+function* sendingSteps(workflows) {
   for (const workflow of Array.isArray(workflows) ? workflows : []) {
     const templates = workflow?.definition?.data?.workflow?.workflowData?.templates;
     for (const step of Array.isArray(templates) ? templates : []) {
-      if (step?.type !== 'email') continue;
-      const attributes = isPlainObject(step.attributes) ? step.attributes : {};
-      // An inline step carries its own `html` and needs nothing from the library.
-      if (typeof attributes.html === 'string' && attributes.html.length > 0) continue;
-      const id = attributes.template_id;
-      if (typeof id === 'string' && OBJECT_ID.test(id)) ids.add(id);
+      if (step?.type !== 'email' && step?.type !== 'internal_notification') continue;
+      const outer = isPlainObject(step.attributes) ? step.attributes : {};
+      const attributes = step.type === 'internal_notification'
+        ? (isPlainObject(outer.email) ? outer.email : {})
+        : outer;
+      yield { step, attributes };
     }
   }
-  return [...ids].sort(byteOrder);
+}
+
+/**
+ * The `previewUrl` each send step carries for its own template, keyed by template id.
+ *
+ * The library index is not the only place a signed URL for a template appears: the step that SENDS
+ * it carries one too. That matters for a template a workflow points at which the index does not
+ * list at all, because the index is then not a second opinion, it is simply silent.
+ *
+ * OBSERVED on the UK sub-account 2026-07-29: `001 - FB Lead Form` step "Email 4 - Diagnosis" points
+ * at a template id that appears in NEITHER the 55-entry root listing NOR the full 73. Its stored
+ * object is still there and still readable, and its bytes are identical to a template that IS in the
+ * library, so the library RECORD was deleted while the content and the reference both survived. The
+ * email still sends. Without this fallback the audit reads that email as unjudgeable, which is the
+ * account's most-sent lead email.
+ *
+ * This is not a loosening of the security rule in the header. The URL is not followed: it is handed
+ * to `bodyUrlFor` exactly as a library one is, and rebuilt from the sealed location id and template
+ * id with only the opaque token taken from it. A step pointing at another location's object fails
+ * the same path check and is refused.
+ */
+export function templatePreviewUrlsFromWorkflows(workflows) {
+  const urls = new Map();
+  for (const { attributes } of sendingSteps(workflows)) {
+    if (typeof attributes.html === 'string' && attributes.html.length > 0) continue;
+    const id = attributes.template_id;
+    const previewUrl = attributes.previewUrl;
+    if (typeof id !== 'string' || !OBJECT_ID.test(id)) continue;
+    if (typeof previewUrl !== 'string' || previewUrl.length === 0) continue;
+    if (!urls.has(id)) urls.set(id, previewUrl);
+  }
+  return urls;
 }
 
 /**
@@ -188,7 +240,22 @@ async function fetchBodyOverHttps(url, { timeoutMs, maxBytes, signal }) {
  * through. The approval that matters -- the allowlist entry -- is shared.
  */
 function listRequest(capability, locationId, limit, offset, dialect) {
-  const params = { locationId, limit, offset };
+  /*
+   * `templatesOnly` IS NOT OPTIONAL, and leaving it off silently loses every foldered template.
+   *
+   * VERIFIED LIVE on the UK sub-account 2026-07-29. Without it the index is a DIRECTORY LISTING of
+   * the library ROOT: it returns folders as entries alongside templates. That account answered with
+   * 60 entries, five of which were folders, so 55 templates were visible and the 18 sitting in the
+   * "V2 Onboarding" folder were not. With the flag the same endpoint returns 73, all templates.
+   *
+   * The cost of the omission was invisible because a foldered template is INDISTINGUISHABLE, at the
+   * matching step below, from one that does not exist: both are simply absent from `listed` and both
+   * were reported as NOT_IN_SHARED_LIBRARY. On the 2026-07-27 Grom UK run that was 19 of 81 emails,
+   * and because the delivery ladders are the part of that account that keeps its copy in a folder,
+   * every one of the unreadable emails was a client-facing onboarding email. The copywriter lane
+   * judged them on subject lines alone and said so.
+   */
+  const params = { locationId, limit, offset, templatesOnly: 'true' };
   /*
    * TWO DIALECTS, and picking the wrong one is a live-only failure that no hermetic double catches.
    *
@@ -292,6 +359,7 @@ export function createEmailCopyCollector({
     async collectEmailCopy({ workflows, signal } = {}) {
       const limitations = new Set();
       const wanted = templateIdsFromWorkflows(workflows);
+      const stepPreviewUrls = templatePreviewUrlsFromWorkflows(workflows);
       if (wanted.length === 0) {
         return Object.freeze({
           schemaVersion: EMAIL_COPY_SCHEMA,
@@ -348,21 +416,48 @@ export function createEmailCopyCollector({
         const record = listed.get(templateId);
         if (record === undefined) {
           /*
-           * A template id a workflow points at that the shared library does not contain. This is
-           * EXPECTED and not an error: some send steps use a workflow-embedded builder template
-           * whose id never appears in the library index. It is reported per template so the
-           * copywriter knows which emails it is judging blind.
+           * A template id a workflow points at that the index does not list. Since `templatesOnly`
+           * was added to the list request this is genuinely rare, and it now means the library
+           * RECORD is gone rather than merely filed in a folder.
+           *
+           * The step that sends it still carries a signed URL for the object, so try that before
+           * giving up. Same verification path as a library body: rebuilt, never followed.
            */
-          templates.push({
+          const orphan = {
             templateId,
             name: null,
             templateType: null,
             isPlainText: false,
             lastUpdated: null,
-            body: null,
-            bodyUnavailable: 'NOT_IN_SHARED_LIBRARY',
+          };
+          const orphanUrl = bodyUrlFor({
+            locationId: boundLocationId,
+            templateId,
+            previewUrl: stepPreviewUrls.get(templateId),
           });
-          limitations.add('EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY');
+          if (orphanUrl === null || fetched >= limits.maxBodies) {
+            templates.push({ ...orphan, body: null, bodyUnavailable: 'NOT_IN_SHARED_LIBRARY' });
+            limitations.add('EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY');
+            continue;
+          }
+          fetched += 1;
+          try {
+            const html = await fetchBody(orphanUrl, {
+              timeoutMs: limits.bodyTimeoutMs,
+              maxBytes: limits.maxBodyBytes,
+              signal,
+            });
+            /*
+             * Readable, but the library cannot name it or date it. Say so rather than letting a
+             * nameless template read as an ordinary one: a reviewer who sees the copy should also
+             * see that nothing in the library governs it any more.
+             */
+            templates.push({ ...orphan, body: String(html ?? ''), bodyUnavailable: null, unlistedInLibrary: true });
+            limitations.add('EMAIL_TEMPLATE_RECOVERED_UNLISTED');
+          } catch (error) {
+            templates.push({ ...orphan, body: null, bodyUnavailable: boundedCode(error) });
+            limitations.add('EMAIL_TEMPLATE_NOT_IN_SHARED_LIBRARY');
+          }
           continue;
         }
         if (fetched >= limits.maxBodies) {
