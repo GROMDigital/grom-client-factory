@@ -1787,10 +1787,18 @@ function buildInternalAuditAdapter({
   runtime,
 }) {
   if (!isPlainObject(internalAudit)) return null;
-  const connect = connectOverride ?? createInternalAuditConnect({
-    serverPath: internalAudit.transport.serverPath,
-    tokenFilePath: internalAudit.transport.tokenFilePath,
-  });
+  /*
+   * VALIDATED here, not read raw. This call site used to reach straight into
+   * `transport.serverPath`, which meant the one place the connection is actually made was the one
+   * place none of the transport guards ran. With `serverPath` now optional it read `undefined` and
+   * died on INTERNAL_AUDIT_SERVER_PATH_INVALID, which reads as a malformed config rather than as a
+   * missing resolution. Going through the validator resolves the newest installed audit build when
+   * the config does not pin one, and applies the audit-profile, inside-cache and no-symlink checks
+   * either way.
+   */
+  const connect = connectOverride ?? createInternalAuditConnect(
+    validateInternalAuditTransport(internalAudit.transport),
+  );
   return {
     async collectAuditEvidence(request) {
       const client = await connect();

@@ -14,6 +14,9 @@
  * never send.
  */
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import {
   EXPECTED_CONTRACT_VERSIONS,
@@ -334,7 +337,46 @@ test('the account content reaches the analyst WHOLE, with nothing redacted', () 
   assert.equal(out.dnd, false);
 });
 
-test('a provider transport record carries three keys and none of them is a secret', () => {
+test('serverPath is OPTIONAL, and omitting it resolves the NEWEST installed audit build', {
+  skip: INSTALLED_SERVER === undefined ? 'uxie-ghl-factory plugin not installed' : false,
+}, () => {
+  /*
+   * 🔴 A pinned path is a version pin and it goes stale SILENTLY. A config generated against
+   * plugin 0.16.0 kept naming 0.16.0's audit-server after 0.16.1 shipped; the old build is still
+   * on disk, so the run spawned it happily and re-inherited two defects that had just been fixed.
+   * Nothing failed and nothing warned.
+   */
+  const tokenFile = join(mkdtempSync(join(tmpdir(), 'audit-tok-')), 'tok.txt');
+  writeFileSync(tokenFile, 'Bearer x\n');
+
+  const resolved = validateInternalAuditTransport({
+    kind: 'ghl-internal-audit-stdio',
+    tokenFilePath: tokenFile,
+  });
+  assert.equal(resolved.serverPath, assertAuditServerPath(INSTALLED_SERVER));
+  assert.equal(resolved.serverPath.endsWith('/dist/audit-server.mjs'), true);
+
+  // An explicit path is still honoured, for anyone deliberately pinning a build.
+  const pinned = validateInternalAuditTransport({
+    kind: 'ghl-internal-audit-stdio',
+    serverPath: INSTALLED_SERVER,
+    tokenFilePath: tokenFile,
+  });
+  assert.equal(pinned.serverPath, resolved.serverPath);
+
+  // And the safety guard is unchanged on the resolved path: only the audit profile may launch.
+  assert.throws(
+    () => validateInternalAuditTransport({
+      kind: 'ghl-internal-audit-stdio',
+      serverPath: INSTALLED_SERVER.replace('audit-server.mjs', 'server.mjs'),
+      tokenFilePath: tokenFile,
+    }),
+    { code: 'INTERNAL_AUDIT_SERVER_NOT_AUDIT_PROFILE' },
+    'the write server must never be launchable, pinned or resolved',
+  );
+});
+
+test('a provider transport record carries at most three keys and none of them is a secret', () => {
   assert.throws(
     () => validateInternalAuditTransport({
       kind: 'ghl-internal-audit-stdio',

@@ -153,17 +153,53 @@ export function validateInternalAuditTransport(transport) {
     || transport.kind !== INTERNAL_AUDIT_TRANSPORT_KIND
   ) throw codedError('INTERNAL_AUDIT_TRANSPORT_INVALID', TypeError);
   const keys = Object.keys(transport).sort();
+  /*
+   * `serverPath` is OPTIONAL, and omitting it is the RECOMMENDED shape.
+   *
+   * 🔴 A pinned path is a version pin, and it goes stale silently. A provider config generated
+   * against plugin 0.16.0 kept naming 0.16.0's `audit-server.mjs` after 0.16.1 shipped; the old
+   * build is still on disk, so the run spawned it happily and would have re-inherited two defects
+   * that had just been fixed. Nothing failed, nothing warned. Caught by hand on 2026-07-29.
+   *
+   * Omitted, the newest installed audit build is resolved at RUN time by
+   * `discoverAuditServerPaths()`, which is the same newest-first resolution the generator used to
+   * do ONCE at build time. The freeze was the bug, not the resolution.
+   *
+   * Every safety guard is unchanged either way: the resolved path still goes through
+   * `assertAuditServerPath`, so it must be named `audit-server.mjs`, live inside the plugin cache
+   * both lexically and after realpath, and not be a symlink. An explicit path is still honoured
+   * for anyone deliberately pinning a build.
+   */
+  const allowed = new Set(['kind', 'serverPath', 'tokenFilePath']);
   if (
-    keys.length !== 3
-    || keys[0] !== 'kind'
-    || keys[1] !== 'serverPath'
-    || keys[2] !== 'tokenFilePath'
+    keys.length < 2
+    || keys.length > 3
+    || keys.some((key) => !allowed.has(key))
+    || !keys.includes('kind')
+    || !keys.includes('tokenFilePath')
   ) throw codedError('INTERNAL_AUDIT_TRANSPORT_INVALID', TypeError);
+  const serverPath = Object.hasOwn(transport, 'serverPath')
+    ? assertAuditServerPath(transport.serverPath)
+    : assertAuditServerPath(newestAuditServerPath());
   return Object.freeze({
     kind: INTERNAL_AUDIT_TRANSPORT_KIND,
-    serverPath: assertAuditServerPath(transport.serverPath),
+    serverPath,
     tokenFilePath: assertTokenFilePath(transport.tokenFilePath),
   });
+}
+
+/**
+ * The newest installed audit server, for a transport that did not pin one.
+ *
+ * Its own code rather than a bare index into `discoverAuditServerPaths()`, so "no audit build is
+ * installed" is a NAMED failure. Falling through to `assertAuditServerPath(undefined)` would raise
+ * INTERNAL_AUDIT_SERVER_PATH_INVALID, which reads as a malformed configuration and would send the
+ * next operator hunting through their JSON for a typo that is not there.
+ */
+function newestAuditServerPath() {
+  const [newest] = discoverAuditServerPaths();
+  if (newest === undefined) throw codedError('INTERNAL_AUDIT_SERVER_NOT_INSTALLED');
+  return newest;
 }
 
 /**

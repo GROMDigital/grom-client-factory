@@ -46473,11 +46473,42 @@ function assertTokenFilePath(value) {
 function validateInternalAuditTransport(transport) {
   if (!transport || typeof transport !== "object" || Array.isArray(transport) || transport.kind !== INTERNAL_AUDIT_TRANSPORT_KIND) throw codedError("INTERNAL_AUDIT_TRANSPORT_INVALID", TypeError);
   const keys = Object.keys(transport).sort();
-  if (keys.length !== 3 || keys[0] !== "kind" || keys[1] !== "serverPath" || keys[2] !== "tokenFilePath") throw codedError("INTERNAL_AUDIT_TRANSPORT_INVALID", TypeError);
+  const allowed = /* @__PURE__ */ new Set(["kind", "serverPath", "tokenFilePath"]);
+  if (keys.length < 2 || keys.length > 3 || keys.some((key) => !allowed.has(key)) || !keys.includes("kind") || !keys.includes("tokenFilePath")) throw codedError("INTERNAL_AUDIT_TRANSPORT_INVALID", TypeError);
+  const serverPath = Object.hasOwn(transport, "serverPath") ? assertAuditServerPath(transport.serverPath) : assertAuditServerPath(newestAuditServerPath());
   return Object.freeze({
     kind: INTERNAL_AUDIT_TRANSPORT_KIND,
-    serverPath: assertAuditServerPath(transport.serverPath),
+    serverPath,
     tokenFilePath: assertTokenFilePath(transport.tokenFilePath)
+  });
+}
+function newestAuditServerPath() {
+  const [newest] = discoverAuditServerPaths();
+  if (newest === void 0) throw codedError("INTERNAL_AUDIT_SERVER_NOT_INSTALLED");
+  return newest;
+}
+function discoverAuditServerPaths({ pluginId = "uxieee/uxie-ghl-factory" } = {}) {
+  const root = join5(pluginCacheRoot(), ...pluginId.split("/"));
+  let entries;
+  try {
+    entries = readdirSync3(root);
+  } catch {
+    return [];
+  }
+  const semverDescending = (left, right) => {
+    const a2 = left.split(".").map((part) => Number.parseInt(part, 10));
+    const b2 = right.split(".").map((part) => Number.parseInt(part, 10));
+    for (let index = 0; index < 3; index += 1) {
+      if ((a2[index] || 0) !== (b2[index] || 0)) return (b2[index] || 0) - (a2[index] || 0);
+    }
+    return 0;
+  };
+  return entries.filter((entry) => /^\d+\.\d+\.\d+$/u.test(entry)).sort(semverDescending).map((version2) => join5(root, version2, "mcp-internal", "dist", AUDIT_SERVER_FILENAME)).filter((candidate) => {
+    try {
+      return lstatSync6(candidate).isFile();
+    } catch {
+      return false;
+    }
   });
 }
 function createInternalAuditConnect({
@@ -52587,10 +52618,9 @@ function buildInternalAuditAdapter({
   runtime
 }) {
   if (!isPlainObject25(internalAudit)) return null;
-  const connect = connectOverride ?? createInternalAuditConnect({
-    serverPath: internalAudit.transport.serverPath,
-    tokenFilePath: internalAudit.transport.tokenFilePath
-  });
+  const connect = connectOverride ?? createInternalAuditConnect(
+    validateInternalAuditTransport(internalAudit.transport)
+  );
   return {
     async collectAuditEvidence(request) {
       const client = await connect();
