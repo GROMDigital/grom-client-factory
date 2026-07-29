@@ -696,6 +696,11 @@ export function renderBacklog({ index, investigation, recurrence = null }) {
     if (entry.status === 'RECURRING') {
       return `${plural(entry.priorRuns, 'run', 'runs')} before this`;
     }
+    // An opinion, and it says so. The number is the share of this problem's anchors the earlier one
+    // already covered, so a reader can overrule it without opening the investigation.
+    if (entry.status === 'LIKELY_RECURRING') {
+      return `likely ${plural(entry.priorRuns, 'run', 'runs')} before this (${Math.round((entry.match?.anchorOverlap ?? 0) * 100)}% match)`;
+    }
     return entry.nearMatches.length > 0 ? 'new (similar seen before)' : 'new';
   };
   const rows = investigation.causes.map((cause, position) => {
@@ -747,6 +752,21 @@ function causeHistory(entry) {
       '',
     ];
   }
+  if (entry.status === 'LIKELY_RECURRING') {
+    const { anchorOverlap, sharedAnchors, mechanismAgreement } = entry.match ?? {};
+    return [
+      `**Probably seen before, first recorded ${entry.firstSeenAt}.** This is a match on what the `
+        + `problem points at, not an exact one: ${Math.round((anchorOverlap ?? 0) * 100)}% of this `
+        + `problem's workflows and metrics were already covered by that earlier one, across `
+        + `${plural(sharedAnchors ?? 0, 'shared anchor', 'shared anchors')}, and the two `
+        + `${mechanismAgreement ? 'agree' : 'DISAGREE'} about the mechanism family.`,
+      '',
+      mechanismAgreement
+        ? 'Treat it as the same problem unless you can see why not.'
+        : 'The families disagree, so read both before treating them as one problem.',
+      '',
+    ];
+  }
   if (entry.nearMatches.length === 0) return ['**New this week.**', ''];
   const [closest] = entry.nearMatches;
   return [
@@ -775,9 +795,15 @@ function historyLine(recurrence) {
       '',
     ];
   }
+  const likely = recurrence.likelyRecurringCount ?? 0;
   return [
     `> Compared against ${plural(recurrence.priorRunCount, 'earlier run', 'earlier runs')}: `
-      + `${recurrence.newCount} new, ${recurrence.recurringCount} seen before.`,
+      + `${recurrence.newCount} new, ${recurrence.recurringCount} seen before`
+      + `${likely > 0 ? `, ${likely} probably seen before` : ''}.`
+      + (likely > 0
+        ? ' A "probably" is a match on the workflows and metrics a problem points at rather than an'
+          + ' exact one, and each says how strong it is.'
+        : ''),
     '',
   ];
 }

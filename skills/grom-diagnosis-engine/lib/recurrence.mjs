@@ -28,12 +28,31 @@
  * families the lanes named, plus the discriminating anchors. Two runs that blame the same mechanism at
  * the same KPI edges in the same workflows are looking at the same problem whatever they titled it.
  *
- * That is exact-match, and it is BRITTLE ON PURPOSE. Rename a workflow and the fingerprint changes.
- * Rather than loosen it and quietly merge two different problems across weeks, an exact miss is
- * reported as NEW and a near miss is reported separately as "possibly the same as", with the overlap
- * stated so a reader can judge. A wrong match across weeks is worse than an unmatched pair, because it
- * would let the report claim a problem is recurring when it is not, or that it went away when it did
- * not.
+ * EXACT MATCH ALONE DID NOT WORK, AND THE EVIDENCE IS UNAMBIGUOUS.
+ *
+ * The fingerprint was exact-match and brittle on purpose, on the reasoning that a wrong match is
+ * worse than a missed one. That reasoning is still right. The setting was not.
+ *
+ * Measured on Grom UK 2026-07-29: two runs of THE SAME CLOSED WEEK, over the same account and the
+ * same evidence, produced 20 causes and 14 causes and matched ZERO of them. Not one anchor list was
+ * identical to a prior one. The nearest pairs ran 22 anchors against 37, and 13 against 22, because
+ * both halves of the fingerprint are written fresh by experts every run: they group findings into
+ * causes differently, and they pick different family labels for the same mechanism. Demanding that
+ * two independent panels produce byte-identical lists is demanding something that does not happen.
+ *
+ * A test that fails 100% of the time is not conservative. It reports every problem as brand new every
+ * week, which is a confident claim in its own right and the opposite of the truth.
+ *
+ * So there are now THREE answers instead of two, and the middle one carries its own uncertainty:
+ *
+ *   RECURRING         the fingerprint matched exactly. A fact.
+ *   LIKELY_RECURRING  the anchors overlap enough to be worth saying so. An opinion, reported WITH
+ *                     the overlap, the shared anchor count, and whether the families agreed.
+ *   NEW               nothing prior comes close.
+ *
+ * The safety property survives: nothing is ever silently merged. A similarity match is labelled as
+ * one and shows its own evidence, so a reader can overrule it. What has gone is the pretence that
+ * refusing to look was the same as being careful.
  * ---------------------------------------------------------------------------------------------
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -45,6 +64,23 @@ export const RECURRENCE_SCHEMA = '1.0.0';
 
 /** How much anchor overlap makes two causes worth flagging as possibly the same. See the header. */
 const NEAR_MATCH_OVERLAP = 0.6;
+
+/**
+ * The bar for LIKELY_RECURRING, and why it is a SYMMETRIC measure plus a floor.
+ *
+ * The obvious measure is containment, the shared anchors over the smaller set, and it is the wrong
+ * one to decide on. Most problems in one account point at the same two or three busy workflows, so a
+ * small genuinely-new problem sitting inside a large old one scores 100% and would be reported as
+ * recurring. Replayed against Grom UK's real history, containment matched 14 of 14, which is the
+ * right answer for two runs of the same week and far too eager for a real one.
+ *
+ * Jaccard, shared over the UNION, penalises exactly that size mismatch: it asks how much the two
+ * problems are the same rather than how much of the smaller one is covered. The floor on shared
+ * anchors then rules out coincidences among tiny sets. Containment is still computed and reported,
+ * because it is the number that explains a partial match to a reader.
+ */
+const LIKELY_JACCARD = 0.5;
+const LIKELY_SHARED_ANCHORS = 3;
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -77,14 +113,28 @@ export function causeFingerprint(cause) {
   });
 }
 
-/** Anchor overlap between two causes, for the near-match report only. Never for matching. */
-function overlap(left, right) {
-  const a = new Set(discriminating(left));
-  const b = new Set(right);
-  if (a.size === 0 || b.size === 0) return 0;
+/**
+ * How much two causes point at the same objects, and how many objects that is.
+ *
+ * Containment rather than Jaccard: see `LIKELY_CONTAINMENT`. The raw shared COUNT is returned with it
+ * because the ratio alone cannot tell a two-anchor cause sitting inside a large one from a real match.
+ */
+function similarity(cause, otherAnchors) {
+  const a = new Set(discriminating(cause));
+  const b = new Set(otherAnchors ?? []);
+  if (a.size === 0 || b.size === 0) return { containment: 0, jaccard: 0, shared: 0 };
   let shared = 0;
   for (const key of a) if (b.has(key)) shared += 1;
-  return shared / Math.min(a.size, b.size);
+  return {
+    containment: shared / Math.min(a.size, b.size),
+    jaccard: shared / (a.size + b.size - shared),
+    shared,
+  };
+}
+
+/** Anchor overlap between two causes, kept for the near-match report. */
+function overlap(left, right) {
+  return similarity(left, right).containment;
 }
 
 /**
@@ -180,10 +230,82 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
   }
 
   const seenThisRun = new Set();
-  const causes = (investigation.causes ?? []).map((cause) => {
+  // A prior problem matched by similarity is NOT absent this week. Without this the same problem is
+  // reported twice, once as new and once as gone, which is how a report says two opposite things.
+  const claimedByLikely = new Set();
+
+  const scored = (investigation.causes ?? []).map((cause) => {
     const fingerprint = causeFingerprint(cause);
     seenThisRun.add(fingerprint);
     const prior = priorRuns.get(fingerprint) ?? [];
+    /*
+     * Rank every prior problem by how much of this one it accounts for, and keep the candidates worth
+     * showing a reader. Done for exact matches too, so the shape is uniform, but unused by them.
+     */
+    const candidates = [...priorRuns.entries()]
+      .map(([otherFingerprint, events]) => {
+        const { containment, jaccard, shared } = similarity(cause, events[0].anchors ?? []);
+        return {
+          fingerprint: otherFingerprint,
+          firstSeenAt: events[0].occurredAt,
+          lastSeenAt: events[events.length - 1].occurredAt,
+          priorRuns: [...new Set(events.map((event) => event.runId))].length,
+          anchorOverlap: Number(containment.toFixed(2)),
+          similarity: Number(jaccard.toFixed(2)),
+          sharedAnchors: shared,
+          // Agreement raises confidence but is NOT required. Two experts can file the same problem
+          // under different families, and demanding they agree reintroduces the brittleness this
+          // whole change exists to remove. The anchors are concrete account objects; the family is a
+          // judgement about them.
+          mechanismAgreement: (events[0].mechanisms ?? []).some((m) => (cause.mechanisms ?? []).includes(m)),
+        };
+      })
+      .filter((candidate) => candidate.anchorOverlap >= NEAR_MATCH_OVERLAP)
+      .sort((left, right) => (
+        right.similarity - left.similarity
+        || right.sharedAnchors - left.sharedAnchors
+        || byteOrder(left.fingerprint, right.fingerprint)
+      ));
+
+    return { cause, fingerprint, prior, candidates };
+  });
+
+  /*
+   * ONE ancestor per problem, and one problem per ancestor, assigned GLOBALLY by strength.
+   *
+   * Two of this week's causes both claiming the same earlier one means at least one is wrong, and it
+   * also makes the absent list lie: replayed against the real history, four earlier problems were
+   * claimed twice while ten were reported as gone with their descendants sitting in the same table.
+   *
+   * The assignment is done across all pairs at once, strongest first, rather than cause by cause.
+   * Walking the causes in array order would let whichever happened to be first take an ancestor that
+   * fits a later one better, so the same evidence could produce a different answer depending on the
+   * order the experts' findings were grouped. These artefacts are hashed and byte-compared, so an
+   * order-dependent result is a correctness problem and not only an aesthetic one.
+   */
+  const assignable = [];
+  for (const entry of scored) {
+    if (entry.prior.length > 0) continue;
+    for (const candidate of entry.candidates) {
+      if (candidate.similarity >= LIKELY_JACCARD && candidate.sharedAnchors >= LIKELY_SHARED_ANCHORS) {
+        assignable.push({ causeId: entry.cause.causeId, candidate });
+      }
+    }
+  }
+  assignable.sort((left, right) => (
+    right.candidate.similarity - left.candidate.similarity
+    || right.candidate.sharedAnchors - left.candidate.sharedAnchors
+    || byteOrder(left.causeId, right.causeId)
+    || byteOrder(left.candidate.fingerprint, right.candidate.fingerprint)
+  ));
+  const assigned = new Map();
+  for (const { causeId, candidate } of assignable) {
+    if (assigned.has(causeId) || claimedByLikely.has(candidate.fingerprint)) continue;
+    assigned.set(causeId, candidate);
+    claimedByLikely.add(candidate.fingerprint);
+  }
+
+  const causes = scored.map(({ cause, fingerprint, prior, candidates }) => {
     if (prior.length > 0) {
       return {
         causeId: cause.causeId,
@@ -191,38 +313,32 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
         status: 'RECURRING',
         firstSeenAt: prior[0].occurredAt,
         priorRuns: [...new Set(prior.map((event) => event.runId))].length,
+        matchedOn: 'fingerprint',
         nearMatches: [],
       };
     }
     /*
-     * No exact match. Before calling it new, look for a prior observation that is probably the same
-     * problem with shifted anchors, and REPORT it rather than silently matching on it.
+     * A similarity match is LIKELY_RECURRING, never RECURRING. That distinction is the safety
+     * argument: an exact fingerprint is a fact, a strong overlap is an opinion, and the report says
+     * which one it is holding along with the number behind it. A reader can overrule an opinion; they
+     * cannot overrule a silent merge.
      */
-    const nearMatches = [...priorRuns.entries()]
-      .filter(([, events]) => {
-        const [first] = events;
-        const sameMechanism = (first.mechanisms ?? []).some((m) => (cause.mechanisms ?? []).includes(m));
-        return sameMechanism && overlap(cause, first.anchors ?? []) >= NEAR_MATCH_OVERLAP;
-      })
-      .map(([otherFingerprint, events]) => ({
-        fingerprint: otherFingerprint,
-        firstSeenAt: events[0].occurredAt,
-        anchorOverlap: Number(overlap(cause, events[0].anchors ?? []).toFixed(2)),
-      }))
-      .sort((left, right) => right.anchorOverlap - left.anchorOverlap || byteOrder(left.fingerprint, right.fingerprint));
-
+    const best = assigned.get(cause.causeId);
+    const isLikely = best !== undefined;
     return {
       causeId: cause.causeId,
       fingerprint,
-      status: 'NEW',
-      firstSeenAt: null,
-      priorRuns: 0,
-      nearMatches,
+      status: isLikely ? 'LIKELY_RECURRING' : 'NEW',
+      firstSeenAt: isLikely ? best.firstSeenAt : null,
+      priorRuns: isLikely ? best.priorRuns : 0,
+      matchedOn: isLikely ? 'anchor_overlap' : null,
+      ...(isLikely ? { matchedFingerprint: best.fingerprint, match: best } : {}),
+      nearMatches: candidates,
     };
   });
 
   const absent = [...priorRuns.entries()]
-    .filter(([fingerprint]) => !seenThisRun.has(fingerprint))
+    .filter(([fingerprint]) => !seenThisRun.has(fingerprint) && !claimedByLikely.has(fingerprint))
     .map(([fingerprint, events]) => ({
       fingerprint,
       firstSeenAt: events[0].occurredAt,
@@ -240,5 +356,6 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
     absent,
     newCount: causes.filter((cause) => cause.status === 'NEW').length,
     recurringCount: causes.filter((cause) => cause.status === 'RECURRING').length,
+    likelyRecurringCount: causes.filter((cause) => cause.status === 'LIKELY_RECURRING').length,
   };
 }

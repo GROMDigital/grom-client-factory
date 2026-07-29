@@ -602,7 +602,14 @@ ${delivery === '' ? '' : `
         <td><span class="band b-${escapeHtml(worstBand(cause, 'commercialImpact'))}">${escapeHtml(worstBand(cause, 'commercialImpact').toLowerCase())}</span></td>
         <td>${escapeHtml(worstBand(cause, 'implementationEffort').toLowerCase())}</td>
         <td class="num">${cause.corroboratingLanes.length} of 3</td>
-        <td>${age === undefined ? 'n/a' : age.status === 'RECURRING' ? `seen ${age.priorRuns} times before` : 'new'}</td>
+        <td>${age === undefined
+          ? 'n/a'
+          : age.status === 'RECURRING'
+            ? `seen ${age.priorRuns} times before`
+            : age.status === 'LIKELY_RECURRING'
+              // Hedged in the word, with the strength beside it, so the table never overclaims.
+              ? `probably seen before (${Math.round((age.match?.anchorOverlap ?? 0) * 100)}%)`
+              : 'new'}</td>
       </tr>`;
   }).join('')}</tbody>
     </table>

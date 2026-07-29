@@ -129,11 +129,10 @@ test('a problem that stops appearing is ABSENT, never fixed', () => {
   assert.equal(comparison.recurringCount, 1);
 });
 
-test('a near miss is REPORTED, not silently matched', () => {
+test('a weak near miss is REPORTED, not matched', () => {
   /*
-   * Renaming a workflow changes the fingerprint. Loosening identity to absorb that would let the
-   * report claim a problem is recurring when it may be a different one, so the overlap is stated and
-   * the reader decides.
+   * Two shared anchors is under the floor: too few concrete objects in common to call it the same
+   * problem, however high the ratio looks. It is reported with its overlap so the reader decides.
    */
   const paths = project();
   recordRun({
@@ -155,9 +154,123 @@ test('a near miss is REPORTED, not silently matched', () => {
   });
 
   const [only] = comparison.causes;
-  assert.equal(only.status, 'NEW', 'a near miss must NOT be promoted to a match');
+  assert.equal(only.status, 'NEW', 'two shared anchors is under the floor');
   assert.equal(only.nearMatches.length, 1);
   assert.ok(only.nearMatches[0].anchorOverlap >= 0.6);
+});
+
+test('a strong overlap reads LIKELY_RECURRING, and shows the number behind it', () => {
+  /*
+   * THE FAILURE THIS EXISTS TO FIX. Measured on Grom UK 2026-07-29: two runs of the SAME closed week
+   * over the same evidence produced 20 causes and 14, and exact matching paired NONE of them, because
+   * experts group findings and label mechanisms differently every run. A test that fails every time
+   * is not conservative, it just reports every problem as brand new for ever.
+   *
+   * So a strong overlap is reported as a probable match, WITH its evidence, and never silently
+   * promoted to the certainty an exact fingerprint carries.
+   */
+  const paths = project();
+  const anchors = [
+    'kpi:enquiry_to_contacted',
+    'workflow:05 No-Show Recovery',
+    'workflow:06 Cancellation Recovery',
+    'workflow:02 Booking Confirmation + Reminders',
+  ];
+  recordRun({ paths, runId: 'run_week_one', investigation: investigationOf(cause('cause_a', { anchors })), occurredAt: WEEK_ONE });
+
+  // Same four objects, plus one more the experts added this week, and a DIFFERENT mechanism label.
+  const comparison = compareToHistory({
+    investigation: investigationOf(cause('cause_b', {
+      mechanisms: ['stage_or_disposition_data_quality'],
+      anchors: [...anchors, 'workflow:03 Reschedule Handler'],
+    })),
+    observations: readObservations({ paths }),
+    runId: 'run_week_two',
+  });
+
+  const [only] = comparison.causes;
+  assert.equal(only.status, 'LIKELY_RECURRING');
+  assert.equal(only.matchedOn, 'anchor_overlap');
+  assert.equal(only.firstSeenAt, WEEK_ONE);
+  assert.equal(only.match.sharedAnchors, 4);
+  assert.equal(only.match.similarity, 0.8);
+  // The label disagreed and it still matched, because the anchors are account objects and the label
+  // is one expert's opinion about them. The disagreement is REPORTED rather than used as a veto.
+  assert.equal(only.match.mechanismAgreement, false);
+  assert.equal(comparison.likelyRecurringCount, 1);
+  // And it is not simultaneously reported as gone.
+  assert.equal(comparison.absent.length, 0);
+});
+
+test('a small problem sitting inside a big one is NOT called recurring', () => {
+  /*
+   * Why the decision is symmetric. Most problems in one account point at the same busy workflows, so
+   * a genuinely new small problem is often FULLY contained in a large old one. Containment alone
+   * scores that 100%: replayed against the real history it matched 14 of 14, which is right for two
+   * runs of one week and far too eager for a real one.
+   */
+  const paths = project();
+  recordRun({
+    paths,
+    runId: 'run_week_one',
+    investigation: investigationOf(cause('cause_big', {
+      anchors: [
+        'kpi:enquiry_to_contacted', 'kpi:strategy_call_to_showed', 'kpi:showed_to_decision',
+        'workflow:01 Onboarding Ready', 'workflow:02 Access In Progress', 'workflow:03 Strategy In Progress',
+        'workflow:04 Strategy Sent', 'workflow:05 No-Show Recovery', 'workflow:06 Cancellation Recovery',
+      ],
+    })),
+    occurredAt: WEEK_ONE,
+  });
+
+  const comparison = compareToHistory({
+    investigation: investigationOf(cause('cause_small', {
+      anchors: ['workflow:05 No-Show Recovery', 'workflow:06 Cancellation Recovery', 'kpi:enquiry_to_contacted'],
+    })),
+    observations: readObservations({ paths }),
+    runId: 'run_week_two',
+  });
+
+  const [only] = comparison.causes;
+  // Every anchor it has is in the older problem, so containment is 1.0 and it is still not a match.
+  assert.equal(only.nearMatches[0].anchorOverlap, 1);
+  assert.equal(only.status, 'NEW');
+});
+
+test('two problems cannot both claim the same ancestor, whatever order they arrive in', () => {
+  /*
+   * Both halves matter. If two causes claim one earlier problem then at least one is wrong, and the
+   * absent list starts contradicting the table above it. And the assignment must not depend on the
+   * order the experts' causes happened to be grouped, because these artefacts are hashed and
+   * byte-compared: an order-dependent answer is a correctness bug, not an aesthetic one.
+   */
+  const paths = project();
+  const shared = [
+    'kpi:enquiry_to_contacted',
+    'workflow:05 No-Show Recovery',
+    'workflow:06 Cancellation Recovery',
+    'workflow:02 Booking Confirmation + Reminders',
+  ];
+  recordRun({ paths, runId: 'run_week_one', investigation: investigationOf(cause('ancestor', { anchors: shared })), occurredAt: WEEK_ONE });
+
+  // Same objects, different family label, so the fingerprint differs and it competes on similarity
+  // rather than matching exactly.
+  const near = cause('cause_near', { mechanisms: ['stage_or_disposition_data_quality'], anchors: shared });
+  const weaker = cause('cause_weaker', { anchors: [...shared.slice(0, 3), 'workflow:10 Live', 'workflow:07 Send Contract'] });
+  const observations = readObservations({ paths });
+
+  const forwards = compareToHistory({ investigation: investigationOf(near, weaker), observations, runId: 'run_week_two' });
+  const backwards = compareToHistory({ investigation: investigationOf(weaker, near), observations, runId: 'run_week_two' });
+
+  const claimed = forwards.causes.filter((entry) => entry.matchedFingerprint !== undefined);
+  assert.equal(claimed.length, 1, 'exactly one cause may inherit the ancestor');
+  assert.equal(claimed[0].causeId, 'cause_near', 'and it must be the stronger match');
+
+  const shape = (result) => result.causes
+    .map((entry) => `${entry.causeId}:${entry.status}:${entry.matchedFingerprint ?? ''}`)
+    .sort()
+    .join('|');
+  assert.equal(shape(forwards), shape(backwards), 'the answer must not depend on cause order');
 });
 
 test('this run cannot make its own causes look recurring', () => {

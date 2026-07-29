@@ -11337,13 +11337,17 @@ function causeFingerprint(cause) {
     anchors: discriminating(cause)
   });
 }
-function overlap(left, right) {
-  const a2 = new Set(discriminating(left));
-  const b2 = new Set(right);
-  if (a2.size === 0 || b2.size === 0) return 0;
+function similarity(cause, otherAnchors) {
+  const a2 = new Set(discriminating(cause));
+  const b2 = new Set(otherAnchors ?? []);
+  if (a2.size === 0 || b2.size === 0) return { containment: 0, jaccard: 0, shared: 0 };
   let shared = 0;
   for (const key of a2) if (b2.has(key)) shared += 1;
-  return shared / Math.min(a2.size, b2.size);
+  return {
+    containment: shared / Math.min(a2.size, b2.size),
+    jaccard: shared / (a2.size + b2.size - shared),
+    shared
+  };
 }
 function recordRun({ paths, runId, investigation, occurredAt } = {}) {
   if (!isPlainObject7(investigation)) throw Object.assign(new TypeError("RECURRENCE_INVESTIGATION_INVALID"), { code: "RECURRENCE_INVESTIGATION_INVALID" });
@@ -11398,10 +11402,47 @@ function compareToHistory({ investigation, observations, runId } = {}) {
     priorRuns.get(event.findingFingerprint).push(event);
   }
   const seenThisRun = /* @__PURE__ */ new Set();
-  const causes = (investigation.causes ?? []).map((cause) => {
+  const claimedByLikely = /* @__PURE__ */ new Set();
+  const scored = (investigation.causes ?? []).map((cause) => {
     const fingerprint = causeFingerprint(cause);
     seenThisRun.add(fingerprint);
     const prior = priorRuns.get(fingerprint) ?? [];
+    const candidates = [...priorRuns.entries()].map(([otherFingerprint, events]) => {
+      const { containment, jaccard, shared } = similarity(cause, events[0].anchors ?? []);
+      return {
+        fingerprint: otherFingerprint,
+        firstSeenAt: events[0].occurredAt,
+        lastSeenAt: events[events.length - 1].occurredAt,
+        priorRuns: [...new Set(events.map((event) => event.runId))].length,
+        anchorOverlap: Number(containment.toFixed(2)),
+        similarity: Number(jaccard.toFixed(2)),
+        sharedAnchors: shared,
+        // Agreement raises confidence but is NOT required. Two experts can file the same problem
+        // under different families, and demanding they agree reintroduces the brittleness this
+        // whole change exists to remove. The anchors are concrete account objects; the family is a
+        // judgement about them.
+        mechanismAgreement: (events[0].mechanisms ?? []).some((m2) => (cause.mechanisms ?? []).includes(m2))
+      };
+    }).filter((candidate) => candidate.anchorOverlap >= NEAR_MATCH_OVERLAP).sort((left, right) => right.similarity - left.similarity || right.sharedAnchors - left.sharedAnchors || byteOrder4(left.fingerprint, right.fingerprint));
+    return { cause, fingerprint, prior, candidates };
+  });
+  const assignable = [];
+  for (const entry of scored) {
+    if (entry.prior.length > 0) continue;
+    for (const candidate of entry.candidates) {
+      if (candidate.similarity >= LIKELY_JACCARD && candidate.sharedAnchors >= LIKELY_SHARED_ANCHORS) {
+        assignable.push({ causeId: entry.cause.causeId, candidate });
+      }
+    }
+  }
+  assignable.sort((left, right) => right.candidate.similarity - left.candidate.similarity || right.candidate.sharedAnchors - left.candidate.sharedAnchors || byteOrder4(left.causeId, right.causeId) || byteOrder4(left.candidate.fingerprint, right.candidate.fingerprint));
+  const assigned = /* @__PURE__ */ new Map();
+  for (const { causeId, candidate } of assignable) {
+    if (assigned.has(causeId) || claimedByLikely.has(candidate.fingerprint)) continue;
+    assigned.set(causeId, candidate);
+    claimedByLikely.add(candidate.fingerprint);
+  }
+  const causes = scored.map(({ cause, fingerprint, prior, candidates }) => {
     if (prior.length > 0) {
       return {
         causeId: cause.causeId,
@@ -11409,28 +11450,24 @@ function compareToHistory({ investigation, observations, runId } = {}) {
         status: "RECURRING",
         firstSeenAt: prior[0].occurredAt,
         priorRuns: [...new Set(prior.map((event) => event.runId))].length,
+        matchedOn: "fingerprint",
         nearMatches: []
       };
     }
-    const nearMatches = [...priorRuns.entries()].filter(([, events]) => {
-      const [first] = events;
-      const sameMechanism = (first.mechanisms ?? []).some((m2) => (cause.mechanisms ?? []).includes(m2));
-      return sameMechanism && overlap(cause, first.anchors ?? []) >= NEAR_MATCH_OVERLAP;
-    }).map(([otherFingerprint, events]) => ({
-      fingerprint: otherFingerprint,
-      firstSeenAt: events[0].occurredAt,
-      anchorOverlap: Number(overlap(cause, events[0].anchors ?? []).toFixed(2))
-    })).sort((left, right) => right.anchorOverlap - left.anchorOverlap || byteOrder4(left.fingerprint, right.fingerprint));
+    const best = assigned.get(cause.causeId);
+    const isLikely = best !== void 0;
     return {
       causeId: cause.causeId,
       fingerprint,
-      status: "NEW",
-      firstSeenAt: null,
-      priorRuns: 0,
-      nearMatches
+      status: isLikely ? "LIKELY_RECURRING" : "NEW",
+      firstSeenAt: isLikely ? best.firstSeenAt : null,
+      priorRuns: isLikely ? best.priorRuns : 0,
+      matchedOn: isLikely ? "anchor_overlap" : null,
+      ...isLikely ? { matchedFingerprint: best.fingerprint, match: best } : {},
+      nearMatches: candidates
     };
   });
-  const absent = [...priorRuns.entries()].filter(([fingerprint]) => !seenThisRun.has(fingerprint)).map(([fingerprint, events]) => ({
+  const absent = [...priorRuns.entries()].filter(([fingerprint]) => !seenThisRun.has(fingerprint) && !claimedByLikely.has(fingerprint)).map(([fingerprint, events]) => ({
     fingerprint,
     firstSeenAt: events[0].occurredAt,
     lastSeenAt: events[events.length - 1].occurredAt,
@@ -11444,16 +11481,19 @@ function compareToHistory({ investigation, observations, runId } = {}) {
     causes,
     absent,
     newCount: causes.filter((cause) => cause.status === "NEW").length,
-    recurringCount: causes.filter((cause) => cause.status === "RECURRING").length
+    recurringCount: causes.filter((cause) => cause.status === "RECURRING").length,
+    likelyRecurringCount: causes.filter((cause) => cause.status === "LIKELY_RECURRING").length
   };
 }
-var RECURRENCE_SCHEMA, NEAR_MATCH_OVERLAP;
+var RECURRENCE_SCHEMA, NEAR_MATCH_OVERLAP, LIKELY_JACCARD, LIKELY_SHARED_ANCHORS;
 var init_recurrence = __esm({
   "lib/recurrence.mjs"() {
     init_memory();
     init_canonical();
     RECURRENCE_SCHEMA = "1.0.0";
     NEAR_MATCH_OVERLAP = 0.6;
+    LIKELY_JACCARD = 0.5;
+    LIKELY_SHARED_ANCHORS = 3;
   }
 });
 
@@ -11892,7 +11932,7 @@ ${delivery === "" ? "" : `
         <td><span class="band b-${escapeHtml(worstBand(cause, "commercialImpact"))}">${escapeHtml(worstBand(cause, "commercialImpact").toLowerCase())}</span></td>
         <td>${escapeHtml(worstBand(cause, "implementationEffort").toLowerCase())}</td>
         <td class="num">${cause.corroboratingLanes.length} of 3</td>
-        <td>${age === void 0 ? "n/a" : age.status === "RECURRING" ? `seen ${age.priorRuns} times before` : "new"}</td>
+        <td>${age === void 0 ? "n/a" : age.status === "RECURRING" ? `seen ${age.priorRuns} times before` : age.status === "LIKELY_RECURRING" ? `probably seen before (${Math.round((age.match?.anchorOverlap ?? 0) * 100)}%)` : "new"}</td>
       </tr>`;
   }).join("")}</tbody>
     </table>
@@ -28902,6 +28942,9 @@ function renderBacklog({ index, investigation, recurrence = null }) {
     if (entry.status === "RECURRING") {
       return `${plural(entry.priorRuns, "run", "runs")} before this`;
     }
+    if (entry.status === "LIKELY_RECURRING") {
+      return `likely ${plural(entry.priorRuns, "run", "runs")} before this (${Math.round((entry.match?.anchorOverlap ?? 0) * 100)}% match)`;
+    }
     return entry.nearMatches.length > 0 ? "new (similar seen before)" : "new";
   };
   const rows = investigation.causes.map((cause, position) => {
@@ -28930,6 +28973,15 @@ function causeHistory(entry) {
       ""
     ];
   }
+  if (entry.status === "LIKELY_RECURRING") {
+    const { anchorOverlap, sharedAnchors, mechanismAgreement } = entry.match ?? {};
+    return [
+      `**Probably seen before, first recorded ${entry.firstSeenAt}.** This is a match on what the problem points at, not an exact one: ${Math.round((anchorOverlap ?? 0) * 100)}% of this problem's workflows and metrics were already covered by that earlier one, across ${plural(sharedAnchors ?? 0, "shared anchor", "shared anchors")}, and the two ${mechanismAgreement ? "agree" : "DISAGREE"} about the mechanism family.`,
+      "",
+      mechanismAgreement ? "Treat it as the same problem unless you can see why not." : "The families disagree, so read both before treating them as one problem.",
+      ""
+    ];
+  }
   if (entry.nearMatches.length === 0) return ["**New this week.**", ""];
   const [closest] = entry.nearMatches;
   return [
@@ -28953,8 +29005,9 @@ function historyLine(recurrence) {
       ""
     ];
   }
+  const likely = recurrence.likelyRecurringCount ?? 0;
   return [
-    `> Compared against ${plural(recurrence.priorRunCount, "earlier run", "earlier runs")}: ${recurrence.newCount} new, ${recurrence.recurringCount} seen before.`,
+    `> Compared against ${plural(recurrence.priorRunCount, "earlier run", "earlier runs")}: ${recurrence.newCount} new, ${recurrence.recurringCount} seen before${likely > 0 ? `, ${likely} probably seen before` : ""}.` + (likely > 0 ? ' A "probably" is a match on the workflows and metrics a problem points at rather than an exact one, and each says how strong it is.' : ""),
     ""
   ];
 }
