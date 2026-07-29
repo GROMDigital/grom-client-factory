@@ -31,9 +31,22 @@
  *     --project ~/.grom-audit-runs/<label> --location <locationId> --run-id <runId> \
  *     --into "/path/to/<client folder>" [--account "SK Skin"] [--date YYYY-MM-DD]
  */
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+/*
+ * STATIC imports, so `scripts/build.mjs` can bundle this file the way it bundles the CLI.
+ *
+ * 🔴 These were `await import(join(SKILL, ...))`, which esbuild cannot follow, so the script could
+ * only ever run from a checkout. The installed plugin ships `dist/` but NO `node_modules`, so from
+ * the plugin cache the chain reached `schemas/v1.mjs`, resolved some other zod, and died on
+ * `JsonRecordSchema.check is not a function` — a dependency error for what is really a packaging
+ * gap. Filing a finished run is the last step of every audit and it could not be done from the
+ * installed tool at all; it had to be run out of a worktree at the right commit.
+ */
+import { loadProfile } from '../schemas/v1.mjs';
+import { causeFingerprint } from '../lib/recurrence.mjs';
+import { parseChangesMade, compareWeeks, nextSupersededPath } from '../lib/archive-recurrence.mjs';
 
 const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const FOLDER = 'Grom Diagnosis Engine (Weekly Audit)';
@@ -102,6 +115,29 @@ if (cutoff && !runTimezone) {
 
 const accountName = flags.account ?? flags.location;
 const destination = join(into, FOLDER, accountName, date);
+
+/*
+ * 🔴 AN EXISTING WEEK IS MOVED ASIDE, NEVER WRITTEN OVER.
+ *
+ * Two runs of the SAME closed week file under the same date, which happens whenever a run is
+ * repeated after a fix. The old behaviour copied straight in, and because the engine writes its
+ * artefacts READ-ONLY, `cpSync` overwrote what it could and then threw EACCES on the first
+ * read-only directory. What it left behind was the worst possible outcome: one folder holding two
+ * runs' files, 32 packages where there should be 16, no error visible in the folder itself, and
+ * nothing saying which cause belonged to which run.
+ *
+ * Renaming is atomic and keeps the old run intact, so nothing is destroyed and the new run starts
+ * on a clean directory. Numbered rather than timestamped so it is deterministic and so repeated
+ * supersessions stay in order.
+ *
+ * A DIRECTORY IS NEVER DELETED HERE, deliberately. Deciding an old diagnosis is worthless is a
+ * judgement, and this script does not get to make it.
+ */
+if (existsSync(destination) && readdirSync(destination).length > 0) {
+  const supersededPath = nextSupersededPath(destination, existsSync);
+  renameSync(destination, supersededPath);
+  console.log(`the existing ${date} folder was moved aside to ${basename(supersededPath)}`);
+}
 mkdirSync(destination, { recursive: true });
 
 const copied = [];
@@ -172,9 +208,6 @@ copy(facts, join(configOut, `account-facts-${flags.location}.v1.json`), { option
  * things like appointment outcomes being un-automatable. Stating that a run had no caveats when it
  * had six is the same class of error as having no caveats at all, because the reader trusts it.
  */
-const { loadProfile } = await import(join(SKILL, 'schemas/v1.mjs'));
-const { causeFingerprint } = await import(join(SKILL, 'lib/recurrence.mjs'));
-const { parseChangesMade, compareWeeks } = await import(join(SKILL, 'lib/archive-recurrence.mjs'));
 let caveats = [];
 try {
   caveats = loadProfile(briefIndex.profileId, flags.location).situation?.knownDataCaveats ?? [];

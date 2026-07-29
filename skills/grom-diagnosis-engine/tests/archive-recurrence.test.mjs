@@ -7,7 +7,7 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compareWeeks, joinable, parseChangesMade } from '../lib/archive-recurrence.mjs';
+import { compareWeeks, joinable, nextSupersededPath, parseChangesMade } from '../lib/archive-recurrence.mjs';
 
 function block(causeId, { status = 'NOT STARTED', did = '', print = null } = {}) {
   return [
@@ -104,4 +104,42 @@ test('a malformed fingerprint is treated as missing, not parsed loosely', () => 
       `${bad} must not pass as a fingerprint`,
     );
   }
+});
+
+// ---------------------------------------------------------------------------
+// Superseding an already-filed week
+// ---------------------------------------------------------------------------
+
+test('an already-filed week is moved aside to a numbered folder, never written over', () => {
+  const taken = new Set();
+  const exists = (path) => taken.has(path);
+
+  assert.equal(nextSupersededPath('/x/2026-07-27', exists), '/x/2026-07-27.superseded-1');
+
+  taken.add('/x/2026-07-27.superseded-1');
+  assert.equal(nextSupersededPath('/x/2026-07-27', exists), '/x/2026-07-27.superseded-2');
+
+  taken.add('/x/2026-07-27.superseded-2');
+  taken.add('/x/2026-07-27.superseded-3');
+  assert.equal(
+    nextSupersededPath('/x/2026-07-27', exists),
+    '/x/2026-07-27.superseded-4',
+    'it must skip every taken ordinal, not just the first',
+  );
+});
+
+test('superseding never returns a path that already exists', () => {
+  /*
+   * The whole point: the returned path is renamed ONTO, so handing back an existing directory
+   * would destroy a previous diagnosis. Two runs of the same closed week is the normal case, not
+   * an edge case, so this is the guarantee that matters.
+   */
+  const taken = new Set(['/x/w.superseded-1', '/x/w.superseded-2', '/x/w.superseded-3']);
+  const chosen = nextSupersededPath('/x/w', (p) => taken.has(p));
+  assert.equal(taken.has(chosen), false);
+});
+
+test('a runaway caller is refused rather than looping forever', () => {
+  assert.throws(() => nextSupersededPath('/x/w', () => true), /ARCHIVE_SUPERSEDE_EXHAUSTED/u);
+  assert.throws(() => nextSupersededPath('', () => false), TypeError);
 });

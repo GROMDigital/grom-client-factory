@@ -43,6 +43,29 @@ export async function bundleRuntime() {
       target: 'node24',
       sourcemap: false,
     }),
+    /*
+     * ARCHIVING IS PART OF THE PRODUCT, so it ships like the CLI does.
+     *
+     * 🔴 `scripts/archive-run.mjs` was source-only, and the installed plugin ships `dist/` with no
+     * `node_modules`, so filing a finished run could not be done from the installed tool at all: it
+     * failed on a zod resolution and had to be run out of a worktree at the matching commit. Every
+     * audit ends with this step, so "works only from a checkout" meant every audit ended outside
+     * the shipped product.
+     *
+     * Bundled WITHOUT `external: ['zod']`, unlike `audit-runtime-contracts.mjs` above, because the
+     * whole point is to carry its dependencies. It resolves `SKILL` as `<dir>/..`, and `dist/` sits
+     * directly under the skill root, so the profile and data paths it reads still resolve.
+     */
+    build({
+      entryPoints: [fileURLToPath(new URL('../scripts/archive-run.mjs', import.meta.url))],
+      outfile: fileURLToPath(new URL('archive-run.mjs', outputUrl)),
+      banner: { js: NODE_REQUIRE_BANNER },
+      bundle: true,
+      format: 'esm',
+      platform: 'node',
+      target: 'node24',
+      sourcemap: false,
+    }),
   ]);
 }
 

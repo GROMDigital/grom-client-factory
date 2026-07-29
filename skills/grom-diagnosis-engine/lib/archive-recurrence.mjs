@@ -88,3 +88,30 @@ export function compareWeeks({ claimed, thisWeeksFingerprints }) {
     untouchedGone: entries.filter(([, value]) => !/^DONE/u.test(value.status) && !present(value)),
   };
 }
+
+/**
+ * Where an already-filed week gets moved to, so a re-archive never writes over one.
+ *
+ * Extracted for the same reason as everything else in this file: `scripts/archive-run.mjs` has no
+ * exports, and this decides whether a previous diagnosis survives.
+ *
+ * 🔴 The behaviour it replaces lost data in a way that left no trace. Two runs of the same closed
+ * week file under the same date, which happens whenever a run is repeated after a fix. The archive
+ * copied straight in; the engine writes its artefacts READ-ONLY, so `cpSync` overwrote what it
+ * could and then threw on the first read-only directory. The folder left behind held two runs at
+ * once, 32 packages where there should have been 16, with nothing inside it saying so.
+ *
+ * Numbered rather than timestamped so it is deterministic and repeated supersessions stay in order.
+ * `exists` is injected so this is testable without touching a disk.
+ */
+export function nextSupersededPath(destination, exists) {
+  if (typeof destination !== 'string' || destination.length === 0) {
+    throw new TypeError('ARCHIVE_SUPERSEDE_PATH_INVALID');
+  }
+  for (let ordinal = 1; ordinal <= 10_000; ordinal += 1) {
+    const candidate = `${destination}.superseded-${ordinal}`;
+    if (!exists(candidate)) return candidate;
+  }
+  // Ten thousand supersessions of one week is not a naming problem, it is a runaway caller.
+  throw new Error('ARCHIVE_SUPERSEDE_EXHAUSTED');
+}

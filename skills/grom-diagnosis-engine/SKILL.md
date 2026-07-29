@@ -250,10 +250,19 @@ A run is PRODUCED in `~/.grom-audit-runs/<label>/`, outside every repo. It is no
 is filed, because a diagnosis nobody can find is a diagnosis nobody acts on.
 
 ```
-node scripts/archive-run.mjs \
+node <skill-dir>/dist/archive-run.mjs \
   --project ~/.grom-audit-runs/<label> --location <locationId> --run-id <runId> \
   --into "/path/to/<client folder>" --account "<Client Name>"
 ```
+
+🔴 `dist/archive-run.mjs`, not `scripts/`. The installed plugin ships `dist/` and NO `node_modules`,
+so the source copy cannot resolve its dependencies and dies on a zod error that reads like a broken
+script. The bundle carries them.
+
+Re-filing a week that is already there MOVES THE EXISTING FOLDER ASIDE to `<date>.superseded-N` and
+starts clean. It never overwrites and never deletes: two runs of the same closed week is the normal
+case after a fix, and the artefacts are read-only, so copying over them used to leave one folder
+holding both runs with nothing inside it saying so.
 
 The layout is FIXED for every account and every week, so an agent can be pointed at the folder and
 rely on the shape without being told it. It writes `START-HERE.md` carrying the read order, the
