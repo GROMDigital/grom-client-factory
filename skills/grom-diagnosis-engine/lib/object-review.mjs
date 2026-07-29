@@ -42,7 +42,7 @@
 import { readFileSync } from 'node:fs';
 import { sha256 } from './canonical.mjs';
 import { mapContextFor } from './account-map.mjs';
-import { TARGET_FRAMING } from './analysis-brief.mjs';
+import { COPY_LIMITS_REQUIRING_THREADS, TARGET_FRAMING } from './analysis-brief.mjs';
 
 export const OBJECT_REVIEW_SCHEMA = '1.0.0';
 
@@ -182,7 +182,15 @@ export function buildWorkflowReviewPrompts({ briefs, map } = {}) {
   const shared = {
     situation: copy.situation,
     provenanceLimits: copy.provenanceLimits,
-    limits: copy.limits,
+    /*
+     * ONLY the rules this prompt's own evidence can satisfy.
+     *
+     * A per-workflow prompt carries its workflow and nothing else: no `conversations.threads`. It
+     * used to inherit the copy lane's limits wholesale, which told the expert that the threads win
+     * over what the account sends and then handed it no threads. Twenty eight experts got that on
+     * the Grom UK run of 2026-07-27.
+     */
+    limits: (copy.limits ?? []).filter((limit) => !COPY_LIMITS_REQUIRING_THREADS.includes(limit)),
     // What the account observably does on each channel, so cadence and channel are judged against
     // behaviour rather than against taste.
     engagement: copy.engagement,
@@ -401,6 +409,12 @@ export function buildAgentReviewPrompts({ briefs, map } = {}) {
         engagement: copy.engagement,
         // And it means far more against conversations that actually happened.
         conversationsOnThisChannel: threadsForSurface(copy, surface, agent),
+        /*
+         * This prompt DOES carry threads, so the rules for reading them belong here. It is the
+         * mirror of the per-workflow prompt above, which carries none and therefore gets none: a
+         * reading rule travels with its evidence, never on its own.
+         */
+        limits: COPY_LIMITS_REQUIRING_THREADS,
       };
       const prompt = [
         `You are reviewing the instructions of ONE AI agent: ${name}, on the ${surface} surface.`,

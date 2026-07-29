@@ -89,7 +89,7 @@ const internal = Object.freeze({
       triggers: ['opportunity_created'],
       stopOnResponse: false,
       steps: [
-        { type: 'wait', name: 'Wait 2 hours', attributes: { startAfter: { type: 'hour', value: 2, when: 'after' } } },
+        { type: 'wait', id: 's1', name: 'Wait 2 hours', attributes: { startAfter: { type: 'hour', value: 2, when: 'after' } } },
         // A send step pointing at a LIBRARY TEMPLATE: subject present, body absent.
         { type: 'email', name: 'Content 1', attributes: { subject: 'The 5-minute rule', preHeader: 'Why leads go cold', from_name: 'GROM', from_email: 'team@example.test' } },
       ],
@@ -100,7 +100,7 @@ const internal = Object.freeze({
         warnings: [{ code: 'LOG_PAGE_BUDGET_EXHAUSTED', component: 'runtime_events', detail: 'echoes request context' }],
         runtimeEvents: [{ id: 'e1' }, { id: 'e2' }],
         observedEventTypes: { byType: { email: 2 }, byStatus: { success: 1, skipped: 1 } },
-        perStepCounts: [{ total: 12, currentStepId: 's1' }],
+        perStepCounts: [{ total: 12, currentStepId: 's1' }, { total: 3, currentStepId: 'deleted-step' }],
         configurationBinding: { definitionGovernedRuntimeEvents: 'unproven' },
       },
     }),
@@ -204,8 +204,18 @@ test('lane 2 tells "we did not look" apart from "we looked and it was quiet"', (
   assert.deepEqual(nurture.warnings, [{ code: 'LOG_PAGE_BUDGET_EXHAUSTED', component: 'runtime_events' }]);
   // `detail` echoes request context and this value reaches the publication boundary.
   assert.equal(Object.hasOwn(nurture.warnings[0], 'detail'), false);
-  // The spec's "contacts becoming stuck at a step" and "steps that did not execute".
-  assert.deepEqual(nurture.perStepCounts, [{ total: 12, currentStepId: 's1' }]);
+  /*
+   * The spec's "contacts becoming stuck at a step" and "steps that did not execute", NAMED.
+   *
+   * A bare `currentStepId` is a uuid, and a reviewer handed one can see that 12 contacts are parked
+   * somewhere and cannot say where. That happened live on 2026-07-27.
+   */
+  assert.deepEqual(nurture.perStepCounts, [
+    { total: 12, currentStepId: 's1', stepName: 'Wait 2 hours', stepType: 'wait' },
+    // A step can be deleted while its parked contacts remain. Say null rather than guessing, because
+    // "parked at a step that no longer exists" is itself worth seeing.
+    { total: 3, currentStepId: 'deleted-step', stepName: null, stepType: null },
+  ]);
   assert.equal(nurture.observedEventTypes.byStatus.skipped, 1);
   assert.equal(nurture.configurationBinding.definitionGovernedRuntimeEvents, 'unproven');
 });

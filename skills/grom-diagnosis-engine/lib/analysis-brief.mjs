@@ -563,6 +563,16 @@ function messagesOf(workflow, emailCopy = null) {
  * workflows were never asked about at all -- "we did not look" and "we looked and it was quiet" are
  * different facts, and an analyst told the second when the first is true will clear a broken step.
  */
+/** The workflow's steps indexed by id, for joining runtime ids back to something readable. */
+function stepsById(workflow) {
+  const steps = workflow?.definition?.data?.workflow?.workflowData?.templates;
+  const index = new Map();
+  for (const step of Array.isArray(steps) ? steps : []) {
+    if (typeof step?.id === 'string' && step.id.length > 0) index.set(step.id, step);
+  }
+  return index;
+}
+
 function runtimeOf(workflow) {
   const window = workflow?.runtimeWindow?.data;
   if (!isPlainObject(window)) {
@@ -576,12 +586,56 @@ function runtimeOf(workflow) {
     warnings: (window.warnings ?? []).map(({ code, component }) => ({ code, component })),
     observedEventTypes: window.observedEventTypes ?? null,
     retainedEvents: Array.isArray(window.runtimeEvents) ? window.runtimeEvents.length : null,
-    // Where contacts are parked right now. The spec's "contacts becoming stuck at particular steps".
-    perStepCounts: Array.isArray(window.perStepCounts) ? window.perStepCounts : null,
+    /*
+     * Where contacts are parked right now. The spec's "contacts becoming stuck at particular steps".
+     *
+     * NAMED, because the raw shape is `{currentStepId, total}` and a bare uuid tells an expert
+     * nothing. On the Grom UK run of 2026-07-27 a reviewer could see 21 contacts parked in the lead
+     * ladder and could not say which step held them, which is the difference between a finding and
+     * an observation. The step graph is right here on the same object, so the join costs nothing.
+     *
+     * `stepName` stays null when the id is not in the current definition rather than guessing: a
+     * step can be deleted while its parked contacts remain, and that is itself worth seeing.
+     */
+    perStepCounts: Array.isArray(window.perStepCounts)
+      ? window.perStepCounts.map((entry) => {
+        const step = stepsById(workflow).get(entry?.currentStepId);
+        return {
+          ...entry,
+          stepName: step?.name ?? null,
+          stepType: step?.type ?? null,
+        };
+      })
+      : null,
     // The rail's own refusal to let anyone claim this config governed these events.
     configurationBinding: window.configurationBinding ?? null,
   };
 }
+
+/**
+ * The reading rules that hold for ANY prompt carrying `sequences`.
+ */
+export const COPY_LIMITS_ALWAYS = Object.freeze([
+  'MESSAGE COUNTS PER SEQUENCE ARE CEILINGS. Branch legs are flattened, so a sequence listing 16 messages may send 8 down either leg. `waitBefore` entries in square brackets mark a branch point, not a delay.',
+  'Read `bodySource` on every email. `inline` means the copy is written into the workflow. `library_template` means the step points at a library template and its copy WAS fetched, so it is complete and you judge it exactly as you would an inline one. `unavailable` means the body could not be read at all and `bodyUnavailable` says why: judge those on subject, preheader, sender and placement only, and say so explicitly.',
+  'A message with `audience: "internal"` is a STAFF ALERT and not customer copy. Judge it on whether it tells the right person the right thing in time to act. Never judge its tone as though a lead will read it.',
+]);
+
+/**
+ * The rules that only mean anything when the prompt ACTUALLY CARRIES `conversations.threads`.
+ *
+ * Kept separate because they used to be copied verbatim into all 28 per-workflow review prompts,
+ * which carry no threads at all: only the lane brief and the AI agent prompts do. On the Grom UK run
+ * of 2026-07-27 that told twenty eight experts that the threads win over what the account sends, and
+ * then gave them nothing to look at. Two of them said so; the rest had to guess what was meant.
+ *
+ * An instruction pointing at evidence that is not in the prompt is worse than no instruction, because
+ * an expert who trusts it will either invent the corroboration or quietly drop the rule.
+ */
+export const COPY_LIMITS_REQUIRING_THREADS = Object.freeze([
+  'No open, click or bounce statistics exist in this evidence. REPLIES do: `conversations.threads` carries real inbound messages. Read `conversations.howToReadThis` before you count anything in them, and never state a rate from a sample.',
+  '`sequences` is what this account SENDS. `conversations.threads` is what actually happened. When the two disagree, the threads win: a sequence that looks well written and produces silence is a finding, not a well-written sequence.',
+]);
 
 function aiAgentsOf(internal) {
   const components = internal?.aiConfiguration?.data?.components ?? internal?.aiConfiguration?.components;
@@ -752,12 +806,7 @@ export function buildAnalysisBriefs({ measurement, internal = null, profile } = 
     aiAgents: aiAgentsOf(internal),
     // Real threads, both directions. See `conversationsOf`.
     conversations: conversationsOf(internal),
-    limits: [
-      'MESSAGE COUNTS PER SEQUENCE ARE CEILINGS. Branch legs are flattened, so a sequence listing 16 messages may send 8 down either leg. `waitBefore` entries in square brackets mark a branch point, not a delay.',
-      'Read `bodySource` on every email. `inline` means the copy is written into the workflow. `library_template` means the step points at a library template and its copy WAS fetched, so it is complete and you judge it exactly as you would an inline one. `unavailable` means the body could not be read at all and `bodyUnavailable` says why: judge those on subject, preheader, sender and placement only, and say so explicitly.',
-      'No open, click or bounce statistics exist in this evidence. REPLIES do: `conversations.threads` carries real inbound messages. Read `conversations.howToReadThis` before you count anything in them, and never state a rate from a sample.',
-      '`sequences` is what this account SENDS. `conversations.threads` is what actually happened. When the two disagree, the threads win: a sequence that looks well written and produces silence is a finding, not a well-written sequence.',
-    ],
+    limits: [...COPY_LIMITS_ALWAYS, ...COPY_LIMITS_REQUIRING_THREADS],
   };
 
   const lanes = { conversationCopyAi, leadJourneyKpi, workflowConfigRuntime };

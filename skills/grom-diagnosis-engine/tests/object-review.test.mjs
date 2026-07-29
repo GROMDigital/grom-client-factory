@@ -191,6 +191,45 @@ test('the situation and the stated limits travel with every workflow', () => {
   assert.match(built.reviews[0].prompt, /a stated limit/u);
 });
 
+test('a workflow prompt is never told to read transcripts it was not given', () => {
+  /*
+   * REGRESSION, live on Grom UK 2026-07-27. The per-workflow prompt inherited the copy lane's limits
+   * wholesale, two of which are about `conversations.threads`: "REPLIES do" and "when the two
+   * disagree, the threads win". A per-workflow prompt carries its own workflow and NOTHING else, so
+   * all 28 experts were told that a body of evidence beat the one in front of them, and then handed
+   * none of it. Two said so; the rest had to decide for themselves what was meant.
+   *
+   * A reading rule travels with its evidence or it does not travel.
+   */
+  const built = buildWorkflowReviewPrompts({
+    briefs: briefs({
+      workflows: [workflow('06 Cancellation Recovery')],
+      sequences: [sequence('06 Cancellation Recovery', [message(0, 'sms', 'a')])],
+    }),
+    map: mapFor([{ name: '06 Cancellation Recovery' }]),
+  });
+
+  const { prompt } = built.reviews[0];
+  assert.doesNotMatch(prompt, /conversations\.threads/u);
+  assert.doesNotMatch(prompt, /the threads win/u);
+  // Surgical: only the thread-dependent rules are dropped, everything else the brief stated survives.
+  assert.match(prompt, /a stated limit/u);
+});
+
+test('the thread-reading rules DO travel to the prompts that carry threads', () => {
+  // The mirror of the test above. An agent prompt carries `conversationsOnThisChannel`, so the rules
+  // for reading real replies belong there and nowhere else.
+  const built = buildAgentReviewPrompts({
+    briefs: briefs({
+      aiAgents: { available: true, surfaces: { conversation_ai: { agents: [{ name: 'Arthur', goal: 'book' }] } } },
+    }),
+    map: mapFor([]),
+  });
+
+  assert.equal(built.reviews.length, 1);
+  assert.match(built.reviews[0].prompt, /the threads win/u);
+});
+
 test('EVERY workflow gets an expert, including the one-message ones', () => {
   /*
    * There was a gate: two or more messages bought a review. It was justified as "one message has no
