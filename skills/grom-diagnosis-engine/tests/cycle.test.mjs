@@ -692,6 +692,48 @@ test('a VERIFY_FIRST package proposes a conditional fix and forbids implementati
   assert.ok(!page.includes('## What to change'));
 });
 
+test('a VERIFY_FIRST package PRINTS the check that would settle it', () => {
+  /*
+   * Telling a reader to verify first and not printing the test puts the work back on them. All three
+   * parts travel together: a check with no refuting result cannot settle anything, which is why the
+   * finding contract demands all three in the first place.
+   */
+  const cause = causeAnchoredTo(['workflow:05 No-Show Recovery']);
+  cause.implementationStatus = 'VERIFY_FIRST';
+  cause.unresolvedMaterialAlternatives = 1;
+  cause.verificationChecks = [{
+    check: 'Read the trigger filters on 05 No-Show Recovery.',
+    supportsIf: 'It enrols on appointment status no-show with no stage filter.',
+    refutesIf: 'It filters by pipeline stage, which would already exclude these contacts.',
+  }];
+  const page = renderSolutionPackage({
+    index: { runId: RUN, locationId: LOCATION },
+    cause,
+    findings: [],
+    reviews: REVIEW_INDEX,
+  });
+
+  assert.match(page, /Read the trigger filters/u);
+  assert.match(page, /Supports the diagnosis if/u);
+  assert.match(page, /REFUTES it if/u);
+});
+
+test('a VERIFY_FIRST package with no carried checks says where to look instead of printing nothing', () => {
+  const cause = causeAnchoredTo(['workflow:05 No-Show Recovery']);
+  cause.implementationStatus = 'VERIFY_FIRST';
+  cause.unresolvedMaterialAlternatives = 1;
+  cause.verificationChecks = [];
+  const page = renderSolutionPackage({
+    index: { runId: RUN, locationId: LOCATION },
+    cause,
+    findings: [],
+    reviews: REVIEW_INDEX,
+  });
+
+  assert.match(page, /VERIFY FIRST/u);
+  assert.match(page, /carry the discriminating tests/u);
+});
+
 test('the whole chain wires the reviews into the packages, end to end', () => {
   const { paths } = project();
   throughStageTwo(paths, { review: 'Message 1 rewritten in full: here is the replacement.' });

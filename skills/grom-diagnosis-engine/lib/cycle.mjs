@@ -901,10 +901,34 @@ export function renderSolutionPackage({ index, cause, findings, reviews = [] }) 
     '',
     'FOR HUMAN IMPLEMENTATION AND APPROVAL. Nothing here is applied by this tool.',
     '',
+    /*
+     * THE TEST TRAVELS WITH THE INSTRUCTION.
+     *
+     * Telling a reader to verify first and then not printing the check puts the work back on them:
+     * they have to go and find which of the findings below carries the discriminating test, and the
+     * whole point of that field is that it is one cheap thing to look at. Each finding already
+     * carries `check`, `supportsIf` and `refutesIf`, and all three are needed for the answer to mean
+     * anything, so all three are printed.
+     */
     ...(verifyFirst ? [
       '🔴 **VERIFY FIRST.** A material competing explanation is still unresolved. Do not implement',
-      'the proposed change until the checks below support this diagnosis.',
+      'the proposed change until these checks support this diagnosis.',
       '',
+      '### Settle it with this',
+      '',
+      ...(cause.verificationChecks ?? [])
+        .map((test, position) => (isPlainObject(test) ? { test, position } : null))
+        .filter((entry) => entry !== null)
+        .flatMap(({ test, position }) => [
+          `**Check ${position + 1}.** ${test.check}`,
+          '',
+          `- Supports the diagnosis if: ${test.supportsIf}`,
+          `- REFUTES it if: ${test.refutesIf}`,
+          '',
+        ]),
+      ...((cause.verificationChecks ?? []).length === 0
+        ? ['The findings below carry the discriminating tests.', '']
+        : []),
     ] : []),
     '## What is wrong',
     '',
