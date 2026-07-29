@@ -44415,12 +44415,12 @@ function createInternalAuditCollector({
         });
       }
       let aiConfiguration = null;
-      if (credential.agencyTokenUsable === true && rail.latchedCode() === null) {
+      if (credential.agencyTokenPresent !== false && rail.latchedCode() === null) {
         const bundle = await rail.aiBundle({ companyId });
         if (bundle.ok) aiConfiguration = bundle.data;
         else limitations.add(bundle.code);
         for (const warning of statedWarnings(bundle)) limitations.add(warning.code);
-      } else if (credential.agencyTokenUsable !== true) {
+      } else {
         limitations.add("AGENCY_TOKEN_UNAVAILABLE");
       }
       const complete = limitations.size === 0 && readable && definitionIds.length === ids.length;
@@ -44630,9 +44630,18 @@ function createInternalAuditAdapter({
         usable: true,
         reason: null,
         secondsRemaining: Math.floor(remaining),
-        // The AI surfaces additionally need the elevated agency-admin token-id, which expires
-        // independently. Reported separately so a run can honestly skip that surface alone
-        // instead of failing whole or claiming an empty agent list.
+        /*
+         * The AI surfaces additionally need the elevated agency-admin token-id, which expires
+         * independently of this JWT. Both facts are reported, and they mean different things:
+         *
+         *   agencyTokenPresent  is there anything to try with at all
+         *   agencyTokenUsable   would it still be alive if used RIGHT NOW
+         *
+         * The collector gates on PRESENT, not on usable, because it reads the AI surface last and a
+         * freshness check taken here is a forecast several minutes stale by then. `usable` remains
+         * for reporting and for anyone who wants to warn an operator before a run.
+         */
+        agencyTokenPresent: tokenId.present === true,
         agencyTokenUsable: tokenId.present === true && Number(tokenId.secondsRemaining) >= minimumCredentialSeconds
       });
     },

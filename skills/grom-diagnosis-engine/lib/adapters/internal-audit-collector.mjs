@@ -322,17 +322,28 @@ export function createInternalAuditCollector({
       }
 
       /*
-       * The AI surfaces need the elevated agency-admin token-id, which expires INDEPENDENTLY of
-       * the location JWT. When it is dead the surface is skipped and said so, rather than the run
-       * failing whole or, far worse, reporting an empty agent list.
+       * The AI surfaces need the elevated agency-admin token-id, which expires INDEPENDENTLY of the
+       * location JWT. So it is TRIED rather than predicted.
+       *
+       * It used to be gated on `agencyTokenUsable`, a preflight check that the token-id had at least
+       * five minutes left. That check is taken before the workflows are collected and this call
+       * happens after them, so it was forecasting the state of a credential several minutes into the
+       * future and skipping the whole surface on the forecast. Live on Grom UK 2026-07-29 that cost a
+       * run BOTH of its AI agents while the location JWT still had half an hour on it, on an account
+       * whose AI books more appointments than any other route. The copy lane read `available: false`
+       * and judged an account with no conversational layer at all.
+       *
+       * Attempting it is safe precisely because it is last: every other read is already in hand, so a
+       * refusal here cannot cost anything else, and a latched circuit has nothing left to block. An
+       * absent token-id is still a skip, because there is nothing to try with.
        */
       let aiConfiguration = null;
-      if (credential.agencyTokenUsable === true && rail.latchedCode() === null) {
+      if (credential.agencyTokenPresent !== false && rail.latchedCode() === null) {
         const bundle = await rail.aiBundle({ companyId });
         if (bundle.ok) aiConfiguration = bundle.data;
         else limitations.add(bundle.code);
         for (const warning of statedWarnings(bundle)) limitations.add(warning.code);
-      } else if (credential.agencyTokenUsable !== true) {
+      } else {
         limitations.add('AGENCY_TOKEN_UNAVAILABLE');
       }
 

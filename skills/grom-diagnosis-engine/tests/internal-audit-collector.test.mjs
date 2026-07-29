@@ -300,16 +300,51 @@ test('an unreadable roster is never reported as an empty account', async () => {
   assert.equal(empty.complete, true);
 });
 
-test('the AI surfaces are skipped and SAID SO when the agency token is dead', async () => {
+test('a stale-looking agency token is TRIED, because the check would be a forecast', async () => {
+  /*
+   * This used to assert the opposite, and the opposite cost a live run both of its AI agents.
+   *
+   * The freshness check is taken at preflight and the AI bundle is read LAST, after every workflow,
+   * so gating on it forecasts a credential's state minutes into the future. On Grom UK 2026-07-29 a
+   * run whose location JWT still had half an hour left skipped the entire AI surface on that
+   * forecast, and the copy lane read `available: false` on an account whose AI books more
+   * appointments than any other route.
+   *
+   * Trying it is safe because it is last: everything else is already collected.
+   */
   const { rail, calls } = railFor({
-    // The location JWT is healthy; the elevated agency token-id expires independently.
+    // The location JWT is healthy; the elevated agency token-id looks expired.
     auth_status: okAuth(3600, -10),
+    list_workflows_complete: okRoster(['w1']),
+    export_workflow: (args) => okDefinition(args.workflowId),
+    get_ai_configuration_bundle: okAiBundle,
+  });
+  const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] })
+    .collectAuditEvidence({ window: WINDOW });
+
+  assert.equal(calls.some(({ name }) => name === 'get_ai_configuration_bundle'), true);
+  assert.notEqual(evidence.aiConfiguration, null);
+  assert.equal(evidence.limitations.includes('AGENCY_TOKEN_UNAVAILABLE'), false);
+});
+
+test('no agency token at all is skipped and SAID SO, because there is nothing to try', async () => {
+  const { rail, calls } = railFor({
+    auth_status: {
+      structuredContent: {
+        ok: true,
+        data: {
+          jwtClaims: { present: true, secondsRemaining: 3600 },
+          tokenIdClaims: { present: false, secondsRemaining: null },
+        },
+      },
+    },
     list_workflows_complete: okRoster(['w1']),
     export_workflow: (args) => okDefinition(args.workflowId),
     get_ai_configuration_bundle: () => { throw new Error('MUST NOT BE CALLED'); },
   });
   const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] })
     .collectAuditEvidence({ window: WINDOW });
+
   assert.equal(calls.some(({ name }) => name === 'get_ai_configuration_bundle'), false);
   assert.ok(evidence.limitations.includes('AGENCY_TOKEN_UNAVAILABLE'));
   assert.equal(evidence.aiConfiguration, null);
