@@ -1836,7 +1836,7 @@ function buildInternalAuditAdapter({
         let conversationTranscripts;
         try {
           conversationTranscripts = await transcriptRail.collectTranscripts({
-            window: request?.window,
+            window: request?.conversationWindow ?? request?.window,
             // The JOIN input. Already collected and already in hand at this phase; see
             // `lib/conversation-outcomes.mjs` for why an outcome is read from it and never derived.
             publicEvidence: request?.publicEvidence ?? null,

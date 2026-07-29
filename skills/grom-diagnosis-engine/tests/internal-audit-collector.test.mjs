@@ -18,12 +18,62 @@ import {
   createInternalAuditCollector,
   readRosterIds,
 } from '../lib/adapters/internal-audit-collector.mjs';
-import { collectInternalEvidencePhase } from '../lib/modes/weekly.mjs';
+import {
+  collectInternalEvidencePhase,
+  currentClosedWeekWindow,
+} from '../lib/modes/weekly.mjs';
 
 const LOCATION = 'L1';
 const WINDOW = Object.freeze({
   from: '2026-01-01T00:00:00.000Z',
   to: '2026-03-02T00:00:00.000Z',
+});
+
+test('the transcript window is the closed account-local week, not the public history horizon', () => {
+  assert.deepEqual(
+    currentClosedWeekWindow({
+      cutoff: '2026-10-05T00:00:00.000Z',
+      timezone: 'Australia/Sydney',
+    }),
+    {
+      from: '2026-09-27T14:00:00.000Z',
+      to: '2026-10-04T13:00:00.000Z',
+    },
+    'the DST transition belongs in the real seven-day account-local week',
+  );
+});
+
+test('the internal phase carries a separate conversation window without narrowing workflow runtime', async () => {
+  const conversationWindow = Object.freeze({
+    from: '2026-02-23T00:00:00.000Z',
+    to: '2026-03-02T00:00:00.000Z',
+  });
+  let received = null;
+  const internalEvidence = {
+    schemaVersion: '1.0.0',
+    boundLocationId: LOCATION,
+    complete: true,
+    limitations: [],
+    workflows: [],
+  };
+  await collectInternalEvidencePhase({
+    adapter: {
+      async collectAuditEvidence(request) {
+        received = request;
+        return internalEvidence;
+      },
+    },
+    target: { locationId: LOCATION },
+    window: WINDOW,
+    conversationWindow,
+    applicability: {},
+    stepRosterRequests: {},
+    publicEvidence: { scopes: [] },
+    checkpoint: { schemaVersion: '1.0.0', phase: 'collecting_public' },
+  });
+
+  assert.deepEqual(received.window, WINDOW, 'workflow runtime keeps the broader governed window');
+  assert.deepEqual(received.conversationWindow, conversationWindow, 'transcripts get the closed week');
 });
 
 function railFor(handlers) {

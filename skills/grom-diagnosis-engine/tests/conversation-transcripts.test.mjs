@@ -282,13 +282,54 @@ test('the total budget is a real ceiling, even for the very first thread', async
 
   const delivered = JSON.stringify(result.transcripts).length;
   assert.ok(
-    delivered <= 1_400,
+    delivered <= 1_000,
     `the delivered payload must respect the ceiling, got ${delivered} characters`,
   );
   assert.ok(
     result.limitations.length > 0,
     'exceeding or eliding to fit must always be stated, never silent',
   );
+});
+
+test('the total budget includes the JSON array that is actually delivered', async () => {
+  /*
+   * Three individually-counted transcripts total 897 characters in this fixture, but the array
+   * that carries them is 901 because of its brackets and separators. The old accounting called an
+   * 899-character ceiling satisfied while handing the analyst 901 characters.
+   */
+  const items = Array.from({ length: 10 }, (_, index) => message(`array-${index}`, {
+    dateAdded: START + DAY + index * 1000,
+    body: 'x'.repeat(30),
+  }));
+  const result = await collector(clientReturning(items), { maxTranscriptChars: 899 })
+    .collectTranscripts({});
+
+  assert.ok(JSON.stringify(result.transcripts).length <= 899);
+  assert.ok(result.droppedForSizeCount > 0);
+});
+
+test('an impossible total budget is rejected instead of violating its hard ceiling', () => {
+  assert.throws(
+    () => collector(clientReturning([]), { maxTranscriptChars: 1 }),
+    (error) => error?.code === 'CONVERSATION_TRANSCRIPTS_CONFIG_INVALID',
+  );
+});
+
+test('the per-thread ceiling holds when the size is in one body rather than the message count', async () => {
+  /*
+   * The first elider only removed middle MESSAGES. A one-message thread with a large body was
+   * returned unchanged as `oversized`, so a 500-character per-thread ceiling delivered 5,284.
+   */
+  const result = await collector(
+    clientReturning([message('one-huge-body', { direction: 'inbound', body: 'x'.repeat(5_000) })]),
+    { maxThreadChars: 500, maxBodyChars: 10_000, maxTranscriptChars: 2_000 },
+  ).collectTranscripts({});
+
+  assert.equal(result.transcripts.length, 1);
+  assert.ok(JSON.stringify(result.transcripts[0]).length <= 500);
+  assert.equal(result.transcripts[0].elided, true);
+  assert.match(result.transcripts[0].messages[0].body, /omitted/iu);
+  assert.equal(Object.hasOwn(result.transcripts[0], 'oversized'), false);
 });
 
 test('a dropped complaint is reported as the guarantee failing, not hidden', async () => {
@@ -349,7 +390,7 @@ test('an unanswered call carries its outcome in status, not callStatus', async (
   );
 });
 
-test('conversations are joined to what commercially happened', async () => {
+test('conversations preserve appointment and sales outcomes without calling attendance a sale', async () => {
   const publicEvidence = {
     scopes: [{
       actionId: 'calendars-v3__get-calendar-events',
@@ -376,9 +417,13 @@ test('conversations are joined to what commercially happened', async () => {
   const result = await collector(clientReturning(items)).collectTranscripts({ publicEvidence });
 
   const byId = new Map(result.transcripts.map((thread) => [thread.conversationId, thread]));
-  assert.equal(byId.get('won').outcome, 'won');
+  assert.equal(byId.get('won').outcome, 'showed', 'attending is not the same commercial event as winning a sale');
   assert.equal(byId.get('won').outcomeBasis, 'appointment');
+  assert.equal(byId.get('won').appointmentOutcome.outcome, 'showed');
+  assert.equal(byId.get('won').opportunityOutcome, null);
   assert.equal(byId.get('ghosted').outcome, 'no_show', 'the appointment beats the open opportunity');
+  assert.equal(byId.get('ghosted').appointmentOutcome.outcome, 'no_show');
+  assert.equal(byId.get('ghosted').opportunityOutcome.outcome, 'open');
   assert.equal(
     byId.get('ghosted').outcomeBasis,
     'appointment',
@@ -396,6 +441,44 @@ test('conversations are joined to what commercially happened', async () => {
   assert.ok(strata.size >= 3, 'distinct outcomes must produce distinct strata');
   // ...and it must not leak a real id into the manifest while doing it.
   assert.ok(!JSON.stringify(result.sample).includes('contact-booked'));
+});
+
+test('the latest appointment wins by time, not by an outcome severity rank', async () => {
+  /*
+   * Exact review reproduction: the same contact showed in May and no-showed in the current week.
+   * Ranking statuses made the historical show win forever and labelled the current thread `won`.
+   */
+  const publicEvidence = {
+    scopes: [{
+      actionId: 'calendars-v3__get-calendar-events',
+      items: [
+        { record: { id: 'old-show', contactId: 'c-1', calendarId: 'cal1', startTime: '2026-05-01T10:00:00+00:00', appointmentStatus: 'showed' } },
+        { record: { id: 'new-no-show', contactId: 'c-1', calendarId: 'cal1', startTime: '2026-07-25T10:00:00+00:00', appointmentStatus: 'noshow' } },
+      ],
+    }],
+  };
+  const result = await collector(clientReturning([{ ...message('t1'), contactId: 'c-1' }]))
+    .collectTranscripts({ publicEvidence });
+
+  assert.equal(result.transcripts[0].outcome, 'no_show');
+  assert.equal(result.transcripts[0].appointmentOutcome.outcome, 'no_show');
+  assert.equal(result.transcripts[0].appointmentOutcome.at, Date.parse('2026-07-25T10:00:00+00:00'));
+});
+
+test('a later terminal opportunity can record the sale without erasing the appointment outcome', async () => {
+  const publicEvidence = {
+    scopes: [
+      { actionId: 'calendars-v3__get-calendar-events', items: [{ record: { id: 'a1', contactId: 'c-1', calendarId: 'cal1', startTime: '2026-07-21T10:00:00+00:00', appointmentStatus: 'showed' } }] },
+      { actionId: 'opportunities.search', items: [{ record: { id: 'o1', contactId: 'c-1', pipelineId: 'p1', status: 'won', lastStatusChangeAt: '2026-07-22T10:00:00+00:00' } }] },
+    ],
+  };
+  const result = await collector(clientReturning([{ ...message('t1'), contactId: 'c-1' }]))
+    .collectTranscripts({ publicEvidence });
+
+  assert.equal(result.transcripts[0].outcome, 'won');
+  assert.equal(result.transcripts[0].outcomeBasis, 'opportunity');
+  assert.equal(result.transcripts[0].appointmentOutcome.outcome, 'showed');
+  assert.equal(result.transcripts[0].opportunityOutcome.outcome, 'won');
 });
 
 test('a pipeline nobody maintains cannot overrule the appointment record', async () => {
@@ -433,6 +516,17 @@ test('with no public evidence every outcome is honestly unknown', async () => {
   const result = await collector(clientReturning([message('c1')])).collectTranscripts({});
   assert.equal(result.transcripts[0].outcome, 'unknown');
   assert.equal(result.outcomeCoverage.joined, false);
+});
+
+test('a successful empty export is an empty census, not a failed sample', async () => {
+  const result = await collector(clientReturning([])).collectTranscripts({});
+
+  assert.equal(result.complete, true);
+  assert.equal(result.universeCount, 0);
+  assert.equal(result.sample.mode, 'CENSUS');
+  assert.equal(result.sample.actualSampleCount, 0);
+  assert.equal(result.mandatoryGuaranteeHeld, true);
+  assert.deepEqual(result.limitations, []);
 });
 
 test('a misconfigured collector refuses to exist', () => {

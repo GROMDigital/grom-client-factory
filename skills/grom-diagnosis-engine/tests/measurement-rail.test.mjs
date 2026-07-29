@@ -963,6 +963,39 @@ function internalDouble({ credentialSeconds = 3600, workflowIds = ['wf-1', 'wf-2
   };
 }
 
+function transcriptDouble() {
+  const calls = [];
+  return {
+    calls,
+    connect: async () => ({
+      async callTool(request) {
+        calls.push(request);
+        return {
+          structuredContent: {
+            items: [{
+              id: 'message-weekly-1',
+              conversationId: 'conversation-weekly-1',
+              contactId: 'c1',
+              dateAdded: '2025-06-10T09:00:00.000Z',
+              direction: 'inbound',
+              messageType: 'TYPE_SMS',
+              body: 'How much is the treatment?',
+            }],
+            page: {
+              cursor: null,
+              nextCursor: null,
+              reportedCount: 1,
+              complete: true,
+              truncated: false,
+            },
+          },
+        };
+      },
+      async close() { calls.push({ name: '__close' }); },
+    }),
+  };
+}
+
 function internalAuditBlock(projectRootForToken) {
   const tokenFilePath = join(projectRootForToken, 'tok.txt');
   writeFileSync(tokenFilePath, 'not-a-real-token\n');
@@ -1045,6 +1078,46 @@ test('audit run reads workflows when the config asks, and stays honestly partial
      */
     assert.equal(result.status, 'complete_partial');
     assert.deepEqual(internal.internalEvidence.capabilityCoverage, []);
+  } finally {
+    rmSync(tokenHome, { recursive: true, force: true });
+  }
+});
+
+test('a transcript-enabled kernel sends the closed week through the complete adapter path', {
+  skip: INSTALLED_AUDIT_SERVER === undefined ? 'uxie-ghl-factory plugin not installed' : false,
+}, async () => {
+  const tokenHome = realpathSync(mkdtempSync(join(tmpdir(), 'measurement-token-')));
+  const internalRail = internalDouble();
+  const transcripts = transcriptDouble();
+  try {
+    const { internal } = await runPublicCli(
+      { 'contacts.search': CONTACTS, 'opportunities.list': OPPORTUNITIES },
+      {
+        configOverrides: {
+          internalAudit: {
+            ...internalAuditBlock(tokenHome),
+            conversationTranscripts: true,
+          },
+        },
+        extraRuntime: {
+          internalAuditConnect: internalRail.connect,
+          conversationTranscriptConnect: transcripts.connect,
+        },
+      },
+    );
+
+    const [request] = transcripts.calls.filter((call) => call?.arguments?.action);
+    assert.deepEqual(request.arguments.params, {
+      locationId: LOCATION,
+      fromDate: '2025-06-09T00:00:00.000Z',
+      toDate: '2025-06-16T00:00:00.000Z',
+    });
+    assert.equal(
+      internal.internalEvidence.conversationTranscripts.transcripts[0].messages[0].body,
+      'How much is the treatment?',
+      'the real transcript collector output must survive into the internal checkpoint',
+    );
+    assert.equal(internal.internalEvidence.conversationTranscripts.sample.mode, 'CENSUS');
   } finally {
     rmSync(tokenHome, { recursive: true, force: true });
   }

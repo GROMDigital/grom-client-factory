@@ -125,6 +125,30 @@ test('a failed collection never claims the mandatory guarantee', () => {
   assert.match(conversations.howToReadThis, /Do not describe this account as quiet/u);
 });
 
+test('a successful empty census is described as a quiet window, not a collection failure', () => {
+  const empty = {
+    ...HEALTHY,
+    universeCount: 0,
+    messageCount: 0,
+    sampledCount: 0,
+    mandatoryGuaranteeHeld: true,
+    outcomeCoverage: {
+      joined: true,
+      threadsWithOutcome: 0,
+      threadsTotal: 0,
+      appointmentStatusesRecorded: 0,
+    },
+    sample: { mode: 'CENSUS', mandatoryCount: 0, actualSampleCount: 0 },
+    transcripts: [],
+  };
+  const { lanes } = buildAnalysisBriefs({ measurement, internal: internalWith(empty), profile });
+  const { conversations } = lanes.conversationCopyAi;
+
+  assert.equal(conversations.mode, 'CENSUS');
+  assert.match(conversations.howToReadThis, /completed successfully and found zero conversations/iu);
+  assert.doesNotMatch(conversations.howToReadThis, /NO VALID SAMPLE/u);
+});
+
 test('a collection that never states the guarantee is not credited with it', () => {
   /*
    * The field ABSENT, not false. An older or half-built collection record must not inherit the

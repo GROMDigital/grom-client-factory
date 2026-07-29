@@ -466,6 +466,31 @@ export function planWeeklyCollection({
   });
 }
 
+/**
+ * The ONE closed account-local week whose conversations this audit is judging.
+ *
+ * Public collection deliberately reaches much farther back so lagged commercial outcomes can
+ * mature. Conversation copy is different evidence: mixing ninety days of older replies into this
+ * week's sample can hide a new failure, and calling that sample "the week" is simply false. Keep
+ * this window separate from the public/runtime collection horizon.
+ */
+export function currentClosedWeekWindow({ cutoff, timezone } = {}) {
+  let localCutoff;
+  try {
+    localCutoff = Temporal.Instant.from(cutoff).toZonedDateTimeISO(timezone);
+  } catch {
+    throw codedError('AUDIT_COMMAND_INVALID_TIME', TypeError);
+  }
+  const end = localCutoff
+    .subtract({ days: localCutoff.dayOfWeek - 1 })
+    .startOfDay();
+  const start = end.subtract({ weeks: 1 });
+  return deepFreeze({
+    from: start.toInstant().toString({ smallestUnit: 'millisecond' }),
+    to: end.toInstant().toString({ smallestUnit: 'millisecond' }),
+  });
+}
+
 function sanitizeFinding(finding) {
   if (!finding || typeof finding !== 'object' || Array.isArray(finding)) return finding;
   const next = structuredClone(finding);
@@ -974,6 +999,7 @@ export async function collectInternalEvidencePhase({
   adapter,
   target,
   window,
+  conversationWindow,
   applicability,
   stepRosterRequests,
   publicEvidence,
@@ -1003,6 +1029,9 @@ export async function collectInternalEvidencePhase({
   const internalEvidence = await adapter.collectAuditEvidence({
     target,
     window,
+    ...(conversationWindow === undefined
+      ? {}
+      : { conversationWindow: jsonClone(conversationWindow) }),
     applicability,
     stepRosterRequests,
     /*

@@ -6,7 +6,7 @@ const OPAQUE_SOURCE = /^src_[a-f0-9]{16,64}$/u;
 const OPAQUE_STAGE = /^stage_[a-f0-9]{16,64}$/u;
 const CATEGORIES = Object.freeze({
   occurredAtBand: new Set(['early_week', 'mid_week', 'late_week']),
-  outcome: new Set(['open', 'lost', 'won', 'booked', 'no_show', 'cancelled', 'unknown']),
+  outcome: new Set(['open', 'lost', 'won', 'booked', 'showed', 'no_show', 'cancelled', 'unknown']),
   responseTimeBand: new Set(['instant', 'fast', 'moderate', 'slow', 'unknown']),
   callDurationBand: new Set(['none', 'short', 'medium', 'long', 'unknown']),
   handoffState: new Set(['not_required', 'pending', 'completed', 'failed', 'unknown']),

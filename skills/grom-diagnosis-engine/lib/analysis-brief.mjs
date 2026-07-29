@@ -339,9 +339,10 @@ function copyCoverageOf(sequences, internal) {
  * THE OTHER HALF OF THE CONVERSATION — what the leads themselves wrote.
  *
  * Everything else on this lane is copy the ACCOUNT produced. These are real threads, both
- * directions, drawn by `lib/sampling.mjs` with every complaint and opt-out included by
- * construction. They are the only evidence in the system that can answer "what did people actually
- * say, and what did we never answer".
+ * directions, drawn by `lib/sampling.mjs` with every complaint and opt-out the keyword flagging
+ * caught protected by the mandatory draw and reconciled against the final size bound. They are the
+ * only evidence in the system that can answer "what did people actually say, and what did we never
+ * answer".
  *
  * The coverage block is not decoration. A sample is a claim about a population, and a lane that
  * does not know whether it read the whole week or fifty threads out of four hundred will write
@@ -376,6 +377,7 @@ function conversationsOf(internal) {
     droppedForSizeCount: collection.droppedForSizeCount ?? 0,
     droppedFlaggedCount: collection.droppedFlaggedCount ?? 0,
     elidedThreadCount: collection.elidedThreadCount ?? 0,
+    oversizedThreadDroppedCount: collection.oversizedThreadDroppedCount ?? 0,
     unparsedMessageCount: collection.unparsedMessageCount ?? 0,
     mandatoryGuaranteeHeld: guaranteeHeld,
     // How many threads the commercial join could place, and on what. See `conversation-outcomes`.
@@ -387,6 +389,8 @@ function conversationsOf(internal) {
      */
     howToReadThis: mode === 'UNKNOWN'
       ? 'NO VALID SAMPLE WAS PRODUCED for this run — the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included.'
+      : mode === 'CENSUS' && collection.complete === true && (collection.universeCount ?? 0) === 0
+        ? 'The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure.'
       : mode === 'CENSUS'
         ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? '' : ' 🔴 EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`.'}`
         : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${

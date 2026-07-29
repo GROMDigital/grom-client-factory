@@ -78,9 +78,8 @@ const DEFAULT_BUDGETS = Object.freeze({
   /**
    * Characters across every SAMPLED thread, together. This is the prompt-size ceiling: the sampled
    * transcripts reach three lane briefs and every AI-agent review, so their total size is paid for
-   * several times over. When the budget binds, whole threads are dropped from the tail of the draw
-   * rather than every thread being trimmed, because half a conversation teaches nothing and the
-   * manifest can then state exactly how many threads the analyst did not see.
+   * several times over. Long threads preserve their opening and ending under the per-thread bound;
+   * the total bound then drops whole threads from the tail and reconciles exactly what was omitted.
    */
   maxTranscriptChars: 120_000,
   /**
@@ -97,6 +96,26 @@ const DEFAULT_BUDGETS = Object.freeze({
   threadHeadMessages: 6,
   threadTailMessages: 6,
 });
+
+function validBudgets(limits) {
+  return Number.isInteger(limits.censusThreshold)
+    && limits.censusThreshold >= 0
+    && Number.isInteger(limits.maxSample)
+    && limits.maxSample >= 1
+    && Number.isInteger(limits.maxMessages)
+    && limits.maxMessages >= 1
+    && Number.isInteger(limits.maxBodyChars)
+    && limits.maxBodyChars >= 1
+    && Number.isInteger(limits.maxTranscriptChars)
+    // Even an empty canonical JSON array occupies two characters.
+    && limits.maxTranscriptChars >= 2
+    && Number.isInteger(limits.maxThreadChars)
+    && limits.maxThreadChars >= 1
+    && Number.isInteger(limits.threadHeadMessages)
+    && limits.threadHeadMessages >= 1
+    && Number.isInteger(limits.threadTailMessages)
+    && limits.threadTailMessages >= 1;
+}
 
 /** Response-time bands, in milliseconds. Strata only. Never reported as a measurement. */
 const RESPONSE_BANDS = Object.freeze([
@@ -332,6 +351,8 @@ export function threadsFromMessages(messages, { fromMs, toMs, outcomes = null })
       // Readable on the transcript, opaque in the manifest. Both are deliberate.
       outcome,
       outcomeBasis: joined?.basis ?? null,
+      appointmentOutcome: joined?.appointmentOutcome ?? null,
+      opportunityOutcome: joined?.opportunityOutcome ?? null,
       inboundCount: group.filter((message) => message.direction === 'inbound').length,
       outboundCount: group.filter((message) => message.direction === 'outbound').length,
       lastAt: last?.at ?? null,
@@ -355,9 +376,9 @@ export function threadsFromMessages(messages, { fromMs, toMs, outcomes = null })
          * diagnosis rests on. The proxy stays as the fallback for a thread whose contact has no
          * appointment and no opportunity, where there is genuinely nothing commercial to say.
          */
-        stage: outcome === 'unknown'
+        stage: joined === null
           ? ref('stage', 'last-direction', last?.direction ?? 'unknown')
-          : outcomeStratumRef(outcome),
+          : outcomeStratumRef(joined),
         outcome,
         responseTimeBand: responseTimeBand(group),
         callDurationBand: callDurationBand(group),
@@ -391,6 +412,8 @@ function transcriptOf(thread) {
      */
     outcome: thread.outcome,
     outcomeBasis: thread.outcomeBasis,
+    appointmentOutcome: thread.appointmentOutcome,
+    opportunityOutcome: thread.opportunityOutcome,
     inboundCount: thread.inboundCount,
     outboundCount: thread.outboundCount,
     flags: thread.flags,
@@ -426,26 +449,91 @@ function transcriptSize(transcript) {
  * for. The marker is a real entry in the message list so the gap cannot be mistaken for a jump in
  * the conversation itself.
  */
-function elideToFit(transcript, limits) {
-  if (transcriptSize(transcript) <= limits.maxThreadChars) return transcript;
-  const { messages } = transcript;
-  const head = limits.threadHeadMessages;
-  const tail = limits.threadTailMessages;
-  if (messages.length <= head + tail) {
-    // Few messages, so the size is in the bodies rather than the count. Nothing to elide that
-    // would help; the thread is declared oversized and the analyst is told.
-    return { ...transcript, oversized: true };
-  }
-  const omitted = messages.length - head - tail;
+function elideBody(body, cap) {
+  if (typeof body !== 'string' || body.length <= cap) return body;
+  if (cap <= 0) return '';
+  const marker = '[middle omitted]';
+  if (cap <= marker.length) return marker.slice(0, cap);
+  const content = cap - marker.length;
+  const head = Math.ceil(content / 2);
+  const tail = Math.floor(content / 2);
+  return `${body.slice(0, head)}${marker}${body.slice(body.length - tail)}`;
+}
+
+function capMessageBodies(transcript, cap) {
   return {
     ...transcript,
-    elided: true,
-    messages: [
-      ...messages.slice(0, head),
-      { elidedMessages: omitted, note: `${omitted} messages omitted from the middle of this thread to fit the size budget. The opening and the ending are complete.` },
-      ...messages.slice(-tail),
-    ],
+    messages: transcript.messages.map((message) => (
+      typeof message?.body === 'string'
+        ? { ...message, body: elideBody(message.body, cap) }
+        : message
+    )),
   };
+}
+
+function boundedMessageSet(messages, head, tail) {
+  if (head + tail >= messages.length) return [...messages];
+  const omitted = messages.length - head - tail;
+  return [
+    ...messages.slice(0, head),
+    {
+      elidedMessages: omitted,
+      note: `${omitted} messages omitted from the middle of this thread to fit the size budget.`,
+    },
+    ...messages.slice(-tail),
+  ];
+}
+
+function elideToFit(transcript, limits) {
+  if (transcriptSize(transcript) <= limits.maxThreadChars) return transcript;
+  const original = transcript.messages;
+  let head = Math.min(limits.threadHeadMessages, Math.ceil(original.length / 2));
+  let tail = Math.min(limits.threadTailMessages, original.length - head);
+
+  /*
+   * First make the message skeleton fit while retaining at least the first and last messages. A
+   * very small test budget may not even fit that irreducible metadata; returning null makes the
+   * collector drop and disclose the thread instead of violating the bound.
+   */
+  let candidate;
+  while (true) {
+    candidate = {
+      ...transcript,
+      elided: true,
+      messages: boundedMessageSet(original, head, tail),
+    };
+    if (transcriptSize(capMessageBodies(candidate, 0)) <= limits.maxThreadChars) break;
+    if (head + tail <= Math.min(2, original.length)) return null;
+    if (head >= tail && head > 1) head -= 1;
+    else if (tail > 1) tail -= 1;
+    else return null;
+  }
+
+  if (transcriptSize(candidate) <= limits.maxThreadChars) return candidate;
+
+  /*
+   * The size is in message bodies. Binary-search one deterministic per-body cap, preserving both
+   * ends of each body with a visible marker. This is what makes `maxThreadChars` a real ceiling for
+   * one- and two-message threads too, not only for long threads with a removable middle.
+   */
+  const longest = candidate.messages.reduce(
+    (max, message) => Math.max(max, typeof message?.body === 'string' ? message.body.length : 0),
+    0,
+  );
+  let low = 0;
+  let high = longest;
+  let best = capMessageBodies(candidate, 0);
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const attempted = capMessageBodies(candidate, middle);
+    if (transcriptSize(attempted) <= limits.maxThreadChars) {
+      best = attempted;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
 }
 
 /** The bounded envelope every governed read carries. Identical in shape to the journey collector's. */
@@ -529,6 +617,9 @@ export function createConversationTranscriptCollector({
     || Date.parse(fromDate) >= Date.parse(toDate)
   ) throw codedError('CONVERSATION_TRANSCRIPTS_CONFIG_INVALID', TypeError);
   const limits = { ...DEFAULT_BUDGETS, ...budgets };
+  if (!validBudgets(limits)) {
+    throw codedError('CONVERSATION_TRANSCRIPTS_CONFIG_INVALID', TypeError);
+  }
   const fromMs = Date.parse(fromDate);
   const toMs = Date.parse(toDate);
 
@@ -584,19 +675,6 @@ export function createConversationTranscriptCollector({
        */
       const outcomes = publicEvidence === null ? null : buildOutcomeIndex(publicEvidence);
       const threads = threadsFromMessages(messages, { fromMs, toMs, outcomes });
-      if (threads.length === 0) {
-        return Object.freeze({
-          schemaVersion: CONVERSATION_TRANSCRIPTS_SCHEMA,
-          boundLocationId,
-          complete: limitations.size === 0,
-          limitations: Object.freeze([...limitations].sort(byteOrder)),
-          universeCount: 0,
-          messageCount: 0,
-          transcripts: Object.freeze([]),
-          sample: null,
-          transcriptsHash: sha256([]),
-        });
-      }
 
       /*
        * The seed is derived from the window and the account, so the same week drawn twice draws the
@@ -622,9 +700,9 @@ export function createConversationTranscriptCollector({
 
       const byRef = new Map(threads.map((thread) => [thread.interaction.interactionRef, thread]));
       /*
-       * Flagged threads FIRST, so the prompt-size budget can only ever cost an ordinary thread. A
-       * complaint that fell out because a long thread came before it alphabetically would defeat
-       * the one guarantee this rail makes.
+       * Flagged threads FIRST, so the prompt-size budget protects them as far as it can. Flagged
+       * threads can still exceed the total together; the reconciliation below then explicitly
+       * fails the guarantee instead of pretending they were delivered.
        *
        * Ordered on the THREAD's own flags and NOT on `selectionReasons`. Under a CENSUS the sampler
        * has no reason to mark anything mandatory — everything is in — so every reason reads
@@ -650,26 +728,36 @@ export function createConversationTranscriptCollector({
        * more than one bounded thread, and if even that does not fit it is dropped and SAID.
        */
       const transcripts = [];
-      let characters = 0;
+      // The two brackets of `[]`. Commas are added below with each transcript after the first.
+      let characters = 2;
       let dropped = 0;
       let droppedFlagged = 0;
       let elided = 0;
+      let oversizedDropped = 0;
       for (const selection of ordered) {
         const thread = byRef.get(selection.interactionRef);
         if (thread === undefined) continue;
         const transcript = elideToFit(transcriptOf(thread), limits);
-        if (transcript.elided === true || transcript.oversized === true) elided += 1;
+        if (transcript === null) {
+          dropped += 1;
+          oversizedDropped += 1;
+          if (flagged.has(selection.interactionRef)) droppedFlagged += 1;
+          continue;
+        }
+        if (transcript.elided === true) elided += 1;
         const size = transcriptSize(transcript);
-        if (characters + size > limits.maxTranscriptChars) {
+        const separator = transcripts.length === 0 ? 0 : 1;
+        if (characters + separator + size > limits.maxTranscriptChars) {
           dropped += 1;
           if (flagged.has(selection.interactionRef)) droppedFlagged += 1;
           continue;
         }
-        characters += size;
+        characters += separator + size;
         transcripts.push(transcript);
       }
       if (dropped > 0) limitations.add('CONVERSATION_TRANSCRIPT_CHAR_BUDGET_EXHAUSTED');
       if (elided > 0) limitations.add('CONVERSATION_TRANSCRIPT_THREAD_ELIDED');
+      if (oversizedDropped > 0) limitations.add('CONVERSATION_TRANSCRIPT_THREAD_DROPPED');
       /*
        * THE RECONCILIATION. The manifest is a claim about what the analyst received, and until now
        * nothing checked it against what was actually handed over. If a flagged thread did not fit,
@@ -713,6 +801,7 @@ export function createConversationTranscriptCollector({
               threadsTotal: threads.length,
             },
         elidedThreadCount: elided,
+        oversizedThreadDroppedCount: oversizedDropped,
         unparsedMessageCount: unparsed,
         transcripts: Object.freeze(transcripts),
         // The full manifest, including the strata and inclusion probabilities. It carries opaque

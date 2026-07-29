@@ -37,6 +37,7 @@ import {
   frozenInputAnchorDigest,
   mergeInternalEvidence,
   planWeeklyCollection,
+  currentClosedWeekWindow,
   replayWeeklyFixture,
   scanPublicationPrivacy,
 } from './modes/weekly.mjs';
@@ -1007,6 +1008,12 @@ export function createAuditKernel({
               from: new Date(collectionPlan.collectionStart).toISOString(),
               to: new Date(collectionPlan.cutoff).toISOString(),
             },
+            // Copy analysis is about this closed week. The broader window above remains available
+            // to workflow runtime and public outcome evidence so mature journeys are not clipped.
+            conversationWindow: currentClosedWeekWindow({
+              cutoff: collectionPlan.cutoff,
+              timezone: collectionPlan.timezone,
+            }),
             applicability: args.providerConfig?.internalApplicability ?? {},
             stepRosterRequests: args.providerConfig?.stepRosterRequests ?? {},
             publicEvidence,

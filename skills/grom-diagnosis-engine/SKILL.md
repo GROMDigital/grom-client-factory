@@ -141,16 +141,22 @@ disk, not from a status somebody wrote down.
    conversations, both directions. Without it every word the engine reads is a
    word the account wrote; with it the copy lane and the AI-agent reviews see
    what leads actually replied, what they asked that went unanswered, and what
-   they said on the way out. Threads are drawn by `lib/sampling.mjs`, so an
-   account with under fifty conversations in the week is read whole (`CENSUS`)
+   they said on the way out. Threads are drawn by `lib/sampling.mjs`.
+   The transcript rail reads exactly the most recent closed account-local week,
+   independently of the broader public evidence horizon used to mature commercial
+   outcomes. An account with under fifty conversations in that week is read whole (`CENSUS`)
    and a busier one gets a stratified draw in which every complaint and opt-out
-   is included by construction. Read `conversations.howToReadThis` on the brief
+   caught by the keyword flagging is protected by construction and reconciled
+   against the final size bound. Read `conversations.howToReadThis` on the brief
    before quoting a number from it: a count taken from a sample is not a rate.
    These transcripts are COPY evidence and never journey evidence — no metric
    moves because a message body parsed differently this week. Each thread IS
-   joined to what commercially happened to that person (booked, no-show,
-   cancelled, won, lost), read from appointment and opportunity records the
-   public rail already owns and never derived from a message. That join is what
+   joined to what commercially happened to that person, read from appointment
+   and opportunity records the public rail already owns and never derived from
+   a message. Appointment disposition (booked, showed, no-show, cancelled) and
+   opportunity disposition (open, won, lost) remain separate, dated fields, so
+   attending is never mislabeled as a sale and an old show cannot hide a current
+   no-show. That join is what
    lets the draw put a booked conversation next to a lost one. Read
    `conversations.outcomeCoverage` before trusting it: on an account that does
    not record attendance, most threads are honestly `unknown`.

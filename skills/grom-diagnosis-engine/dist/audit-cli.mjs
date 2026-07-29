@@ -5533,6 +5533,20 @@ function planWeeklyCollection({
     limitations
   });
 }
+function currentClosedWeekWindow({ cutoff, timezone } = {}) {
+  let localCutoff;
+  try {
+    localCutoff = qi.Instant.from(cutoff).toZonedDateTimeISO(timezone);
+  } catch {
+    throw codedError2("AUDIT_COMMAND_INVALID_TIME", TypeError);
+  }
+  const end = localCutoff.subtract({ days: localCutoff.dayOfWeek - 1 }).startOfDay();
+  const start = end.subtract({ weeks: 1 });
+  return deepFreeze({
+    from: start.toInstant().toString({ smallestUnit: "millisecond" }),
+    to: end.toInstant().toString({ smallestUnit: "millisecond" })
+  });
+}
 function sanitizeFinding(finding) {
   if (!finding || typeof finding !== "object" || Array.isArray(finding)) return finding;
   const next = structuredClone(finding);
@@ -5870,6 +5884,7 @@ async function collectInternalEvidencePhase({
   adapter,
   target,
   window,
+  conversationWindow,
   applicability,
   stepRosterRequests,
   publicEvidence,
@@ -5896,6 +5911,7 @@ async function collectInternalEvidencePhase({
   const internalEvidence = await adapter.collectAuditEvidence({
     target,
     window,
+    ...conversationWindow === void 0 ? {} : { conversationWindow: jsonClone(conversationWindow) },
     applicability,
     stepRosterRequests,
     /*
@@ -10008,6 +10024,7 @@ function conversationsOf(internal) {
     droppedForSizeCount: collection.droppedForSizeCount ?? 0,
     droppedFlaggedCount: collection.droppedFlaggedCount ?? 0,
     elidedThreadCount: collection.elidedThreadCount ?? 0,
+    oversizedThreadDroppedCount: collection.oversizedThreadDroppedCount ?? 0,
     unparsedMessageCount: collection.unparsedMessageCount ?? 0,
     mandatoryGuaranteeHeld: guaranteeHeld,
     // How many threads the commercial join could place, and on what. See `conversation-outcomes`.
@@ -10017,7 +10034,7 @@ function conversationsOf(internal) {
      * Stated as a sentence and not only as fields, because this is the one place a lane most
      * reliably overclaims, and the sentence is what ends up quoted back in a finding.
      */
-    howToReadThis: mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
+    howToReadThis: mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" && collection.complete === true && (collection.universeCount ?? 0) === 0 ? "The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`,
     threads: [...collection.transcripts ?? []]
   };
 }
@@ -29703,15 +29720,15 @@ function reconcileRoster(data, manifest) {
 }
 function extractEnrollmentCursor(appliedQueries) {
   if (!Array.isArray(appliedQueries)) return null;
-  let latest = null;
+  let latest2 = null;
   for (const row of appliedQueries) {
     if (!isPlainObject11(row) || row.capabilityId !== "workflow_enrollment_search") continue;
     if (!isPlainObject11(row.query)) continue;
     if (!ENROLLMENT_CURSOR_KEYS.some((key) => Object.hasOwn(row.query, key))) continue;
-    latest = row.query;
+    latest2 = row.query;
   }
-  if (latest === null) return null;
-  const cursor = projectTyped(latest, ENROLLMENT_CURSOR_SPEC);
+  if (latest2 === null) return null;
+  const cursor = projectTyped(latest2, ENROLLMENT_CURSOR_SPEC);
   if (cursor === null || Object.keys(cursor).length === 0) return null;
   if (Object.hasOwn(cursor, "referenceCreatedAt")) {
     cursor.referenceCreatedAt = normalizeCursorInstant(cursor.referenceCreatedAt);
@@ -44929,7 +44946,7 @@ var init_sampling = __esm({
     OPAQUE_STAGE = /^stage_[a-f0-9]{16,64}$/u;
     CATEGORIES = Object.freeze({
       occurredAtBand: /* @__PURE__ */ new Set(["early_week", "mid_week", "late_week"]),
-      outcome: /* @__PURE__ */ new Set(["open", "lost", "won", "booked", "no_show", "cancelled", "unknown"]),
+      outcome: /* @__PURE__ */ new Set(["open", "lost", "won", "booked", "showed", "no_show", "cancelled", "unknown"]),
       responseTimeBand: /* @__PURE__ */ new Set(["instant", "fast", "moderate", "slow", "unknown"]),
       callDurationBand: /* @__PURE__ */ new Set(["none", "short", "medium", "long", "unknown"]),
       handoffState: /* @__PURE__ */ new Set(["not_required", "pending", "completed", "failed", "unknown"])
@@ -44973,11 +44990,62 @@ function contactIdOf(record2) {
   const value = record2.contactId ?? record2.contact_id ?? null;
   return typeof value === "string" && value.length > 0 ? value : null;
 }
-function better(left, right) {
-  return (RANK[right] ?? 0) > (RANK[left] ?? 0) ? right : left;
+function instantOf(value) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+function eventAt(record2, fields) {
+  for (const field of fields) {
+    const parsed = instantOf(record2[field]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+function eventRecord(record2, outcome, kind) {
+  const at2 = kind === "appointment" ? eventAt(record2, ["startTime", "dateUpdated", "updatedAt", "dateAdded", "createdAt"]) : eventAt(record2, ["lastStatusChangeAt", "dateUpdated", "updatedAt", "dateAdded", "createdAt"]);
+  return Object.freeze({
+    outcome,
+    at: at2,
+    // A deterministic tie-breaker only. Never leaves this module and never names a person.
+    order: sha256({
+      id: record2.id ?? record2._id ?? null,
+      outcome,
+      at: at2
+    })
+  });
+}
+function latest(left, right) {
+  if (left === null) return right;
+  if (right === null) return left;
+  if (left.at === null && right.at !== null) return right;
+  if (left.at !== null && right.at === null) return left;
+  if (left.at !== right.at) return (right.at ?? -Infinity) > (left.at ?? -Infinity) ? right : left;
+  return right.order > left.order ? right : left;
+}
+function publicOutcome(event) {
+  if (event === null) return null;
+  return Object.freeze({ outcome: event.outcome, at: event.at });
+}
+function joinedOutcome(value) {
+  const appointment = value.appointment;
+  const opportunity = value.opportunity;
+  let primary = appointment;
+  let basis = appointment === null ? null : "appointment";
+  if (opportunity !== null && (appointment === null || TERMINAL_OPPORTUNITY.has(opportunity.outcome) && opportunity.at !== null && (appointment.at === null || opportunity.at >= appointment.at))) {
+    primary = opportunity;
+    basis = "opportunity";
+  }
+  return Object.freeze({
+    outcome: primary?.outcome ?? "unknown",
+    basis,
+    appointmentOutcome: publicOutcome(appointment),
+    opportunityOutcome: publicOutcome(opportunity)
+  });
 }
 function buildOutcomeIndex(publicEvidence) {
-  const byContact = /* @__PURE__ */ new Map();
+  const recordsByContact = /* @__PURE__ */ new Map();
   let appointmentsSeen = 0;
   let opportunitiesSeen = 0;
   let statusesRecorded = 0;
@@ -44989,28 +45057,30 @@ function buildOutcomeIndex(publicEvidence) {
     if (isAppointment) {
       appointmentsSeen += 1;
       if (record2.deleted === true) continue;
-      const mapped = typeof appointmentStatus === "string" ? APPOINTMENT_OUTCOME[appointmentStatus.toLowerCase()] ?? null : null;
+      const mapped = typeof appointmentStatus === "string" ? APPOINTMENT_OUTCOME[appointmentStatus.trim().toLowerCase()] ?? null : null;
       if (mapped === null) continue;
       statusesRecorded += 1;
-      const current = byContact.get(contactId);
-      byContact.set(contactId, {
-        outcome: current === void 0 ? mapped : better(current.outcome, mapped),
-        basis: "appointment"
+      const current = recordsByContact.get(contactId) ?? { appointment: null, opportunity: null };
+      recordsByContact.set(contactId, {
+        ...current,
+        appointment: latest(current.appointment, eventRecord(record2, mapped, "appointment"))
       });
       continue;
     }
     if (typeof record2.status === "string" && typeof record2.pipelineId === "string") {
       opportunitiesSeen += 1;
-      const mapped = OPPORTUNITY_OUTCOME[record2.status.toLowerCase()] ?? null;
+      const mapped = OPPORTUNITY_OUTCOME[record2.status.trim().toLowerCase()] ?? null;
       if (mapped === null) continue;
-      const current = byContact.get(contactId);
-      if (current !== void 0 && current.basis === "appointment") continue;
-      byContact.set(contactId, {
-        outcome: current === void 0 ? mapped : better(current.outcome, mapped),
-        basis: "opportunity"
+      const current = recordsByContact.get(contactId) ?? { appointment: null, opportunity: null };
+      recordsByContact.set(contactId, {
+        ...current,
+        opportunity: latest(current.opportunity, eventRecord(record2, mapped, "opportunity"))
       });
     }
   }
+  const byContact = new Map(
+    [...recordsByContact.entries()].map(([contactId, value]) => [contactId, joinedOutcome(value)])
+  );
   return {
     byContact,
     coverage: {
@@ -45027,15 +45097,19 @@ function buildOutcomeIndex(publicEvidence) {
     }
   };
 }
-function outcomeStratumRef(outcome) {
-  return `stage_${sha256(["outcome", outcome])}`;
+function outcomeStratumRef(joined) {
+  return `stage_${sha256([
+    "commercial-outcomes",
+    joined?.appointmentOutcome?.outcome ?? "unknown",
+    joined?.opportunityOutcome?.outcome ?? "unknown"
+  ])}`;
 }
-var APPOINTMENT_OUTCOME, OPPORTUNITY_OUTCOME, RANK;
+var APPOINTMENT_OUTCOME, OPPORTUNITY_OUTCOME, TERMINAL_OPPORTUNITY;
 var init_conversation_outcomes = __esm({
   "lib/conversation-outcomes.mjs"() {
     init_canonical();
     APPOINTMENT_OUTCOME = Object.freeze({
-      showed: "won",
+      showed: "showed",
       confirmed: "booked",
       new: "booked",
       booked: "booked",
@@ -45052,19 +45126,14 @@ var init_conversation_outcomes = __esm({
       lost: "lost",
       abandoned: "lost"
     });
-    RANK = Object.freeze({
-      unknown: 0,
-      open: 1,
-      booked: 2,
-      cancelled: 3,
-      no_show: 4,
-      lost: 5,
-      won: 6
-    });
+    TERMINAL_OPPORTUNITY = /* @__PURE__ */ new Set(["won", "lost"]);
   }
 });
 
 // lib/adapters/conversation-transcripts.mjs
+function validBudgets(limits) {
+  return Number.isInteger(limits.censusThreshold) && limits.censusThreshold >= 0 && Number.isInteger(limits.maxSample) && limits.maxSample >= 1 && Number.isInteger(limits.maxMessages) && limits.maxMessages >= 1 && Number.isInteger(limits.maxBodyChars) && limits.maxBodyChars >= 1 && Number.isInteger(limits.maxTranscriptChars) && limits.maxTranscriptChars >= 2 && Number.isInteger(limits.maxThreadChars) && limits.maxThreadChars >= 1 && Number.isInteger(limits.threadHeadMessages) && limits.threadHeadMessages >= 1 && Number.isInteger(limits.threadTailMessages) && limits.threadTailMessages >= 1;
+}
 function codedError17(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
@@ -45191,6 +45260,8 @@ function threadsFromMessages(messages, { fromMs, toMs, outcomes = null }) {
       // Readable on the transcript, opaque in the manifest. Both are deliberate.
       outcome,
       outcomeBasis: joined?.basis ?? null,
+      appointmentOutcome: joined?.appointmentOutcome ?? null,
+      opportunityOutcome: joined?.opportunityOutcome ?? null,
       inboundCount: group.filter((message) => message.direction === "inbound").length,
       outboundCount: group.filter((message) => message.direction === "outbound").length,
       lastAt: last?.at ?? null,
@@ -45213,7 +45284,7 @@ function threadsFromMessages(messages, { fromMs, toMs, outcomes = null }) {
          * diagnosis rests on. The proxy stays as the fallback for a thread whose contact has no
          * appointment and no opportunity, where there is genuinely nothing commercial to say.
          */
-        stage: outcome === "unknown" ? ref("stage", "last-direction", last?.direction ?? "unknown") : outcomeStratumRef(outcome),
+        stage: joined === null ? ref("stage", "last-direction", last?.direction ?? "unknown") : outcomeStratumRef(joined),
         outcome,
         responseTimeBand: responseTimeBand(group),
         callDurationBand: callDurationBand(group),
@@ -45242,6 +45313,8 @@ function transcriptOf(thread) {
      */
     outcome: thread.outcome,
     outcomeBasis: thread.outcomeBasis,
+    appointmentOutcome: thread.appointmentOutcome,
+    opportunityOutcome: thread.opportunityOutcome,
     inboundCount: thread.inboundCount,
     outboundCount: thread.outboundCount,
     flags: thread.flags,
@@ -45267,24 +45340,71 @@ function transcriptOf(thread) {
 function transcriptSize(transcript) {
   return canonicalJson(transcript).length;
 }
-function elideToFit(transcript, limits) {
-  if (transcriptSize(transcript) <= limits.maxThreadChars) return transcript;
-  const { messages } = transcript;
-  const head = limits.threadHeadMessages;
-  const tail = limits.threadTailMessages;
-  if (messages.length <= head + tail) {
-    return { ...transcript, oversized: true };
-  }
-  const omitted = messages.length - head - tail;
+function elideBody(body, cap) {
+  if (typeof body !== "string" || body.length <= cap) return body;
+  if (cap <= 0) return "";
+  const marker = "[middle omitted]";
+  if (cap <= marker.length) return marker.slice(0, cap);
+  const content = cap - marker.length;
+  const head = Math.ceil(content / 2);
+  const tail = Math.floor(content / 2);
+  return `${body.slice(0, head)}${marker}${body.slice(body.length - tail)}`;
+}
+function capMessageBodies(transcript, cap) {
   return {
     ...transcript,
-    elided: true,
-    messages: [
-      ...messages.slice(0, head),
-      { elidedMessages: omitted, note: `${omitted} messages omitted from the middle of this thread to fit the size budget. The opening and the ending are complete.` },
-      ...messages.slice(-tail)
-    ]
+    messages: transcript.messages.map((message) => typeof message?.body === "string" ? { ...message, body: elideBody(message.body, cap) } : message)
   };
+}
+function boundedMessageSet(messages, head, tail) {
+  if (head + tail >= messages.length) return [...messages];
+  const omitted = messages.length - head - tail;
+  return [
+    ...messages.slice(0, head),
+    {
+      elidedMessages: omitted,
+      note: `${omitted} messages omitted from the middle of this thread to fit the size budget.`
+    },
+    ...messages.slice(-tail)
+  ];
+}
+function elideToFit(transcript, limits) {
+  if (transcriptSize(transcript) <= limits.maxThreadChars) return transcript;
+  const original = transcript.messages;
+  let head = Math.min(limits.threadHeadMessages, Math.ceil(original.length / 2));
+  let tail = Math.min(limits.threadTailMessages, original.length - head);
+  let candidate;
+  while (true) {
+    candidate = {
+      ...transcript,
+      elided: true,
+      messages: boundedMessageSet(original, head, tail)
+    };
+    if (transcriptSize(capMessageBodies(candidate, 0)) <= limits.maxThreadChars) break;
+    if (head + tail <= Math.min(2, original.length)) return null;
+    if (head >= tail && head > 1) head -= 1;
+    else if (tail > 1) tail -= 1;
+    else return null;
+  }
+  if (transcriptSize(candidate) <= limits.maxThreadChars) return candidate;
+  const longest = candidate.messages.reduce(
+    (max, message) => Math.max(max, typeof message?.body === "string" ? message.body.length : 0),
+    0
+  );
+  let low = 0;
+  let high = longest;
+  let best = capMessageBodies(candidate, 0);
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const attempted = capMessageBodies(candidate, middle);
+    if (transcriptSize(attempted) <= limits.maxThreadChars) {
+      best = attempted;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return best;
 }
 function exportRequest(capability, locationId, fromDate, toDate) {
   return {
@@ -45338,6 +45458,9 @@ function createConversationTranscriptCollector({
   const toDate = runWindow?.toDate;
   if (typeof client?.callTool !== "function" || !isPlainObject19(capability) || capability.actionId !== MESSAGE_EXPORT_ACTION || typeof boundLocationId !== "string" || boundLocationId.length === 0 || typeof fromDate !== "string" || typeof toDate !== "string" || !Number.isFinite(Date.parse(fromDate)) || !Number.isFinite(Date.parse(toDate)) || Date.parse(fromDate) >= Date.parse(toDate)) throw codedError17("CONVERSATION_TRANSCRIPTS_CONFIG_INVALID", TypeError);
   const limits = { ...DEFAULT_BUDGETS3, ...budgets };
+  if (!validBudgets(limits)) {
+    throw codedError17("CONVERSATION_TRANSCRIPTS_CONFIG_INVALID", TypeError);
+  }
   const fromMs = Date.parse(fromDate);
   const toMs = Date.parse(toDate);
   return {
@@ -45377,19 +45500,6 @@ function createConversationTranscriptCollector({
       }
       const outcomes = publicEvidence === null ? null : buildOutcomeIndex(publicEvidence);
       const threads = threadsFromMessages(messages, { fromMs, toMs, outcomes });
-      if (threads.length === 0) {
-        return Object.freeze({
-          schemaVersion: CONVERSATION_TRANSCRIPTS_SCHEMA,
-          boundLocationId,
-          complete: limitations.size === 0,
-          limitations: Object.freeze([...limitations].sort(byteOrder7)),
-          universeCount: 0,
-          messageCount: 0,
-          transcripts: Object.freeze([]),
-          sample: null,
-          transcriptsHash: sha256([])
-        });
-      }
       const seed = `seed_${sha256({ boundLocationId, fromDate, toDate })}`;
       let sample;
       try {
@@ -45411,26 +45521,35 @@ function createConversationTranscriptCollector({
       );
       const ordered = [...sample.selections].sort((left, right) => Number(flagged.has(right.interactionRef)) - Number(flagged.has(left.interactionRef)) || byteOrder7(left.interactionRef, right.interactionRef));
       const transcripts = [];
-      let characters = 0;
+      let characters = 2;
       let dropped = 0;
       let droppedFlagged = 0;
       let elided = 0;
+      let oversizedDropped = 0;
       for (const selection of ordered) {
         const thread = byRef.get(selection.interactionRef);
         if (thread === void 0) continue;
         const transcript = elideToFit(transcriptOf(thread), limits);
-        if (transcript.elided === true || transcript.oversized === true) elided += 1;
+        if (transcript === null) {
+          dropped += 1;
+          oversizedDropped += 1;
+          if (flagged.has(selection.interactionRef)) droppedFlagged += 1;
+          continue;
+        }
+        if (transcript.elided === true) elided += 1;
         const size = transcriptSize(transcript);
-        if (characters + size > limits.maxTranscriptChars) {
+        const separator = transcripts.length === 0 ? 0 : 1;
+        if (characters + separator + size > limits.maxTranscriptChars) {
           dropped += 1;
           if (flagged.has(selection.interactionRef)) droppedFlagged += 1;
           continue;
         }
-        characters += size;
+        characters += separator + size;
         transcripts.push(transcript);
       }
       if (dropped > 0) limitations.add("CONVERSATION_TRANSCRIPT_CHAR_BUDGET_EXHAUSTED");
       if (elided > 0) limitations.add("CONVERSATION_TRANSCRIPT_THREAD_ELIDED");
+      if (oversizedDropped > 0) limitations.add("CONVERSATION_TRANSCRIPT_THREAD_DROPPED");
       const mandatoryGuaranteeHeld = droppedFlagged === 0;
       if (!mandatoryGuaranteeHeld) limitations.add("CONVERSATION_MANDATORY_THREAD_DROPPED");
       transcripts.sort((left, right) => byteOrder7(left.conversationId, right.conversationId));
@@ -45464,6 +45583,7 @@ function createConversationTranscriptCollector({
           threadsTotal: threads.length
         },
         elidedThreadCount: elided,
+        oversizedThreadDroppedCount: oversizedDropped,
         unparsedMessageCount: unparsed,
         transcripts: Object.freeze(transcripts),
         // The full manifest, including the strata and inclusion probabilities. It carries opaque
@@ -45507,9 +45627,8 @@ var init_conversation_transcripts = __esm({
       /**
        * Characters across every SAMPLED thread, together. This is the prompt-size ceiling: the sampled
        * transcripts reach three lane briefs and every AI-agent review, so their total size is paid for
-       * several times over. When the budget binds, whole threads are dropped from the tail of the draw
-       * rather than every thread being trimmed, because half a conversation teaches nothing and the
-       * manifest can then state exactly how many threads the analyst did not see.
+       * several times over. Long threads preserve their opening and ending under the per-thread bound;
+       * the total bound then drops whole threads from the tail and reconciles exactly what was omitted.
        */
       maxTranscriptChars: 12e4,
       /**
@@ -48037,6 +48156,12 @@ function createAuditKernel({
               from: new Date(collectionPlan.collectionStart).toISOString(),
               to: new Date(collectionPlan.cutoff).toISOString()
             },
+            // Copy analysis is about this closed week. The broader window above remains available
+            // to workflow runtime and public outcome evidence so mature journeys are not clipped.
+            conversationWindow: currentClosedWeekWindow({
+              cutoff: collectionPlan.cutoff,
+              timezone: collectionPlan.timezone
+            }),
             applicability: args.providerConfig?.internalApplicability ?? {},
             stepRosterRequests: args.providerConfig?.stepRosterRequests ?? {},
             publicEvidence,
@@ -50178,17 +50303,17 @@ function computeEdge(population, contract, window, analysisCutoff, matureAsOf, p
   return result;
 }
 function stockFor(population, end, captureHorizon) {
-  const latest = /* @__PURE__ */ new Map();
+  const latest2 = /* @__PURE__ */ new Map();
   for (const node of [...population.countable].sort(sortEvents)) {
     if (qi.Instant.compare(instant(node.eventTime), instant(end)) >= 0) continue;
     if (qi.Instant.compare(
       instant(node.capturedAt ?? node.eventTime),
       instant(captureHorizon)
     ) > 0) continue;
-    latest.set(subjectKey(node), node);
+    latest2.set(subjectKey(node), node);
   }
   const counts = {};
-  for (const node of latest.values()) {
+  for (const node of latest2.values()) {
     const stage = stageOf(node);
     const journey = counts[node.journeyInstanceId] ?? {};
     journey[stage] = (journey[stage] ?? 0) + 1;
@@ -52441,7 +52566,7 @@ function buildInternalAuditAdapter({
         let conversationTranscripts;
         try {
           conversationTranscripts = await transcriptRail.collectTranscripts({
-            window: request?.window,
+            window: request?.conversationWindow ?? request?.window,
             // The JOIN input. Already collected and already in hand at this phase; see
             // `lib/conversation-outcomes.mjs` for why an outcome is read from it and never derived.
             publicEvidence: request?.publicEvidence ?? null,
