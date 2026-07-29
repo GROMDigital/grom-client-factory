@@ -10494,7 +10494,13 @@ function groupByAnchor(findings) {
       return split(component, /* @__PURE__ */ new Set([...excluded, worst[0]]));
     });
   };
-  return mergeByOverlap(split(findings, hubs), limit);
+  const byMechanism = /* @__PURE__ */ new Map();
+  for (const finding of findings) {
+    if (!byMechanism.has(finding.mechanism)) byMechanism.set(finding.mechanism, []);
+    byMechanism.get(finding.mechanism).push(finding);
+  }
+  const separated = [...byMechanism.entries()].sort(([left], [right]) => byteOrder2(left, right)).flatMap(([, group]) => split(group, hubs));
+  return mergeByOverlap(separated, limit);
 }
 function allAnchors(finding) {
   return /* @__PURE__ */ new Set([
@@ -10577,6 +10583,7 @@ function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
   const causes = groupByAnchor(findings).map((group) => {
     const ordered = [...group].sort((left, right) => byteOrder2(left.findingId, right.findingId));
     const scored = scoreCause(ordered);
+    const confidence = confidenceForStrength(scored.evidenceStrength);
     return {
       /*
        * Content-derived, so the same cause carries the same id across weeks and the verification
@@ -10601,9 +10608,15 @@ function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
       // is information, not something to average away.
       mechanisms: [...new Set(ordered.map((finding) => finding.mechanism))].sort(byteOrder2),
       mechanismContested: new Set(ordered.map((finding) => finding.mechanism)).size > 1,
+      relatedCauseIds: [],
       corroboratingLanes: scored.corroboratingLanes,
-      confidence: confidenceForStrength(scored.evidenceStrength),
+      confidence,
       unresolvedMaterialAlternatives: scored.unresolvedMaterial,
+      // C3 means the evidence is strong enough for a monitored implementation whose acceptance test
+      // can still refute it. At C1/C2, an open material alternative can change the intervention and
+      // must be settled before the account is touched.
+      implementationStatus: scored.unresolvedMaterial > 0 && confidence !== "C3" ? "VERIFY_FIRST" : "READY_TO_IMPLEMENT",
+      verificationChecks: ordered.map((finding) => finding.discriminatingTest),
       rankScore: scored.score,
       rankParts: scored.parts,
       findings: ordered.map((finding) => ({
@@ -10620,6 +10633,10 @@ function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
       }))
     };
   });
+  for (const cause of causes) {
+    const anchors = new Set(cause.anchors.filter((anchor) => anchor.startsWith("kpi:") || anchor.startsWith("workflow:")));
+    cause.relatedCauseIds = causes.filter((other) => other.causeId !== cause.causeId && !other.mechanisms.some((mechanism) => cause.mechanisms.includes(mechanism)) && other.anchors.some((anchor) => anchors.has(anchor))).map((other) => other.causeId).sort(byteOrder2);
+  }
   causes.sort((left, right) => right.rankScore - left.rankScore || byteOrder2(left.causeId, right.causeId));
   return {
     schemaVersion: ROOT_CAUSE_SCHEMA,
@@ -10637,7 +10654,7 @@ var ROOT_CAUSE_SCHEMA, MECHANISM_FAMILIES, LANES, CONFIDENCE2, RANKING_WEIGHTS, 
 var init_root_cause = __esm({
   "lib/root-cause.mjs"() {
     init_canonical();
-    ROOT_CAUSE_SCHEMA = "1.0.0";
+    ROOT_CAUSE_SCHEMA = "1.1.0";
     MECHANISM_FAMILIES = Object.freeze([
       "calendar_capacity_or_timezone",
       "delivery_failure",
@@ -11318,8 +11335,15 @@ var init_memory = __esm({
 });
 
 // lib/recurrence.mjs
-import { existsSync as existsSync3, readFileSync as readFileSync6, readdirSync } from "node:fs";
-import { join as join3 } from "node:path";
+import {
+  existsSync as existsSync3,
+  mkdirSync as mkdirSync4,
+  readFileSync as readFileSync6,
+  readdirSync,
+  renameSync,
+  writeFileSync as writeFileSync3
+} from "node:fs";
+import { dirname as dirname2, join as join3 } from "node:path";
 function isPlainObject7(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -11327,6 +11351,39 @@ function isPlainObject7(value) {
 }
 function byteOrder4(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+function normaliseWeek(value) {
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return null;
+  return new Date(value).toISOString();
+}
+function canonicalWeekDirectory(paths) {
+  return typeof paths?.memoryEvents === "string" ? join3(dirname2(paths.memoryEvents), "canonical-weeks") : null;
+}
+function canonicalWeekPath(paths, occurredAt) {
+  const directory = canonicalWeekDirectory(paths);
+  const week = normaliseWeek(occurredAt);
+  if (directory === null || week === null) return null;
+  return join3(directory, `${sha256({ occurredAt: week }).slice(0, 32)}.json`);
+}
+function selectCanonicalWeekRun({ paths, occurredAt, runId } = {}) {
+  const week = normaliseWeek(occurredAt);
+  const destination = canonicalWeekPath(paths, week);
+  if (destination === null || typeof runId !== "string" || runId.length === 0) {
+    throw Object.assign(new Error("RECURRENCE_CANONICAL_SELECTION_INVALID"), {
+      code: "RECURRENCE_CANONICAL_SELECTION_INVALID"
+    });
+  }
+  const directory = dirname2(destination);
+  mkdirSync4(directory, { recursive: true });
+  const record2 = { schemaVersion: RECURRENCE_SCHEMA, occurredAt: week, runId };
+  const temporary = join3(
+    directory,
+    `.${sha256({ occurredAt: week, runId, pid: process.pid }).slice(0, 32)}.tmp`
+  );
+  writeFileSync3(temporary, `${JSON.stringify(record2, null, 2)}
+`);
+  renameSync(temporary, destination);
+  return Object.freeze(record2);
 }
 function discriminating(cause) {
   return (cause.anchors ?? []).filter((anchor) => anchor.startsWith("kpi:") || anchor.startsWith("workflow:")).sort(byteOrder4);
@@ -11354,6 +11411,7 @@ function recordRun({ paths, runId, investigation, occurredAt } = {}) {
   if (typeof occurredAt !== "string" || !Number.isFinite(Date.parse(occurredAt))) {
     throw Object.assign(new Error("RECURRENCE_OCCURRED_AT_INVALID"), { code: "RECURRENCE_OCCURRED_AT_INVALID" });
   }
+  const week = normaliseWeek(occurredAt);
   const recorded = [];
   for (const cause of investigation.causes ?? []) {
     const fingerprint = causeFingerprint(cause);
@@ -11363,7 +11421,7 @@ function recordRun({ paths, runId, investigation, occurredAt } = {}) {
       // rather than a second observation. `appendMemoryEvent` byte-compares and returns `recovered`.
       eventId: `obs_${sha256({ runId, fingerprint }).slice(0, 32)}`,
       type: "finding_observed",
-      occurredAt,
+      occurredAt: week,
       findingId: cause.causeId,
       findingFingerprint: fingerprint,
       runId,
@@ -11375,7 +11433,8 @@ function recordRun({ paths, runId, investigation, occurredAt } = {}) {
     const result = appendMemoryEvent({ paths, event });
     recorded.push({ fingerprint, causeId: cause.causeId, recovered: result.recovered });
   }
-  return { recorded, count: recorded.length };
+  const canonicalWeek = selectCanonicalWeekRun({ paths, occurredAt: week, runId });
+  return { recorded, count: recorded.length, canonicalWeek };
 }
 function readObservations({ paths } = {}) {
   const directory = paths?.memoryEvents;
@@ -11394,10 +11453,64 @@ function readObservations({ paths } = {}) {
   }
   return observations.sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || byteOrder4(left.eventId, right.eventId));
 }
-function compareToHistory({ investigation, observations, runId } = {}) {
+function readCanonicalHistory({ paths, currentOccurredAt } = {}) {
+  const currentWeek = normaliseWeek(currentOccurredAt);
+  const byWeek = /* @__PURE__ */ new Map();
+  for (const event of readObservations({ paths })) {
+    const week = normaliseWeek(event.occurredAt);
+    if (week === null || week === currentWeek) continue;
+    if (!byWeek.has(week)) byWeek.set(week, []);
+    byWeek.get(week).push(event);
+  }
+  const pointers = /* @__PURE__ */ new Map();
+  const pointerDirectory = canonicalWeekDirectory(paths);
+  if (pointerDirectory !== null && existsSync3(pointerDirectory)) {
+    for (const name of readdirSync(pointerDirectory).sort(byteOrder4)) {
+      if (!name.endsWith(".json") || name.startsWith(".")) continue;
+      try {
+        const parsed = JSON.parse(readFileSync6(join3(pointerDirectory, name), "utf8"));
+        const week = normaliseWeek(parsed?.occurredAt);
+        if (week !== null && week !== currentWeek && typeof parsed?.runId === "string" && canonicalWeekPath(paths, week) === join3(pointerDirectory, name)) {
+          pointers.set(week, parsed.runId);
+        }
+      } catch {
+      }
+    }
+  }
+  const observations = [];
+  const ambiguousWeeks = [];
+  const canonicalRuns = [];
+  const weeks = [.../* @__PURE__ */ new Set([...byWeek.keys(), ...pointers.keys()])].sort(byteOrder4);
+  for (const week of weeks) {
+    const events = byWeek.get(week) ?? [];
+    const runIds = [...new Set(events.map((event) => event.runId))].sort(byteOrder4);
+    const selectedRunId = pointers.get(week) ?? (runIds.length === 1 ? runIds[0] : null);
+    if (selectedRunId === null) {
+      ambiguousWeeks.push(Object.freeze({ occurredAt: week, runIds: Object.freeze(runIds) }));
+      continue;
+    }
+    canonicalRuns.push(Object.freeze({ occurredAt: week, runId: selectedRunId }));
+    observations.push(...events.filter((event) => event.runId === selectedRunId));
+  }
+  return Object.freeze({
+    observations: Object.freeze(observations),
+    canonicalRuns: Object.freeze(canonicalRuns),
+    priorWeekCount: canonicalRuns.length,
+    ambiguousWeeks: Object.freeze(ambiguousWeeks)
+  });
+}
+function compareToHistory({
+  investigation,
+  observations,
+  runId,
+  currentOccurredAt,
+  canonicalWeekCount = null,
+  ambiguousWeeks = []
+} = {}) {
+  const currentWeek = normaliseWeek(currentOccurredAt);
+  const history = (observations ?? []).filter((event) => event.runId !== runId && (currentWeek === null || normaliseWeek(event.occurredAt) !== currentWeek));
   const priorRuns = /* @__PURE__ */ new Map();
-  for (const event of observations ?? []) {
-    if (event.runId === runId) continue;
+  for (const event of history) {
     if (!priorRuns.has(event.findingFingerprint)) priorRuns.set(event.findingFingerprint, []);
     priorRuns.get(event.findingFingerprint).push(event);
   }
@@ -11413,7 +11526,7 @@ function compareToHistory({ investigation, observations, runId } = {}) {
         fingerprint: otherFingerprint,
         firstSeenAt: events[0].occurredAt,
         lastSeenAt: events[events.length - 1].occurredAt,
-        priorRuns: [...new Set(events.map((event) => event.runId))].length,
+        priorRuns: [...new Set(events.map((event) => event.occurredAt))].length,
         anchorOverlap: Number(containment.toFixed(2)),
         similarity: Number(jaccard.toFixed(2)),
         sharedAnchors: shared,
@@ -11426,20 +11539,34 @@ function compareToHistory({ investigation, observations, runId } = {}) {
     }).filter((candidate) => candidate.anchorOverlap >= NEAR_MATCH_OVERLAP).sort((left, right) => right.similarity - left.similarity || right.sharedAnchors - left.sharedAnchors || byteOrder4(left.fingerprint, right.fingerprint));
     return { cause, fingerprint, prior, candidates };
   });
-  const assignable = [];
+  const assignableByCause = /* @__PURE__ */ new Map();
   for (const entry of scored) {
     if (entry.prior.length > 0) continue;
     for (const candidate of entry.candidates) {
       if (candidate.similarity >= LIKELY_JACCARD && candidate.sharedAnchors >= LIKELY_SHARED_ANCHORS) {
-        assignable.push({ causeId: entry.cause.causeId, candidate });
+        if (!assignableByCause.has(entry.cause.causeId)) assignableByCause.set(entry.cause.causeId, []);
+        assignableByCause.get(entry.cause.causeId).push(candidate);
       }
     }
   }
-  assignable.sort((left, right) => right.candidate.similarity - left.candidate.similarity || right.candidate.sharedAnchors - left.candidate.sharedAnchors || byteOrder4(left.causeId, right.causeId) || byteOrder4(left.candidate.fingerprint, right.candidate.fingerprint));
   const assigned = /* @__PURE__ */ new Map();
-  for (const { causeId, candidate } of assignable) {
-    if (assigned.has(causeId) || claimedByLikely.has(candidate.fingerprint)) continue;
-    assigned.set(causeId, candidate);
+  const ownerByFingerprint = /* @__PURE__ */ new Map();
+  const orderedCauseIds = [...assignableByCause.entries()].sort(([leftId, left], [rightId, right]) => left.length - right.length || right[0].similarity - left[0].similarity || right[0].sharedAnchors - left[0].sharedAnchors || byteOrder4(leftId, rightId)).map(([causeId]) => causeId);
+  const augment = (causeId, visited) => {
+    for (const candidate of assignableByCause.get(causeId) ?? []) {
+      if (visited.has(candidate.fingerprint)) continue;
+      visited.add(candidate.fingerprint);
+      const owner = ownerByFingerprint.get(candidate.fingerprint);
+      if (owner === void 0 || augment(owner, visited)) {
+        ownerByFingerprint.set(candidate.fingerprint, causeId);
+        assigned.set(causeId, candidate);
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const causeId of orderedCauseIds) augment(causeId, /* @__PURE__ */ new Set());
+  for (const candidate of assigned.values()) {
     claimedByLikely.add(candidate.fingerprint);
   }
   const causes = scored.map(({ cause, fingerprint, prior, candidates }) => {
@@ -11449,7 +11576,8 @@ function compareToHistory({ investigation, observations, runId } = {}) {
         fingerprint,
         status: "RECURRING",
         firstSeenAt: prior[0].occurredAt,
-        priorRuns: [...new Set(prior.map((event) => event.runId))].length,
+        priorRuns: [...new Set(prior.map((event) => event.occurredAt))].length,
+        priorWeeks: [...new Set(prior.map((event) => event.occurredAt))].length,
         matchedOn: "fingerprint",
         nearMatches: []
       };
@@ -11462,6 +11590,7 @@ function compareToHistory({ investigation, observations, runId } = {}) {
       status: isLikely ? "LIKELY_RECURRING" : "NEW",
       firstSeenAt: isLikely ? best.firstSeenAt : null,
       priorRuns: isLikely ? best.priorRuns : 0,
+      priorWeeks: isLikely ? best.priorRuns : 0,
       matchedOn: isLikely ? "anchor_overlap" : null,
       ...isLikely ? { matchedFingerprint: best.fingerprint, match: best } : {},
       nearMatches: candidates
@@ -11471,13 +11600,18 @@ function compareToHistory({ investigation, observations, runId } = {}) {
     fingerprint,
     firstSeenAt: events[0].occurredAt,
     lastSeenAt: events[events.length - 1].occurredAt,
-    priorRuns: [...new Set(events.map((event) => event.runId))].length
+    priorRuns: [...new Set(events.map((event) => event.occurredAt))].length,
+    priorWeeks: [...new Set(events.map((event) => event.occurredAt))].length
   })).sort((left, right) => byteOrder4(left.lastSeenAt, right.lastSeenAt) || byteOrder4(left.fingerprint, right.fingerprint));
   return {
     schemaVersion: RECURRENCE_SCHEMA,
-    // Zero prior runs is the normal state on a first run, and it is stated rather than left to be
+    // Zero prior weeks is the normal state on a first run, and it is stated rather than left to be
     // inferred from an empty comparison.
-    priorRunCount: [...new Set((observations ?? []).filter((e2) => e2.runId !== runId).map((e2) => e2.runId))].length,
+    priorWeekCount: Number.isInteger(canonicalWeekCount) ? canonicalWeekCount : [...new Set(history.map((event) => normaliseWeek(event.occurredAt)))].length,
+    // Compatibility for renderers and archived JSON written before 1.1.0. It now means canonical
+    // weekly baselines, not raw attempts.
+    priorRunCount: Number.isInteger(canonicalWeekCount) ? canonicalWeekCount : [...new Set(history.map((event) => normaliseWeek(event.occurredAt)))].length,
+    ambiguousWeeks,
     causes,
     absent,
     newCount: causes.filter((cause) => cause.status === "NEW").length,
@@ -11490,7 +11624,7 @@ var init_recurrence = __esm({
   "lib/recurrence.mjs"() {
     init_memory();
     init_canonical();
-    RECURRENCE_SCHEMA = "1.0.0";
+    RECURRENCE_SCHEMA = "1.1.0";
     NEAR_MATCH_OVERLAP = 0.6;
     LIKELY_JACCARD = 0.5;
     LIKELY_SHARED_ANCHORS = 3;
@@ -11576,7 +11710,8 @@ function findingBlock(cause, rank) {
       <span class="fmeta">${escapeHtml(worstBand(cause, "commercialImpact").toLowerCase())}</span>
     </summary>
     <div class="fbody">
-      <p class="flabel">What to change</p>
+      ${cause.implementationStatus === "VERIFY_FIRST" ? "<p><strong>VERIFY FIRST.</strong> Do not implement the proposed change until the check below supports this diagnosis.</p>" : ""}
+      <p class="flabel">${cause.implementationStatus === "VERIFY_FIRST" ? "Proposed change if verified" : "What to change"}</p>
       ${cause.findings.map((finding) => renderFix(finding.fix)).join("")}
       <p class="flabel">How you will know it worked</p>
       <ul class="checks">${cause.findings.map((finding) => `
@@ -11932,7 +12067,7 @@ ${delivery === "" ? "" : `
         <td><span class="band b-${escapeHtml(worstBand(cause, "commercialImpact"))}">${escapeHtml(worstBand(cause, "commercialImpact").toLowerCase())}</span></td>
         <td>${escapeHtml(worstBand(cause, "implementationEffort").toLowerCase())}</td>
         <td class="num">${cause.corroboratingLanes.length} of 3</td>
-        <td>${age === void 0 ? "n/a" : age.status === "RECURRING" ? `seen ${age.priorRuns} times before` : age.status === "LIKELY_RECURRING" ? `probably seen before (${Math.round((age.match?.anchorOverlap ?? 0) * 100)}%)` : "new"}</td>
+        <td>${age === void 0 ? "n/a" : age.status === "RECURRING" ? `seen ${age.priorWeeks ?? age.priorRuns} weeks before` : age.status === "LIKELY_RECURRING" ? `probably seen before (${Math.round((age.match?.anchorOverlap ?? 0) * 100)}%)` : "new"}</td>
       </tr>`;
   }).join("")}</tbody>
     </table>
@@ -12188,7 +12323,8 @@ function buildWorkOrderEvidence({ investigation, recurrence = null } = {}) {
   const age = new Map((recurrence?.causes ?? []).map((entry) => [entry.causeId, entry]));
   return {
     causeCount: investigation.causes.length,
-    priorRunCount: recurrence?.priorRunCount ?? null,
+    priorWeekCount: recurrence?.priorWeekCount ?? recurrence?.priorRunCount ?? null,
+    priorRunCount: recurrence?.priorWeekCount ?? recurrence?.priorRunCount ?? null,
     causes: investigation.causes.map((cause, position) => {
       const history = age.get(cause.causeId);
       return {
@@ -12200,13 +12336,17 @@ function buildWorkOrderEvidence({ investigation, recurrence = null } = {}) {
         lanes: cause.corroboratingLanes,
         rankScore: cause.rankScore,
         anchors: cause.anchors,
+        relatedCauseIds: cause.relatedCauseIds ?? [],
+        implementationStatus: cause.implementationStatus ?? "READY_TO_IMPLEMENT",
+        verificationChecks: cause.verificationChecks ?? [],
         // Every lane's proposed fix, because two of them being the same edit is the whole question.
         fixes: cause.findings.map((finding) => ({ lane: finding.lane, fix: finding.fix })),
         scoring: cause.findings.map((finding) => finding.scoring),
         age: history === void 0 ? null : {
           status: history.status,
           firstSeenAt: history.firstSeenAt,
-          priorRuns: history.priorRuns
+          priorRuns: history.priorWeeks ?? history.priorRuns,
+          priorWeeks: history.priorWeeks ?? history.priorRuns
         }
       };
     })
@@ -12252,6 +12392,10 @@ function refuse2(code, detail) {
 function validateWorkOrder(plan, { investigation } = {}) {
   if (!isPlainObject8(plan)) refuse2("WORK_ORDER_INVALID");
   const known = new Set((investigation?.causes ?? []).map(({ causeId }) => causeId));
+  const statusByCause = new Map((investigation?.causes ?? []).map((cause) => [
+    cause.causeId,
+    cause.implementationStatus ?? "READY_TO_IMPLEMENT"
+  ]));
   const thisWeek = text2(plan.thisWeek);
   if (thisWeek.length === 0) refuse2("WORK_ORDER_THIS_WEEK_MISSING");
   if (!Array.isArray(plan.batches) || plan.batches.length === 0) refuse2("WORK_ORDER_BATCHES_INVALID");
@@ -12267,18 +12411,24 @@ function validateWorkOrder(plan, { investigation } = {}) {
     if (orders.has(batch.order)) refuse2("WORK_ORDER_BATCH_ORDER_DUPLICATE", String(batch.order));
     orders.add(batch.order);
     if (!SIZES.includes(batch.size)) refuse2("WORK_ORDER_BATCH_SIZE_INVALID", title);
+    const mode = text2(batch.mode) || "IMPLEMENT";
+    if (!MODES.includes(mode)) refuse2("WORK_ORDER_BATCH_MODE_INVALID", title);
     if (!Array.isArray(batch.causeIds) || batch.causeIds.length === 0) {
       refuse2("WORK_ORDER_BATCH_EMPTY", title);
     }
     for (const causeId of batch.causeIds) {
       if (!known.has(causeId)) refuse2("WORK_ORDER_CAUSE_UNKNOWN", causeId);
       if (placed.has(causeId)) refuse2("WORK_ORDER_CAUSE_TWICE", causeId);
+      if (mode === "IMPLEMENT" && statusByCause.get(causeId) === "VERIFY_FIRST") {
+        refuse2("WORK_ORDER_VERIFY_FIRST_IMPLEMENTATION", causeId);
+      }
       placed.set(causeId, title);
     }
     return {
       order: batch.order,
       title,
       causeIds: [...batch.causeIds],
+      mode,
       sameChange: batch.sameChange === true,
       size: batch.size,
       rationale,
@@ -12361,7 +12511,7 @@ function renderWorkOrder({ index, plan, investigation }) {
     lines.push(
       `### ${batch.order}. ${batch.title}`,
       "",
-      `${batch.size}${batch.sameChange ? ", one repeated change" : ""}${batch.blockedBy.length > 0 ? `, after ${batch.blockedBy.map((n2) => `batch ${n2}`).join(" and ")}` : ""}`,
+      `${batch.mode} \xB7 ${batch.size}${batch.sameChange ? ", one repeated change" : ""}${batch.blockedBy.length > 0 ? `, after ${batch.blockedBy.map((n2) => `batch ${n2}`).join(" and ")}` : ""}`,
       "",
       batch.rationale,
       "",
@@ -12393,13 +12543,14 @@ function renderWorkOrder({ index, plan, investigation }) {
   }
   return lines.join("\n");
 }
-var WORK_ORDER_SCHEMA, RUBRIC3, SIZES;
+var WORK_ORDER_SCHEMA, RUBRIC3, SIZES, MODES;
 var init_work_order = __esm({
   "lib/work-order.mjs"() {
     init_canonical();
-    WORK_ORDER_SCHEMA = "1.0.0";
+    WORK_ORDER_SCHEMA = "1.1.0";
     RUBRIC3 = "work-order-v1.md";
     SIZES = Object.freeze(["SMALL", "MEDIUM", "LARGE"]);
+    MODES = Object.freeze(["VERIFY", "IMPLEMENT"]);
   }
 });
 
@@ -28494,12 +28645,12 @@ import {
   chmodSync as chmodSync2,
   existsSync as existsSync4,
   lstatSync as lstatSync5,
-  mkdirSync as mkdirSync4,
+  mkdirSync as mkdirSync5,
   readFileSync as readFileSync9,
   readdirSync as readdirSync2,
   realpathSync as realpathSync4,
-  renameSync,
-  writeFileSync as writeFileSync3
+  renameSync as renameSync2,
+  writeFileSync as writeFileSync4
 } from "node:fs";
 import { join as join4, relative as relative4, resolve as resolve3, sep as sep4 } from "node:path";
 function codedError14(code, ErrorType = Error) {
@@ -28515,7 +28666,7 @@ function assertRunId(runId) {
   return runId;
 }
 function ensureWithin(auditRoot, pathname) {
-  if (!existsSync4(pathname)) mkdirSync4(pathname, { recursive: true, mode: 448 });
+  if (!existsSync4(pathname)) mkdirSync5(pathname, { recursive: true, mode: 448 });
   const entry = lstatSync5(pathname);
   if (entry.isSymbolicLink() || !entry.isDirectory()) throw codedError14("CYCLE_PATH_INVALID");
   const fromRoot = relative4(realpathSync4(auditRoot), realpathSync4(pathname));
@@ -28546,8 +28697,8 @@ function writeOnce(pathname, value) {
     return pathname;
   }
   const temporary = `${pathname}.tmp`;
-  writeFileSync3(temporary, bytes, { mode: 384 });
-  renameSync(temporary, pathname);
+  writeFileSync4(temporary, bytes, { mode: 384 });
+  renameSync2(temporary, pathname);
   chmodSync2(pathname, 256);
   return pathname;
 }
@@ -28879,16 +29030,21 @@ function renderInvestigation({ index, investigation, findings, rejected, recurre
       "",
       `\`${cause.causeId}\` \xB7 confidence **${cause.confidence}** \xB7 rank score ${cause.rankScore}`,
       `\xB7 supported by ${cause.corroboratingLanes.length} of 3 lanes (${cause.corroboratingLanes.join(", ")})`,
+      `\xB7 next action **${cause.implementationStatus ?? "READY_TO_IMPLEMENT"}**`,
       "",
       ...causeHistory(history.get(cause.causeId)),
       `**Mechanism:** ${cause.mechanisms.join(", ")}${cause.mechanismContested ? " (the lanes DISAGREE on the family, which is itself information)" : ""}`,
       "",
+      ...(cause.relatedCauseIds ?? []).length === 0 ? [] : [
+        `**Related causes with a different mechanism:** ${cause.relatedCauseIds.map((id) => `\`${id}\``).join(", ")}`,
+        ""
+      ],
       `**Anchored to:** ${cause.anchors.join(", ")}`,
       ""
     );
     if (cause.unresolvedMaterialAlternatives > 0) {
       lines.push(
-        `**${plural(cause.unresolvedMaterialAlternatives, "material alternative is", "material alternatives are")} unresolved.** This cause is ranked lower for it, and resolving them is cheaper than acting on it.`,
+        `**${plural(cause.unresolvedMaterialAlternatives, "material alternative is", "material alternatives are")}` + (cause.implementationStatus === "VERIFY_FIRST" ? " unresolved.** This cause is ranked lower for it, and the verification check must land before implementation." : " unresolved.** C3 evidence permits a monitored implementation, but its acceptance check must be able to refute the diagnosis."),
         ""
       );
     }
@@ -28940,16 +29096,16 @@ function renderBacklog({ index, investigation, recurrence = null }) {
     const entry = byCauseId.get(causeId);
     if (!entry) return recurrence?.unavailable ? "?" : "new";
     if (entry.status === "RECURRING") {
-      return `${plural(entry.priorRuns, "run", "runs")} before this`;
+      return `${plural(entry.priorWeeks ?? entry.priorRuns, "week", "weeks")} before this`;
     }
     if (entry.status === "LIKELY_RECURRING") {
-      return `likely ${plural(entry.priorRuns, "run", "runs")} before this (${Math.round((entry.match?.anchorOverlap ?? 0) * 100)}% match)`;
+      return `likely ${plural(entry.priorWeeks ?? entry.priorRuns, "week", "weeks")} before this (${Math.round((entry.match?.anchorOverlap ?? 0) * 100)}% match)`;
     }
     return entry.nearMatches.length > 0 ? "new (similar seen before)" : "new";
   };
   const rows = investigation.causes.map((cause, position) => {
     const worst = (key) => cause.findings.reduce((held, finding) => BAND_ORDER.indexOf(finding.scoring[key]) > BAND_ORDER.indexOf(held) ? finding.scoring[key] : held, "NONE");
-    return `| ${position + 1} | ${cause.findings[0].title.replaceAll("|", "\\|")} | ${age(cause.causeId)} | ${cause.confidence} | ${cause.corroboratingLanes.length}/3 | ${worst("commercialImpact")} | ${worst("implementationEffort")} | ${worst("risk")} | ${cause.rankScore} | \`${cause.causeId}\` |`;
+    return `| ${position + 1} | ${cause.findings[0].title.replaceAll("|", "\\|")} | ${cause.implementationStatus === "VERIFY_FIRST" ? "verify first" : "implement"} | ${age(cause.causeId)} | ${cause.confidence} | ${cause.corroboratingLanes.length}/3 | ${worst("commercialImpact")} | ${worst("implementationEffort")} | ${worst("risk")} | ${cause.rankScore} | \`${cause.causeId}\` |`;
   });
   return [
     "# Ranked backlog",
@@ -28958,9 +29114,9 @@ function renderBacklog({ index, investigation, recurrence = null }) {
     "PRODUCT-SPEC.md, with effort and risk counting against.",
     "",
     ...historyLine(recurrence),
-    "| # | Cause | Age | Confidence | Lanes | Impact | Effort | Risk | Score | Id |",
-    "|---|---|---|---|---|---|---|---|---|---|",
-    ...rows.length === 0 ? ["| - | (no causes) | - | - | - | - | - | - | - | - |"] : rows,
+    "| # | Cause | Next action | Age | Confidence | Lanes | Impact | Effort | Risk | Score | Id |",
+    "|---|---|---|---|---|---|---|---|---|---|---|",
+    ...rows.length === 0 ? ["| - | (no causes) | - | - | - | - | - | - | - | - | - |"] : rows,
     "",
     ...absentSection(recurrence)
   ].join("\n");
@@ -28969,7 +29125,7 @@ function causeHistory(entry) {
   if (entry === void 0) return [];
   if (entry.status === "RECURRING") {
     return [
-      `**Seen before.** First recorded ${entry.firstSeenAt}, and it has appeared in ${plural(entry.priorRuns, "earlier run", "earlier runs")}. It has survived every week since.`,
+      `**Seen before.** First recorded ${entry.firstSeenAt}, and it has appeared in ${plural(entry.priorWeeks ?? entry.priorRuns, "earlier week", "earlier weeks")}.`,
       ""
     ];
   }
@@ -28998,7 +29154,8 @@ function historyLine(recurrence) {
       ""
     ];
   }
-  if (recurrence.priorRunCount === 0) {
+  const priorWeekCount = recurrence.priorWeekCount ?? recurrence.priorRunCount;
+  if (priorWeekCount === 0) {
     return [
       "> This is the FIRST recorded run for this account, so every problem below is new by",
       "> definition and Age carries no information yet. From the next run it will.",
@@ -29007,7 +29164,11 @@ function historyLine(recurrence) {
   }
   const likely = recurrence.likelyRecurringCount ?? 0;
   return [
-    `> Compared against ${plural(recurrence.priorRunCount, "earlier run", "earlier runs")}: ${recurrence.newCount} new, ${recurrence.recurringCount} seen before${likely > 0 ? `, ${likely} probably seen before` : ""}.` + (likely > 0 ? ' A "probably" is a match on the workflows and metrics a problem points at rather than an exact one, and each says how strong it is.' : ""),
+    `> Compared against ${plural(priorWeekCount, "earlier week", "earlier weeks")}: ${recurrence.newCount} new, ${recurrence.recurringCount} seen before${likely > 0 ? `, ${likely} probably seen before` : ""}.` + (likely > 0 ? ' A "probably" is a match on the workflows and metrics a problem points at rather than an exact one, and each says how strong it is.' : ""),
+    ...recurrence.ambiguousWeeks?.length > 0 ? [
+      "",
+      `> ${plural(recurrence.ambiguousWeeks.length, "earlier week was", "earlier weeks were")} omitted because multiple runs exist and no canonical baseline was selected.`
+    ] : [],
     ""
   ];
 }
@@ -29020,7 +29181,7 @@ function absentSection(recurrence) {
     "expert framed it differently, when its finding was refused, or when the evidence moved. Nothing",
     "here has been verified as fixed.",
     "",
-    "| Fingerprint | First seen | Last seen | Runs it appeared in |",
+    "| Fingerprint | First seen | Last seen | Weeks it appeared in |",
     "|---|---|---|---|",
     ...recurrence.absent.map(({ fingerprint, firstSeenAt, lastSeenAt, priorRuns }) => `| \`${fingerprint.slice(0, 12)}\` | ${firstSeenAt} | ${lastSeenAt} | ${priorRuns} |`),
     ""
@@ -29042,6 +29203,7 @@ function rewritesFor({ cause, reviews }) {
 function renderSolutionPackage({ index, cause, findings, reviews = [] }) {
   const byId = new Map(findings.map((finding) => [`${finding.lane}:${finding.findingId}`, finding]));
   const rewrites = rewritesFor({ cause, reviews });
+  const verifyFirst = cause.implementationStatus === "VERIFY_FIRST";
   const lines = [
     `# Solution package: ${cause.findings[0].title}`,
     "",
@@ -29050,6 +29212,11 @@ function renderSolutionPackage({ index, cause, findings, reviews = [] }) {
     "",
     "FOR HUMAN IMPLEMENTATION AND APPROVAL. Nothing here is applied by this tool.",
     "",
+    ...verifyFirst ? [
+      "\u{1F534} **VERIFY FIRST.** A material competing explanation is still unresolved. Do not implement",
+      "the proposed change until the checks below support this diagnosis.",
+      ""
+    ] : [],
     "## What is wrong",
     "",
     ...cause.findings.flatMap((summary) => [
@@ -29058,13 +29225,22 @@ function renderSolutionPackage({ index, cause, findings, reviews = [] }) {
       byId.get(`${summary.lane}:${summary.findingId}`)?.analysis ?? "(analysis not carried)",
       ""
     ]),
-    "## What to change",
+    verifyFirst ? "## Proposed change if verified" : "## What to change",
     "",
     ...cause.findings.flatMap((summary) => [`**${summary.lane}:**`, "", summary.fix, ""]),
     "## Where it applies",
     "",
     ...bulleted(cause.anchors),
     "",
+    ...(cause.relatedCauseIds ?? []).length === 0 ? [] : [
+      "## Related diagnoses, kept separate",
+      "",
+      "These causes touch at least one of the same account objects but require a different kind of",
+      "intervention. Coordinate the work; do not merge their evidence or fixes.",
+      "",
+      ...bulleted(cause.relatedCauseIds),
+      ""
+    ],
     "## How we will know it worked",
     "",
     ...cause.findings.flatMap((summary) => [
@@ -29110,14 +29286,22 @@ function runInvestigation({ paths, runId, answers } = {}) {
   const directory = investigationDirectory(paths, runId);
   let recurrence = null;
   try {
-    const observations = readObservations({ paths });
-    recurrence = compareToHistory({ investigation, observations, runId });
+    const occurredAt = index.collectionWindow?.to ?? briefsIndex.collectionWindow?.to;
+    const history = readCanonicalHistory({ paths, currentOccurredAt: occurredAt });
+    recurrence = compareToHistory({
+      investigation,
+      observations: history.observations,
+      runId,
+      currentOccurredAt: occurredAt,
+      canonicalWeekCount: history.priorWeekCount,
+      ambiguousWeeks: history.ambiguousWeeks
+    });
     recordRun({
       paths,
       runId,
       investigation,
       // The end of the window this evidence covers, never the clock. See `recordRun`.
-      occurredAt: index.collectionWindow?.to ?? briefsIndex.collectionWindow?.to
+      occurredAt
     });
   } catch (error51) {
     recurrence = { unavailable: error51?.code ?? "RECURRENCE_FAILED" };
@@ -47699,12 +47883,12 @@ import {
   fstatSync,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync7,
-  mkdirSync as mkdirSync5,
+  mkdirSync as mkdirSync6,
   openSync as openSync2,
   readFileSync as readFileSync10,
   realpathSync as realpathSync6,
-  renameSync as renameSync2,
-  writeFileSync as writeFileSync4
+  renameSync as renameSync3,
+  writeFileSync as writeFileSync5
 } from "node:fs";
 import {
   createCipheriv,
@@ -47715,7 +47899,7 @@ import {
 } from "node:crypto";
 import {
   basename as basename4,
-  dirname as dirname2,
+  dirname as dirname3,
   join as join6,
   relative as relative5,
   resolve as resolve5,
@@ -47899,7 +48083,7 @@ function openPhaseDirectory({ state, runId, create, expectedBinding }) {
     if (!existsSync5(pathname)) {
       if (!create) throw codedError18("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
       try {
-        mkdirSync5(pathname, { mode: 448 });
+        mkdirSync6(pathname, { mode: 448 });
       } catch {
         throw codedError18("AUDIT_CHECKPOINT_INVALID_DIRECTORY");
       }
@@ -48055,7 +48239,7 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
         });
         if (canonicalJson(restored) !== canonicalJson(output)) throw new Error();
         guard.assertSame();
-        renameSync2(temporary, pathname);
+        renameSync3(temporary, pathname);
         guard.assertSame();
         chmodSync3(pathname, 384);
         return {
@@ -48092,13 +48276,13 @@ function writePhaseArtifact({ state, runId, phase, inputHash: inputHash2, output
         constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY | constants2.O_NOFOLLOW,
         384
       );
-      writeFileSync4(descriptor, `${canonicalJson(envelope)}
+      writeFileSync5(descriptor, `${canonicalJson(envelope)}
 `);
       fsyncSync2(descriptor);
       closeSync2(descriptor);
       descriptor = void 0;
       guard.assertSame();
-      renameSync2(temporary, pathname);
+      renameSync3(temporary, pathname);
       guard.assertSame();
       chmodSync3(pathname, 384);
     } finally {
@@ -48182,7 +48366,7 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
   const requestId = request.requestId;
   if (typeof requestId !== "string" || !OPAQUE_ID.test(requestId) || !["conversation", "mechanism"].includes(kind)) throw codedError18("REVIEW_REQUEST_STATE_INVALID_ID");
   const directory = join6(state.paths.privateCheckpoints, runId, "reviews");
-  mkdirSync5(directory, { recursive: true, mode: 448 });
+  mkdirSync6(directory, { recursive: true, mode: 448 });
   for (const candidate of [
     state.paths.privateCheckpoints,
     join6(state.paths.privateCheckpoints, runId),
@@ -48224,12 +48408,12 @@ function atomicPrivateArtifact({ state, runId, kind, request, validatorState }) 
           constants2.O_CREAT | constants2.O_EXCL | constants2.O_WRONLY | constants2.O_NOFOLLOW,
           384
         );
-        writeFileSync4(descriptor, bytes);
+        writeFileSync5(descriptor, bytes);
         fsyncSync2(descriptor);
         closeSync2(descriptor);
         descriptor = void 0;
       }
-      renameSync2(temporary, destination);
+      renameSync3(temporary, destination);
       chmodSync3(destination, 384);
     } catch (error51) {
       if (descriptor !== void 0) closeSync2(descriptor);
@@ -51227,7 +51411,7 @@ import {
   readFileSync as readFileSync11,
   readdirSync as readdirSync4,
   unlinkSync,
-  writeFileSync as writeFileSync5
+  writeFileSync as writeFileSync6
 } from "node:fs";
 import {
   createCipheriv as createCipheriv2,
@@ -51467,7 +51651,7 @@ function writeImmutableEvent(paths, event) {
   let directoryDescriptor;
   try {
     descriptor = openSync3(temporary, constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL, 256);
-    writeFileSync5(descriptor, `${canonicalJson(event)}
+    writeFileSync6(descriptor, `${canonicalJson(event)}
 `, "utf8");
     fsyncSync3(descriptor);
     closeSync3(descriptor);
@@ -51724,7 +51908,7 @@ function openVault({ paths, encryptionKey, pseudonymKey } = {}) {
       plaintext.fill(0);
       ciphertext.fill(0);
       try {
-        writeFileSync5(
+        writeFileSync6(
           join7(canonicalPaths.privateRaw, `${opaqueRef}.json`),
           `${canonicalJson(record2)}
 `,
@@ -51823,16 +52007,16 @@ import {
   existsSync as existsSync7,
   fstatSync as fstatSync3,
   lstatSync as lstatSync9,
-  mkdirSync as mkdirSync6,
+  mkdirSync as mkdirSync7,
   openSync as openSync4,
   readFileSync as readFileSync12,
   realpathSync as realpathSync7,
-  renameSync as renameSync3,
-  writeFileSync as writeFileSync6
+  renameSync as renameSync4,
+  writeFileSync as writeFileSync7
 } from "node:fs";
 import { createHmac as createHmac4, randomUUID as randomUUID2, timingSafeEqual as timingSafeEqual2 } from "node:crypto";
 import {
-  dirname as dirname3,
+  dirname as dirname4,
   isAbsolute as isAbsolute4,
   join as join8,
   relative as relative6,
@@ -52120,16 +52304,16 @@ function writeImmutable(pathname, value) {
     }
     return;
   }
-  mkdirSync6(dirname3(pathname), { recursive: true, mode: 448 });
+  mkdirSync7(dirname4(pathname), { recursive: true, mode: 448 });
   const temporary = `${pathname}.tmp`;
   try {
-    writeFileSync6(temporary, bytes, { flag: "wx", mode: 384 });
+    writeFileSync7(temporary, bytes, { flag: "wx", mode: 384 });
   } catch (error51) {
     if (error51?.code !== "EEXIST") throw error51;
     const metadata = existsSync7(temporary) ? lstatSync9(temporary) : void 0;
     if (!metadata || metadata.isSymbolicLink() || !metadata.isFile() || !readFileSync12(temporary).equals(bytes)) throw codedError27("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
   }
-  renameSync3(temporary, pathname);
+  renameSync4(temporary, pathname);
   chmodSync5(pathname, 256);
 }
 function publicationPublisher(scopeStatement) {
@@ -52148,7 +52332,7 @@ function publicationPublisher(scopeStatement) {
         throw codedError27("AUDIT_INTEGRITY_FAILURE_PUBLICATION_CONFLICT");
       }
     } else {
-      mkdirSync6(publicationRoot, { mode: 448 });
+      mkdirSync7(publicationRoot, { mode: 448 });
     }
     const report = [
       "# Weekly GHL audit",

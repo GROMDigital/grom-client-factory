@@ -88,6 +88,31 @@ test('a complete file sorts last week into fixed, still here, and gone on its ow
   );
 });
 
+test('a likely-recurring descendant prevents LAST-WEEK from calling an actioned cause fixed', () => {
+  const claimed = parseChangesMade(block('cause_0fed0', {
+    status: 'DONE 2026-07-28',
+    did: 'Changed the nurture handoff',
+    print: 'aaaaaaaa01',
+  }));
+
+  const result = compareWeeks({
+    claimed,
+    thisWeeksFingerprints: ['bbbbbbbb02'],
+    recurrence: {
+      causes: [{
+        fingerprint: 'bbbbbbbb02',
+        status: 'LIKELY_RECURRING',
+        matchedFingerprint: 'aaaaaaaa01',
+      }],
+    },
+  });
+
+  assert.equal(result.concluded, true);
+  assert.deepEqual(result.gone, [], 'a probable descendant is not evidence that the problem was fixed');
+  assert.deepEqual(result.stillHere.map(([id]) => id), ['cause_0fed0']);
+  assert.deepEqual(result.stillHereLikely.map(([id]) => id), ['cause_0fed0']);
+});
+
 test('an empty file concludes nothing, and says so differently', () => {
   const claimed = parseChangesMade('# Changes made\n\nnothing recorded\n');
   assert.equal(claimed.size, 0);

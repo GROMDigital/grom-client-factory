@@ -36,6 +36,12 @@ kind of object are the same job, whatever the two problems were called.
 Say so where it changes the plan: a recurring problem near the top either is harder than it looks or
 has never actually been attempted, and those need different handling.
 
+**4. `implementationStatus`.** `READY_TO_IMPLEMENT` means the proposed fix has C3 support or no open
+material alternative and may be scheduled as a monitored implementation. `VERIFY_FIRST` means a
+material competing explanation is still open at lower confidence. Put that cause in a `VERIFY` batch
+using its `verificationChecks`. Do not place it in an `IMPLEMENT` batch and do not describe the
+proposed fix as committed work until the check supports the diagnosis.
+
 ## Hard rules
 
 - **Every cause goes in exactly one batch. Nothing is dropped.** If a cause is not worth doing, put it
@@ -51,6 +57,8 @@ has never actually been attempted, and those need different handling.
 - **THIS WEEK must be genuinely deliverable.** If everything is urgent then nothing is ordered, and
   you have not done the job. Be willing to say that most of the list waits.
 - **No em dashes.** House style.
+- **A `VERIFY_FIRST` cause may only appear in a `VERIFY` batch.** Verification is deliverable work.
+  The conditional fix can wait for the result.
 
 ## Output
 
@@ -64,6 +72,7 @@ A single JSON object and nothing else. No prose around it.
       "order": 1,
       "title": "Short imperative name for the work, not the theme.",
       "causeIds": ["the cause ids this batch covers"],
+      "mode": "VERIFY | IMPLEMENT",
       "sameChange": true,
       "size": "SMALL | MEDIUM | LARGE",
       "rationale": "Why these belong together and why here in the order.",
@@ -89,6 +98,7 @@ A single JSON object and nothing else. No prose around it.
 ```
 
 `sameChange` is `true` when the batch is literally one edit repeated, and `false` when it is several
-related edits grouped for sequencing. `blockedBy` holds batch `order` numbers, not cause ids.
+related edits grouped for sequencing. `mode` is `VERIFY` when the batch settles an open material
+alternative and `IMPLEMENT` when it changes the system. `blockedBy` holds batch `order` numbers, not cause ids.
 `prerequisites` and `conflicts` may be empty arrays if there genuinely are none, but say so in
 `thisWeek` if you found none, because an operator will assume you did not look.

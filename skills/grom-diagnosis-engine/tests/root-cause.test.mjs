@@ -179,7 +179,7 @@ test('an unresolved MATERIAL alternative pulls the cause down, because it is a l
   assert.ok(addressed.rankScore > open.rankScore);
 });
 
-test('lanes disagreeing about the family is recorded, never averaged away', () => {
+test('lanes disagreeing about the mechanism remain separate but explicitly related', () => {
   const result = investigateRootCause({
     briefsHash: BRIEFS_HASH,
     laneAnalyses: {
@@ -192,10 +192,55 @@ test('lanes disagreeing about the family is recorded, never averaged away', () =
       })],
     },
   });
-  const [cause] = result.causes;
-  // Two lanes at the same anchor blaming different things is information for whoever reads it.
-  assert.equal(cause.mechanismContested, true);
-  assert.deepEqual(cause.mechanisms, ['offer_or_pricing', 'workflow_configuration_or_execution']);
+  assert.equal(result.causes.length, 2);
+  for (const cause of result.causes) {
+    assert.equal(cause.mechanismContested, false);
+    assert.equal(cause.mechanisms.length, 1);
+    assert.equal(cause.relatedCauseIds.length, 1);
+    assert.ok(result.causes.some((other) => other.causeId === cause.relatedCauseIds[0]));
+  }
+  assert.deepEqual(
+    result.causes.flatMap((cause) => cause.mechanisms).sort(),
+    ['offer_or_pricing', 'workflow_configuration_or_execution'],
+  );
+});
+
+test('a material unresolved alternative creates verification work, not an implementation order', () => {
+  const [cause] = investigateRootCause({
+    briefsHash: BRIEFS_HASH,
+    laneAnalyses: {
+      ...emptyLanes,
+      lead_journey_kpi: [finding({
+        competingExplanations: [
+          { explanation: 'The leads are unqualified', materiality: 'MATERIAL' },
+          { explanation: 'Seasonality', materiality: 'IMMATERIAL' },
+        ],
+      })],
+    },
+  }).causes;
+
+  assert.equal(cause.implementationStatus, 'VERIFY_FIRST');
+  assert.deepEqual(cause.verificationChecks, [finding().discriminatingTest]);
+});
+
+test('C3 evidence can ship a monitored fix even when a material alternative remains open', () => {
+  const [cause] = investigateRootCause({
+    briefsHash: BRIEFS_HASH,
+    laneAnalyses: {
+      ...emptyLanes,
+      lead_journey_kpi: [finding({
+        confidence: 'C3',
+        competingExplanations: [
+          { explanation: 'The leads are unqualified', materiality: 'MATERIAL' },
+          { explanation: 'Seasonality', materiality: 'IMMATERIAL' },
+        ],
+      })],
+    },
+  }).causes;
+
+  assert.equal(cause.confidence, 'C3');
+  assert.equal(cause.implementationStatus, 'READY_TO_IMPLEMENT');
+  assert.equal(cause.verificationChecks.length, 1, 'the rollout still carries the check that can refute it');
 });
 
 test('an unarguable finding is refused, not ranked low', () => {

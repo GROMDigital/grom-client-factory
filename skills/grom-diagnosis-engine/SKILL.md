@@ -210,9 +210,10 @@ implementation and approval; nothing in this cycle applies a change.
 ### Week over week
 
 `audit investigate` records every cause in the account's own ledger and compares
-this run against every run before it, so the backlog carries an **Age** column and
-each problem in the report says whether it is new or has survived since a named
-date. Nothing extra to run: it happens inside step 7.
+this run against one canonical run for each earlier closed week, so same-week
+retries never inflate the **Age** column. Each problem says whether it is new,
+exactly recurring, or probably recurring from a strong anchor match. Nothing
+extra to run: it happens inside step 7.
 
 Identity is derived from the problem, not from what an expert called it: the
 mechanism families plus the discriminating anchors. Experts invent fresh ids every
@@ -223,26 +224,25 @@ Two rules it will not break:
 - **ABSENT IS NOT FIXED.** A cause that stops appearing is listed under "recorded
   before, absent this week", with the reasons it might have vanished. Nothing in
   this product verifies a fix yet, so nothing claims one.
-- **A NEAR MISS IS SHOWN, NEVER MATCHED.** Rename a workflow and the fingerprint
-  changes. Rather than loosen identity and risk calling two different problems the
-  same, the report states the overlap and lets the reader judge.
+- **A PROBABLE MATCH STAYS PROBABLE.** Exact identity is `RECURRING`. A strong
+  one-to-one anchor match is `LIKELY_RECURRING`, carries the overlap and mechanism
+  agreement, and is never silently promoted to certainty.
 
 A ledger that cannot be read or written never costs the account its report: the
 comparison is reported as unavailable, which is a different statement from
 "nothing has changed".
 
 
-### 🔴 Runtime coverage is PARTIAL, and must not be described otherwise
+### Runtime is requested for every workflow by default, but completeness is still per workflow
 
-A runtime window is requested PER WORKFLOW via `internalAudit.runtimeWorkflowIds`, and it is expensive
-enough that it has never been requested for all of them. Grom UK asked for three. SK Skin asked for
-none. Every workflow without one records `RUNTIME_NOT_REQUESTED`, which is honest, but it means a
-stage-2 expert is usually judging how a workflow is BUILT rather than what it DID.
+An absent `internalAudit.runtimeWorkflowIds` means EVERY workflow in the roster, bounded by
+`maxRuntimeWindows` (60 in newly initialised accounts). An explicit array deliberately narrows the
+read; an explicit empty array requests none.
 
-So: never call a run a whole-account runtime audit, and never let a finding claim a workflow behaved
-a certain way for real contacts unless that workflow actually got a window. The better design, not yet
-built, is for stage 1's map to choose the money-path and booking workflows and collect runtime for
-those, since the map already classifies them and a human should not be maintaining the list.
+Do not infer completeness from the default. Every workflow carries its own runtime coverage and
+failure code. A whole-account runtime claim is allowed only when every in-scope workflow completed
+its requested window. Otherwise name the incomplete workflows and keep behavior claims limited to
+the rows actually read.
 
 ## Filing a finished run where the client work lives
 
@@ -284,14 +284,22 @@ the folder:
 | `history/` | the week-over-week ledger, so this account's past survives losing the working directory |
 
 When a package says "rewrite this message", the words are in `reviews/`, not in the package.
+When a cause below C3 still has an unresolved material alternative, its package and backlog say
+`VERIFY_FIRST`. The planner must place it in a `VERIFY` batch and is contractually refused if it
+schedules the conditional fix as `IMPLEMENT` work before the discriminating check supports the
+diagnosis. A C3 cause may proceed as a monitored implementation, with the same refutation check kept.
 
 ### Week over week, and the one thing it cannot tell you
 
-`audit investigate` already records every cause in a per-account ledger and compares this run against
-every run before it, giving NEW, RECURRING and ABSENT. Identity is NOT the ids, which experts reinvent
-every week: it is the mechanism families plus the discriminating anchors, exact-matched and brittle on
-purpose, because a wrong match across weeks would let the report claim a problem recurred when it did
-not. It is automatic and there is nothing to pass in.
+`audit investigate` records every cause in a per-account ledger and compares this run against one
+canonical baseline for each earlier closed week. Re-runs of the same week remain in the ledger for
+provenance but do not inflate Age. The latest successful run becomes that week's baseline; ambiguous
+legacy weeks with several attempts and no pointer are omitted and disclosed.
+
+Identity is NOT the ids, which experts reinvent. Exact mechanism-plus-anchor identity is
+`RECURRING`; a strong one-to-one anchor match is `LIKELY_RECURRING` and shows the overlap. The matcher
+maximises the number of defensible continuations before choosing the strongest pairs, so a flexible
+cause cannot consume the only ancestor available to a constrained one. `ABSENT` never means fixed.
 
 🔴 **ABSENT IS NOT FIXED, and the engine will never say otherwise.** A cause vanishes when it is
 solved, when an expert frames it differently, when the evidence moves, or when its finding was refused
@@ -302,9 +310,12 @@ causes in the plan's batch order, so whoever does the work fills it in rather th
 and cannot invent a cause id because they are all pre-listed. The next run's archive reads it and
 writes `LAST-WEEK.md`:
 
-- changed, and the problem is GONE → treat as fixed. **the only combination that earns the word**
+- changed, and the problem is GONE with no exact or likely-recurring descendant → treat as fixed
 - changed, and it is STILL HERE → the fix did not work, or did not address the cause
 - gone, and nobody changed anything → unexplained. a reason to look, not to celebrate
+
+A `LIKELY_RECURRING` descendant counts as still here for this safety decision and is labelled as a
+probable match. `LAST-WEEK.md` never contradicts the recurrence table by calling that cause fixed.
 
 If nobody fills it in, nothing breaks and `LAST-WEEK.md` says plainly that nothing can be concluded.
 

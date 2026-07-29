@@ -61,6 +61,7 @@ function plan(overrides = {}) {
         order: 1,
         title: 'Turn stop-on-reply on',
         causeIds: ['cause_aaa'],
+        mode: 'IMPLEMENT',
         sameChange: true,
         size: 'SMALL',
         rationale: 'One setting, repeated. An afternoon.',
@@ -70,6 +71,7 @@ function plan(overrides = {}) {
         order: 2,
         title: 'Record appointment outcomes',
         causeIds: ['cause_bbb', 'cause_ccc'],
+        mode: 'IMPLEMENT',
         sameChange: false,
         size: 'MEDIUM',
         rationale: 'Nothing downstream is measurable until this lands.',
@@ -109,7 +111,7 @@ test('the planner sees the fixes and the age, and never the evidence behind a fi
    */
   const serialized = JSON.stringify(evidence);
   assert.ok(!serialized.includes('competingExplanations'));
-  assert.ok(!serialized.includes('discriminatingTest'));
+  assert.ok(!serialized.includes('"analysis"'));
 });
 
 test('the prompt lists every cause id the answer must place', () => {
@@ -127,6 +129,49 @@ test('a complete plan is accepted and hashed', () => {
   assert.match(planHash, /^[a-f0-9]{64}$/u);
   // Deterministic: the same plan always identifies as the same plan.
   assert.equal(validateWorkOrder(plan(), { investigation: INVESTIGATION }).planHash, planHash);
+});
+
+test('a VERIFY_FIRST cause cannot be scheduled as implementation work', () => {
+  const investigation = {
+    causes: [
+      cause('cause_verify', 'Qualification may be the actual leak', {
+        implementationStatus: 'VERIFY_FIRST',
+        verificationChecks: [{
+          check: 'Compare qualified and unqualified reply rates.',
+          supportsIf: 'Qualified leads reply at the same low rate.',
+          refutesIf: 'Only unqualified leads fail to reply.',
+        }],
+      }),
+    ],
+  };
+  const implementing = {
+    thisWeek: 'Verify the unresolved explanation before touching the workflow.',
+    batches: [{
+      order: 1,
+      title: 'Change the nurture workflow',
+      causeIds: ['cause_verify'],
+      mode: 'IMPLEMENT',
+      sameChange: false,
+      size: 'SMALL',
+      rationale: 'Change the messages.',
+      blockedBy: [],
+    }],
+    prerequisites: [],
+    conflicts: [],
+    disagreements: [],
+  };
+  assert.throws(
+    () => validateWorkOrder(implementing, { investigation }),
+    /WORK_ORDER_VERIFY_FIRST_IMPLEMENTATION/u,
+  );
+
+  implementing.batches[0].mode = 'VERIFY';
+  const { plan: accepted } = validateWorkOrder(implementing, { investigation });
+  assert.equal(accepted.batches[0].mode, 'VERIFY');
+
+  const evidence = buildWorkOrderEvidence({ investigation });
+  assert.equal(evidence.causes[0].implementationStatus, 'VERIFY_FIRST');
+  assert.equal(evidence.causes[0].verificationChecks.length, 1);
 });
 
 test('a problem left out of the plan is REFUSED, and the refusal names it', () => {

@@ -15332,13 +15332,24 @@ function joinable(claimed) {
   if (new Set(prints).size !== prints.length) return { ok: false, reason: "DUPLICATE_FINGERPRINT" };
   return { ok: true, reason: "OK" };
 }
-function compareWeeks({ claimed, thisWeeksFingerprints }) {
+function compareWeeks({ claimed, thisWeeksFingerprints, recurrence }) {
   const verdict = joinable(claimed);
   const prints = new Set(thisWeeksFingerprints ?? []);
   if (!verdict.ok) {
-    return { concluded: false, verdict, acted: [], gone: [], stillHere: [], untouchedGone: [] };
+    return {
+      concluded: false,
+      verdict,
+      acted: [],
+      gone: [],
+      stillHere: [],
+      stillHereLikely: [],
+      untouchedGone: []
+    };
   }
-  const present = (value) => value.print !== "" && prints.has(value.print);
+  const likelyDescendants = new Set((recurrence?.causes ?? []).filter((cause) => cause.status === "LIKELY_RECURRING").map((cause) => cause.matchedFingerprint).filter((fingerprint) => typeof fingerprint === "string"));
+  const presentExactly = (value) => value.print !== "" && prints.has(value.print);
+  const presentLikely = (value) => value.print !== "" && likelyDescendants.has(value.print);
+  const present = (value) => presentExactly(value) || presentLikely(value);
   const entries = [...claimed.entries()];
   const acted = entries.filter(([, value]) => /^DONE/u.test(value.status));
   return {
@@ -15349,6 +15360,8 @@ function compareWeeks({ claimed, thisWeeksFingerprints }) {
     gone: acted.filter(([, value]) => !present(value)),
     // Changed, and still found. The fix did not work or did not address the cause.
     stillHere: acted.filter(([, value]) => present(value)),
+    // Kept separate so the archive can say this is a probable continuation, not an exact identity.
+    stillHereLikely: acted.filter(([, value]) => !presentExactly(value) && presentLikely(value)),
     // Never actioned, and gone anyway. Not a fix; something else moved.
     untouchedGone: entries.filter(([, value]) => !/^DONE/u.test(value.status) && !present(value))
   };
@@ -15594,10 +15607,17 @@ if (previous) {
   const claimed = existsSync(priorChanges) ? parseChangesMade(readFileSync2(priorChanges, "utf8")) : /* @__PURE__ */ new Map();
   const comparison = compareWeeks({
     claimed,
-    thisWeeksFingerprints: causes.map((c) => causeFingerprint(c))
+    thisWeeksFingerprints: causes.map((c) => causeFingerprint(c)),
+    recurrence: investigationRecord.recurrence
   });
   const priorHadFingerprints = comparison.concluded;
-  const { acted, gone, stillHere, untouchedGone } = comparison;
+  const {
+    acted,
+    gone,
+    stillHere,
+    stillHereLikely,
+    untouchedGone
+  } = comparison;
   writeFileSync(join(destination, "LAST-WEEK.md"), `# Against last week (${previous})
 
 ${claimed.size > 0 && !priorHadFingerprints ? `\u{1F534} Last week's \`CHANGES-MADE.md\` cannot be joined to this week, so **nothing below is concluded
@@ -15624,7 +15644,7 @@ ${gone.length === 0 ? "_none_" : gone.map(([id, v]) => `- \`${id}\`${v.did ? ` \
 
 \u{1F534} **The fix did not work, or did not address the cause.** Read the package again before doing more.
 
-${stillHere.length === 0 ? "_none_" : stillHere.map(([id, v]) => `- \`${id}\`${v.did ? ` \u2014 ${v.did}` : ""}`).join("\n")}
+${stillHere.length === 0 ? "_none_" : stillHere.map(([id, v]) => `- \`${id}\`${v.did ? ` \u2014 ${v.did}` : ""}${stillHereLikely.some(([likelyId]) => likelyId === id) ? " \u2014 likely recurring by anchor overlap; verify the match before changing the fix" : ""}`).join("\n")}
 `}
 ## Gone, but nobody changed anything \u2014 ${untouchedGone.length}
 

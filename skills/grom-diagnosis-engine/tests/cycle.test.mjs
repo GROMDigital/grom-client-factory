@@ -675,6 +675,23 @@ test('a problem about no workflow at all gets no rewrite section', () => {
   assert.ok(!page.includes('The rewritten copy'), 'an empty section was written for a problem with no workflows');
 });
 
+test('a VERIFY_FIRST package proposes a conditional fix and forbids implementation before the check', () => {
+  const cause = causeAnchoredTo(['workflow:05 No-Show Recovery']);
+  cause.implementationStatus = 'VERIFY_FIRST';
+  cause.unresolvedMaterialAlternatives = 1;
+  const page = renderSolutionPackage({
+    index: { runId: RUN, locationId: LOCATION },
+    cause,
+    findings: [],
+    reviews: REVIEW_INDEX,
+  });
+
+  assert.match(page, /VERIFY FIRST/u);
+  assert.match(page, /Do not implement/u);
+  assert.match(page, /Proposed change if verified/u);
+  assert.ok(!page.includes('## What to change'));
+});
+
 test('the whole chain wires the reviews into the packages, end to end', () => {
   const { paths } = project();
   throughStageTwo(paths, { review: 'Message 1 rewritten in full: here is the replacement.' });

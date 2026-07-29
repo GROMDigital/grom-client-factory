@@ -38,10 +38,11 @@
 import { readFileSync } from 'node:fs';
 import { sha256 } from './canonical.mjs';
 
-export const WORK_ORDER_SCHEMA = '1.0.0';
+export const WORK_ORDER_SCHEMA = '1.1.0';
 
 const RUBRIC = 'work-order-v1.md';
 const SIZES = Object.freeze(['SMALL', 'MEDIUM', 'LARGE']);
+const MODES = Object.freeze(['VERIFY', 'IMPLEMENT']);
 
 function codedError(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -80,7 +81,8 @@ export function buildWorkOrderEvidence({ investigation, recurrence = null } = {}
   const age = new Map((recurrence?.causes ?? []).map((entry) => [entry.causeId, entry]));
   return {
     causeCount: investigation.causes.length,
-    priorRunCount: recurrence?.priorRunCount ?? null,
+    priorWeekCount: recurrence?.priorWeekCount ?? recurrence?.priorRunCount ?? null,
+    priorRunCount: recurrence?.priorWeekCount ?? recurrence?.priorRunCount ?? null,
     causes: investigation.causes.map((cause, position) => {
       const history = age.get(cause.causeId);
       return {
@@ -92,6 +94,9 @@ export function buildWorkOrderEvidence({ investigation, recurrence = null } = {}
         lanes: cause.corroboratingLanes,
         rankScore: cause.rankScore,
         anchors: cause.anchors,
+        relatedCauseIds: cause.relatedCauseIds ?? [],
+        implementationStatus: cause.implementationStatus ?? 'READY_TO_IMPLEMENT',
+        verificationChecks: cause.verificationChecks ?? [],
         // Every lane's proposed fix, because two of them being the same edit is the whole question.
         fixes: cause.findings.map((finding) => ({ lane: finding.lane, fix: finding.fix })),
         scoring: cause.findings.map((finding) => finding.scoring),
@@ -100,7 +105,8 @@ export function buildWorkOrderEvidence({ investigation, recurrence = null } = {}
           : {
               status: history.status,
               firstSeenAt: history.firstSeenAt,
-              priorRuns: history.priorRuns,
+              priorRuns: history.priorWeeks ?? history.priorRuns,
+              priorWeeks: history.priorWeeks ?? history.priorRuns,
             },
       };
     }),
@@ -159,6 +165,10 @@ function refuse(code, detail) {
 export function validateWorkOrder(plan, { investigation } = {}) {
   if (!isPlainObject(plan)) refuse('WORK_ORDER_INVALID');
   const known = new Set((investigation?.causes ?? []).map(({ causeId }) => causeId));
+  const statusByCause = new Map((investigation?.causes ?? []).map((cause) => [
+    cause.causeId,
+    cause.implementationStatus ?? 'READY_TO_IMPLEMENT',
+  ]));
 
   const thisWeek = text(plan.thisWeek);
   if (thisWeek.length === 0) refuse('WORK_ORDER_THIS_WEEK_MISSING');
@@ -176,18 +186,26 @@ export function validateWorkOrder(plan, { investigation } = {}) {
     if (orders.has(batch.order)) refuse('WORK_ORDER_BATCH_ORDER_DUPLICATE', String(batch.order));
     orders.add(batch.order);
     if (!SIZES.includes(batch.size)) refuse('WORK_ORDER_BATCH_SIZE_INVALID', title);
+    // Plans produced before 1.1 had no mode and were implementation plans by definition. Preserve
+    // replay compatibility; VERIFY_FIRST causes still fail closed because the default is IMPLEMENT.
+    const mode = text(batch.mode) || 'IMPLEMENT';
+    if (!MODES.includes(mode)) refuse('WORK_ORDER_BATCH_MODE_INVALID', title);
     if (!Array.isArray(batch.causeIds) || batch.causeIds.length === 0) {
       refuse('WORK_ORDER_BATCH_EMPTY', title);
     }
     for (const causeId of batch.causeIds) {
       if (!known.has(causeId)) refuse('WORK_ORDER_CAUSE_UNKNOWN', causeId);
       if (placed.has(causeId)) refuse('WORK_ORDER_CAUSE_TWICE', causeId);
+      if (mode === 'IMPLEMENT' && statusByCause.get(causeId) === 'VERIFY_FIRST') {
+        refuse('WORK_ORDER_VERIFY_FIRST_IMPLEMENTATION', causeId);
+      }
       placed.set(causeId, title);
     }
     return {
       order: batch.order,
       title,
       causeIds: [...batch.causeIds],
+      mode,
       sameChange: batch.sameChange === true,
       size: batch.size,
       rationale,
@@ -286,7 +304,7 @@ export function renderWorkOrder({ index, plan, investigation }) {
     lines.push(
       `### ${batch.order}. ${batch.title}`,
       '',
-      `${batch.size}${batch.sameChange ? ', one repeated change' : ''}`
+      `${batch.mode} · ${batch.size}${batch.sameChange ? ', one repeated change' : ''}`
         + `${batch.blockedBy.length > 0 ? `, after ${batch.blockedBy.map((n) => `batch ${n}`).join(' and ')}` : ''}`,
       '',
       batch.rationale,

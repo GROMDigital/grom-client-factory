@@ -182,7 +182,10 @@ function findingBlock(cause, rank) {
       <span class="fmeta">${escapeHtml(worstBand(cause, 'commercialImpact').toLowerCase())}</span>
     </summary>
     <div class="fbody">
-      <p class="flabel">What to change</p>
+      ${cause.implementationStatus === 'VERIFY_FIRST'
+        ? '<p><strong>VERIFY FIRST.</strong> Do not implement the proposed change until the check below supports this diagnosis.</p>'
+        : ''}
+      <p class="flabel">${cause.implementationStatus === 'VERIFY_FIRST' ? 'Proposed change if verified' : 'What to change'}</p>
       ${cause.findings.map((finding) => renderFix(finding.fix)).join('')}
       <p class="flabel">How you will know it worked</p>
       <ul class="checks">${cause.findings.map((finding) => `
@@ -605,7 +608,7 @@ ${delivery === '' ? '' : `
         <td>${age === undefined
           ? 'n/a'
           : age.status === 'RECURRING'
-            ? `seen ${age.priorRuns} times before`
+            ? `seen ${age.priorWeeks ?? age.priorRuns} weeks before`
             : age.status === 'LIKELY_RECURRING'
               // Hedged in the word, with the strength beside it, so the table never overclaims.
               ? `probably seen before (${Math.round((age.match?.anchorOverlap ?? 0) * 100)}%)`

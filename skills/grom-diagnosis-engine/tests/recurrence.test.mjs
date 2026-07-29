@@ -19,6 +19,7 @@ import { test } from 'node:test';
 import {
   causeFingerprint,
   compareToHistory,
+  readCanonicalHistory,
   readObservations,
   recordRun,
 } from '../lib/recurrence.mjs';
@@ -271,6 +272,110 @@ test('two problems cannot both claim the same ancestor, whatever order they arri
     .sort()
     .join('|');
   assert.equal(shape(forwards), shape(backwards), 'the answer must not depend on cause order');
+});
+
+test('matching maximises the number of defensible ancestors before taking the strongest single pair', () => {
+  /*
+   * Greedy strength-first matching loses a real continuation here. `flexible` can use either old
+   * cause, while `constrained` can only use the first. Taking the perfect flexible-to-first pair
+   * leaves constrained NEW even though a complete two-pair assignment exists.
+   */
+  const paths = project();
+  const shared = ['kpi:a', 'workflow:a', 'workflow:b'];
+  recordRun({
+    paths,
+    runId: 'run_week_one',
+    investigation: investigationOf(
+      cause('old_first', { anchors: [...shared, 'workflow:c', 'workflow:d'] }),
+      cause('old_second', { anchors: [...shared, 'workflow:e', 'workflow:f'] }),
+    ),
+    occurredAt: WEEK_ONE,
+  });
+
+  const flexible = cause('flexible', {
+    mechanisms: ['delivery_failure'],
+    anchors: [...shared, 'workflow:c', 'workflow:d', 'workflow:e', 'workflow:f'],
+  });
+  const constrained = cause('constrained', {
+    mechanisms: ['stage_or_disposition_data_quality'],
+    anchors: [...shared, 'workflow:c', 'workflow:d'],
+  });
+  const observations = readObservations({ paths });
+
+  const comparison = compareToHistory({
+    investigation: investigationOf(flexible, constrained),
+    observations,
+    runId: 'run_week_two',
+    currentOccurredAt: WEEK_TWO,
+  });
+
+  assert.equal(comparison.likelyRecurringCount, 2);
+  assert.equal(
+    new Set(comparison.causes.map((entry) => entry.matchedFingerprint)).size,
+    2,
+    'each current cause must receive a distinct defensible ancestor',
+  );
+});
+
+test('reruns of one closed week collapse to one canonical baseline and never become prior weeks', () => {
+  const paths = project();
+  recordRun({
+    paths,
+    runId: 'run_week_one_draft',
+    investigation: investigationOf(cause('draft')),
+    occurredAt: WEEK_ONE,
+  });
+  recordRun({
+    paths,
+    runId: 'run_week_one_final',
+    investigation: investigationOf(cause('final', { mechanisms: ['delivery_failure'] })),
+    occurredAt: WEEK_ONE,
+  });
+
+  const sameWeek = readCanonicalHistory({ paths, currentOccurredAt: WEEK_ONE });
+  assert.equal(sameWeek.priorWeekCount, 0);
+  assert.deepEqual(sameWeek.observations, []);
+
+  const nextWeek = readCanonicalHistory({ paths, currentOccurredAt: WEEK_TWO });
+  assert.equal(nextWeek.priorWeekCount, 1);
+  assert.deepEqual(
+    [...new Set(nextWeek.observations.map((event) => event.runId))],
+    ['run_week_one_final'],
+    'the latest successful rerun is the single canonical baseline for that closed week',
+  );
+
+  const comparison = compareToHistory({
+    investigation: investigationOf(cause('next')),
+    observations: nextWeek.observations,
+    runId: 'run_week_two',
+    currentOccurredAt: WEEK_TWO,
+  });
+  assert.equal(comparison.priorWeekCount, 1);
+  assert.equal(comparison.priorRunCount, 1, 'legacy field remains an alias for canonical weeks');
+});
+
+test('a canonical quiet week still counts as history even though it has no finding events', () => {
+  const paths = project();
+  recordRun({
+    paths,
+    runId: 'run_quiet_week',
+    investigation: investigationOf(),
+    occurredAt: WEEK_ONE,
+  });
+
+  const history = readCanonicalHistory({ paths, currentOccurredAt: WEEK_TWO });
+  assert.equal(history.priorWeekCount, 1);
+  assert.deepEqual(history.observations, []);
+
+  const comparison = compareToHistory({
+    investigation: investigationOf(cause('new_after_quiet')),
+    observations: history.observations,
+    canonicalWeekCount: history.priorWeekCount,
+    runId: 'run_week_two',
+    currentOccurredAt: WEEK_TWO,
+  });
+  assert.equal(comparison.priorWeekCount, 1);
+  assert.equal(comparison.newCount, 1);
 });
 
 test('this run cannot make its own causes look recurring', () => {

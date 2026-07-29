@@ -55,12 +55,19 @@
  * refusing to look was the same as being careful.
  * ---------------------------------------------------------------------------------------------
  */
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join } from 'node:path';
 import { appendMemoryEvent } from './memory.mjs';
 import { sha256 } from './canonical.mjs';
 
-export const RECURRENCE_SCHEMA = '1.0.0';
+export const RECURRENCE_SCHEMA = '1.1.0';
 
 /** How much anchor overlap makes two causes worth flagging as possibly the same. See the header. */
 const NEAR_MATCH_OVERLAP = 0.6;
@@ -90,6 +97,48 @@ function isPlainObject(value) {
 
 function byteOrder(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function normaliseWeek(value) {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) return null;
+  return new Date(value).toISOString();
+}
+
+function canonicalWeekDirectory(paths) {
+  return typeof paths?.memoryEvents === 'string'
+    ? join(dirname(paths.memoryEvents), 'canonical-weeks')
+    : null;
+}
+
+function canonicalWeekPath(paths, occurredAt) {
+  const directory = canonicalWeekDirectory(paths);
+  const week = normaliseWeek(occurredAt);
+  if (directory === null || week === null) return null;
+  return join(directory, `${sha256({ occurredAt: week }).slice(0, 32)}.json`);
+}
+
+/**
+ * Select one authoritative run for a closed week without rewriting the append-only observation
+ * ledger. Later weeks compare with this projection, never with every diagnostic attempt.
+ */
+export function selectCanonicalWeekRun({ paths, occurredAt, runId } = {}) {
+  const week = normaliseWeek(occurredAt);
+  const destination = canonicalWeekPath(paths, week);
+  if (destination === null || typeof runId !== 'string' || runId.length === 0) {
+    throw Object.assign(new Error('RECURRENCE_CANONICAL_SELECTION_INVALID'), {
+      code: 'RECURRENCE_CANONICAL_SELECTION_INVALID',
+    });
+  }
+  const directory = dirname(destination);
+  mkdirSync(directory, { recursive: true });
+  const record = { schemaVersion: RECURRENCE_SCHEMA, occurredAt: week, runId };
+  const temporary = join(
+    directory,
+    `.${sha256({ occurredAt: week, runId, pid: process.pid }).slice(0, 32)}.tmp`,
+  );
+  writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`);
+  renameSync(temporary, destination);
+  return Object.freeze(record);
 }
 
 /** The discriminating anchors only. Journey stages are near-universal and identify nothing. */
@@ -155,6 +204,7 @@ export function recordRun({ paths, runId, investigation, occurredAt } = {}) {
   if (typeof occurredAt !== 'string' || !Number.isFinite(Date.parse(occurredAt))) {
     throw Object.assign(new Error('RECURRENCE_OCCURRED_AT_INVALID'), { code: 'RECURRENCE_OCCURRED_AT_INVALID' });
   }
+  const week = normaliseWeek(occurredAt);
   const recorded = [];
   for (const cause of investigation.causes ?? []) {
     const fingerprint = causeFingerprint(cause);
@@ -164,7 +214,7 @@ export function recordRun({ paths, runId, investigation, occurredAt } = {}) {
       // rather than a second observation. `appendMemoryEvent` byte-compares and returns `recovered`.
       eventId: `obs_${sha256({ runId, fingerprint }).slice(0, 32)}`,
       type: 'finding_observed',
-      occurredAt,
+      occurredAt: week,
       findingId: cause.causeId,
       findingFingerprint: fingerprint,
       runId,
@@ -176,7 +226,8 @@ export function recordRun({ paths, runId, investigation, occurredAt } = {}) {
     const result = appendMemoryEvent({ paths, event });
     recorded.push({ fingerprint, causeId: cause.causeId, recovered: result.recovered });
   }
-  return { recorded, count: recorded.length };
+  const canonicalWeek = selectCanonicalWeekRun({ paths, occurredAt: week, runId });
+  return { recorded, count: recorded.length, canonicalWeek };
 }
 
 /**
@@ -208,6 +259,68 @@ export function readObservations({ paths } = {}) {
 }
 
 /**
+ * Reduce the append-only ledger to one authoritative run per closed week.
+ *
+ * The current closed week is excluded completely. A legacy week with several runs and no valid
+ * pointer is disclosed as ambiguous and omitted rather than letting filename order choose history.
+ */
+export function readCanonicalHistory({ paths, currentOccurredAt } = {}) {
+  const currentWeek = normaliseWeek(currentOccurredAt);
+  const byWeek = new Map();
+  for (const event of readObservations({ paths })) {
+    const week = normaliseWeek(event.occurredAt);
+    if (week === null || week === currentWeek) continue;
+    if (!byWeek.has(week)) byWeek.set(week, []);
+    byWeek.get(week).push(event);
+  }
+
+  const pointers = new Map();
+  const pointerDirectory = canonicalWeekDirectory(paths);
+  if (pointerDirectory !== null && existsSync(pointerDirectory)) {
+    for (const name of readdirSync(pointerDirectory).sort(byteOrder)) {
+      if (!name.endsWith('.json') || name.startsWith('.')) continue;
+      try {
+        const parsed = JSON.parse(readFileSync(join(pointerDirectory, name), 'utf8'));
+        const week = normaliseWeek(parsed?.occurredAt);
+        if (
+          week !== null
+          && week !== currentWeek
+          && typeof parsed?.runId === 'string'
+          && canonicalWeekPath(paths, week) === join(pointerDirectory, name)
+        ) {
+          pointers.set(week, parsed.runId);
+        }
+      } catch {
+        // A broken projection cannot erase the underlying ledger; legacy fallback below still runs.
+      }
+    }
+  }
+
+  const observations = [];
+  const ambiguousWeeks = [];
+  const canonicalRuns = [];
+  const weeks = [...new Set([...byWeek.keys(), ...pointers.keys()])].sort(byteOrder);
+  for (const week of weeks) {
+    const events = byWeek.get(week) ?? [];
+    const runIds = [...new Set(events.map((event) => event.runId))].sort(byteOrder);
+    const selectedRunId = pointers.get(week) ?? (runIds.length === 1 ? runIds[0] : null);
+    if (selectedRunId === null) {
+      ambiguousWeeks.push(Object.freeze({ occurredAt: week, runIds: Object.freeze(runIds) }));
+      continue;
+    }
+    canonicalRuns.push(Object.freeze({ occurredAt: week, runId: selectedRunId }));
+    observations.push(...events.filter((event) => event.runId === selectedRunId));
+  }
+
+  return Object.freeze({
+    observations: Object.freeze(observations),
+    canonicalRuns: Object.freeze(canonicalRuns),
+    priorWeekCount: canonicalRuns.length,
+    ambiguousWeeks: Object.freeze(ambiguousWeeks),
+  });
+}
+
+/**
  * STEP 2. This week against every week before it.
  *
  * Three answers, and the third is the one nobody currently gets:
@@ -221,10 +334,20 @@ export function readObservations({ paths } = {}) {
  * because the evidence moved. Only a `verification_result` in the ledger settles it, and nothing in
  * this product writes one yet.
  */
-export function compareToHistory({ investigation, observations, runId } = {}) {
+export function compareToHistory({
+  investigation,
+  observations,
+  runId,
+  currentOccurredAt,
+  canonicalWeekCount = null,
+  ambiguousWeeks = [],
+} = {}) {
+  const currentWeek = normaliseWeek(currentOccurredAt);
+  const history = (observations ?? []).filter((event) => (
+    event.runId !== runId && (currentWeek === null || normaliseWeek(event.occurredAt) !== currentWeek)
+  ));
   const priorRuns = new Map();
-  for (const event of observations ?? []) {
-    if (event.runId === runId) continue;
+  for (const event of history) {
     if (!priorRuns.has(event.findingFingerprint)) priorRuns.set(event.findingFingerprint, []);
     priorRuns.get(event.findingFingerprint).push(event);
   }
@@ -249,7 +372,7 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
           fingerprint: otherFingerprint,
           firstSeenAt: events[0].occurredAt,
           lastSeenAt: events[events.length - 1].occurredAt,
-          priorRuns: [...new Set(events.map((event) => event.runId))].length,
+          priorRuns: [...new Set(events.map((event) => event.occurredAt))].length,
           anchorOverlap: Number(containment.toFixed(2)),
           similarity: Number(jaccard.toFixed(2)),
           sharedAnchors: shared,
@@ -277,31 +400,53 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
    * also makes the absent list lie: replayed against the real history, four earlier problems were
    * claimed twice while ten were reported as gone with their descendants sitting in the same table.
    *
-   * The assignment is done across all pairs at once, strongest first, rather than cause by cause.
-   * Walking the causes in array order would let whichever happened to be first take an ancestor that
-   * fits a later one better, so the same evidence could produce a different answer depending on the
-   * order the experts' findings were grouped. These artefacts are hashed and byte-compared, so an
-   * order-dependent result is a correctness problem and not only an aesthetic one.
+   * The assignment maximises how many defensible continuations survive, then uses pair strength and
+   * stable ids to break ties. Walking causes greedily lets a flexible cause take the only ancestor a
+   * constrained one can use. These artefacts are hashed and byte-compared, so an order-dependent
+   * result is a correctness problem and not only an aesthetic one.
    */
-  const assignable = [];
+  const assignableByCause = new Map();
   for (const entry of scored) {
     if (entry.prior.length > 0) continue;
     for (const candidate of entry.candidates) {
       if (candidate.similarity >= LIKELY_JACCARD && candidate.sharedAnchors >= LIKELY_SHARED_ANCHORS) {
-        assignable.push({ causeId: entry.cause.causeId, candidate });
+        if (!assignableByCause.has(entry.cause.causeId)) assignableByCause.set(entry.cause.causeId, []);
+        assignableByCause.get(entry.cause.causeId).push(candidate);
       }
     }
   }
-  assignable.sort((left, right) => (
-    right.candidate.similarity - left.candidate.similarity
-    || right.candidate.sharedAnchors - left.candidate.sharedAnchors
-    || byteOrder(left.causeId, right.causeId)
-    || byteOrder(left.candidate.fingerprint, right.candidate.fingerprint)
-  ));
+
+  /*
+   * Maximum-cardinality bipartite matching. Causes with only one defensible ancestor go first, and an
+   * augmenting path may move an earlier assignment when that lets both causes retain history. This
+   * fixes the greedy failure where one flexible perfect match consumed the only ancestor available to
+   * a constrained second cause.
+   */
   const assigned = new Map();
-  for (const { causeId, candidate } of assignable) {
-    if (assigned.has(causeId) || claimedByLikely.has(candidate.fingerprint)) continue;
-    assigned.set(causeId, candidate);
+  const ownerByFingerprint = new Map();
+  const orderedCauseIds = [...assignableByCause.entries()]
+    .sort(([leftId, left], [rightId, right]) => (
+      left.length - right.length
+      || right[0].similarity - left[0].similarity
+      || right[0].sharedAnchors - left[0].sharedAnchors
+      || byteOrder(leftId, rightId)
+    ))
+    .map(([causeId]) => causeId);
+  const augment = (causeId, visited) => {
+    for (const candidate of assignableByCause.get(causeId) ?? []) {
+      if (visited.has(candidate.fingerprint)) continue;
+      visited.add(candidate.fingerprint);
+      const owner = ownerByFingerprint.get(candidate.fingerprint);
+      if (owner === undefined || augment(owner, visited)) {
+        ownerByFingerprint.set(candidate.fingerprint, causeId);
+        assigned.set(causeId, candidate);
+        return true;
+      }
+    }
+    return false;
+  };
+  for (const causeId of orderedCauseIds) augment(causeId, new Set());
+  for (const candidate of assigned.values()) {
     claimedByLikely.add(candidate.fingerprint);
   }
 
@@ -312,7 +457,8 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
         fingerprint,
         status: 'RECURRING',
         firstSeenAt: prior[0].occurredAt,
-        priorRuns: [...new Set(prior.map((event) => event.runId))].length,
+        priorRuns: [...new Set(prior.map((event) => event.occurredAt))].length,
+        priorWeeks: [...new Set(prior.map((event) => event.occurredAt))].length,
         matchedOn: 'fingerprint',
         nearMatches: [],
       };
@@ -331,6 +477,7 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
       status: isLikely ? 'LIKELY_RECURRING' : 'NEW',
       firstSeenAt: isLikely ? best.firstSeenAt : null,
       priorRuns: isLikely ? best.priorRuns : 0,
+      priorWeeks: isLikely ? best.priorRuns : 0,
       matchedOn: isLikely ? 'anchor_overlap' : null,
       ...(isLikely ? { matchedFingerprint: best.fingerprint, match: best } : {}),
       nearMatches: candidates,
@@ -343,15 +490,24 @@ export function compareToHistory({ investigation, observations, runId } = {}) {
       fingerprint,
       firstSeenAt: events[0].occurredAt,
       lastSeenAt: events[events.length - 1].occurredAt,
-      priorRuns: [...new Set(events.map((event) => event.runId))].length,
+      priorRuns: [...new Set(events.map((event) => event.occurredAt))].length,
+      priorWeeks: [...new Set(events.map((event) => event.occurredAt))].length,
     }))
     .sort((left, right) => byteOrder(left.lastSeenAt, right.lastSeenAt) || byteOrder(left.fingerprint, right.fingerprint));
 
   return {
     schemaVersion: RECURRENCE_SCHEMA,
-    // Zero prior runs is the normal state on a first run, and it is stated rather than left to be
+    // Zero prior weeks is the normal state on a first run, and it is stated rather than left to be
     // inferred from an empty comparison.
-    priorRunCount: [...new Set((observations ?? []).filter((e) => e.runId !== runId).map((e) => e.runId))].length,
+    priorWeekCount: Number.isInteger(canonicalWeekCount)
+      ? canonicalWeekCount
+      : [...new Set(history.map((event) => normaliseWeek(event.occurredAt)))].length,
+    // Compatibility for renderers and archived JSON written before 1.1.0. It now means canonical
+    // weekly baselines, not raw attempts.
+    priorRunCount: Number.isInteger(canonicalWeekCount)
+      ? canonicalWeekCount
+      : [...new Set(history.map((event) => normaliseWeek(event.occurredAt)))].length,
+    ambiguousWeeks,
     causes,
     absent,
     newCount: causes.filter((cause) => cause.status === 'NEW').length,

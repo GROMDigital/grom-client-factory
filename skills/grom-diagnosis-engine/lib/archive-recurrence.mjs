@@ -67,13 +67,27 @@ export function joinable(claimed) {
  * Returns empty buckets and `concluded: false` whenever the file is not joinable, so a caller that
  * forgets to check `joinable` still cannot accidentally report anything as fixed.
  */
-export function compareWeeks({ claimed, thisWeeksFingerprints }) {
+export function compareWeeks({ claimed, thisWeeksFingerprints, recurrence }) {
   const verdict = joinable(claimed);
   const prints = new Set(thisWeeksFingerprints ?? []);
   if (!verdict.ok) {
-    return { concluded: false, verdict, acted: [], gone: [], stillHere: [], untouchedGone: [] };
+    return {
+      concluded: false,
+      verdict,
+      acted: [],
+      gone: [],
+      stillHere: [],
+      stillHereLikely: [],
+      untouchedGone: [],
+    };
   }
-  const present = (value) => value.print !== '' && prints.has(value.print);
+  const likelyDescendants = new Set((recurrence?.causes ?? [])
+    .filter((cause) => cause.status === 'LIKELY_RECURRING')
+    .map((cause) => cause.matchedFingerprint)
+    .filter((fingerprint) => typeof fingerprint === 'string'));
+  const presentExactly = (value) => value.print !== '' && prints.has(value.print);
+  const presentLikely = (value) => value.print !== '' && likelyDescendants.has(value.print);
+  const present = (value) => presentExactly(value) || presentLikely(value);
   const entries = [...claimed.entries()];
   const acted = entries.filter(([, value]) => /^DONE/u.test(value.status));
   return {
@@ -84,6 +98,8 @@ export function compareWeeks({ claimed, thisWeeksFingerprints }) {
     gone: acted.filter(([, value]) => !present(value)),
     // Changed, and still found. The fix did not work or did not address the cause.
     stillHere: acted.filter(([, value]) => present(value)),
+    // Kept separate so the archive can say this is a probable continuation, not an exact identity.
+    stillHereLikely: acted.filter(([, value]) => !presentExactly(value) && presentLikely(value)),
     // Never actioned, and gone anyway. Not a fix; something else moved.
     untouchedGone: entries.filter(([, value]) => !/^DONE/u.test(value.status) && !present(value)),
   };

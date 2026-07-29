@@ -37,7 +37,7 @@
  */
 import { canonicalJson, sha256 } from './canonical.mjs';
 
-const ROOT_CAUSE_SCHEMA = '1.0.0';
+const ROOT_CAUSE_SCHEMA = '1.1.0';
 
 /** The nine rival families `lib/mechanisms.mjs` fixes. A lane finding must name exactly one. */
 export const MECHANISM_FAMILIES = Object.freeze([
@@ -363,7 +363,21 @@ function groupByAnchor(findings) {
     });
   };
 
-  return mergeByOverlap(split(findings, hubs), limit);
+  /*
+   * A shared account object proves relationship, not mechanism identity. Price copy and workflow
+   * execution can both fail on the same nurture workflow; combining them creates one package whose
+   * evidence supports two different interventions. Split by mechanism first, then retain the
+   * relationship explicitly after cause ids exist.
+   */
+  const byMechanism = new Map();
+  for (const finding of findings) {
+    if (!byMechanism.has(finding.mechanism)) byMechanism.set(finding.mechanism, []);
+    byMechanism.get(finding.mechanism).push(finding);
+  }
+  const separated = [...byMechanism.entries()]
+    .sort(([left], [right]) => byteOrder(left, right))
+    .flatMap(([, group]) => split(group, hubs));
+  return mergeByOverlap(separated, limit);
 }
 
 /**
@@ -544,6 +558,7 @@ export function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
   const causes = groupByAnchor(findings).map((group) => {
     const ordered = [...group].sort((left, right) => byteOrder(left.findingId, right.findingId));
     const scored = scoreCause(ordered);
+    const confidence = confidenceForStrength(scored.evidenceStrength);
     return {
       /*
        * Content-derived, so the same cause carries the same id across weeks and the verification
@@ -568,9 +583,17 @@ export function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
       // is information, not something to average away.
       mechanisms: [...new Set(ordered.map((finding) => finding.mechanism))].sort(byteOrder),
       mechanismContested: new Set(ordered.map((finding) => finding.mechanism)).size > 1,
+      relatedCauseIds: [],
       corroboratingLanes: scored.corroboratingLanes,
-      confidence: confidenceForStrength(scored.evidenceStrength),
+      confidence,
       unresolvedMaterialAlternatives: scored.unresolvedMaterial,
+      // C3 means the evidence is strong enough for a monitored implementation whose acceptance test
+      // can still refute it. At C1/C2, an open material alternative can change the intervention and
+      // must be settled before the account is touched.
+      implementationStatus: scored.unresolvedMaterial > 0 && confidence !== 'C3'
+        ? 'VERIFY_FIRST'
+        : 'READY_TO_IMPLEMENT',
+      verificationChecks: ordered.map((finding) => finding.discriminatingTest),
       rankScore: scored.score,
       rankParts: scored.parts,
       findings: ordered.map((finding) => ({
@@ -587,6 +610,20 @@ export function investigateRootCause({ laneAnalyses, briefsHash } = {}) {
       })),
     };
   });
+
+  for (const cause of causes) {
+    const anchors = new Set(cause.anchors.filter((anchor) => (
+      anchor.startsWith('kpi:') || anchor.startsWith('workflow:')
+    )));
+    cause.relatedCauseIds = causes
+      .filter((other) => (
+        other.causeId !== cause.causeId
+        && !other.mechanisms.some((mechanism) => cause.mechanisms.includes(mechanism))
+        && other.anchors.some((anchor) => anchors.has(anchor))
+      ))
+      .map((other) => other.causeId)
+      .sort(byteOrder);
+  }
 
   // Rank descending, then by causeId so ties are stable across runs and machines.
   causes.sort((left, right) => right.rankScore - left.rankScore || byteOrder(left.causeId, right.causeId));

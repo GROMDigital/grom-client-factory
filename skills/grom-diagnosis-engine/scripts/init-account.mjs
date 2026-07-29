@@ -34,6 +34,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { initialInternalAuditConfig } from '../lib/init-account-config.mjs';
 
 const SKILL = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_WORKER = 'https://ghl-mcp-server.xanderjohnrazonroque.workers.dev/mcp';
@@ -216,21 +217,11 @@ const config = {
   credentialRef: { kind: 'environment', name: flags['credential-env'] },
   transport: { kind: 'ghl-native-streamable-http', url: worker, credentialHeaderName: 'X-GHL-Token' },
   capabilities: CAPABILITIES,
-  internalAudit: {
-    transport: {
-      kind: 'ghl-internal-audit-stdio',
-      serverPath: discoverAuditServerPaths()[0],
-      tokenFilePath: flags['token-file'] ?? null,
-    },
+  internalAudit: initialInternalAuditConfig({
+    serverPath: discoverAuditServerPaths()[0],
+    tokenFilePath: flags['token-file'] ?? null,
     companyId,
-    // Empty on a first run: a runtime window is expensive and the busiest sequences are unknown
-    // until a roster exists. A workflow without one records RUNTIME_NOT_REQUESTED, which is honest.
-    runtimeWorkflowIds: [],
-    budgets: { maxDefinitions: 60, maxRuntimeWindows: 3, maxLogPages: 30 },
-    emailCopy: true,
-    // The other half of the conversation. See `lib/adapters/conversation-transcripts.mjs`.
-    conversationTranscripts: true,
-  },
+  }),
   cutoff,
   timezone,
   rawEvidenceRetentionDays: 7,

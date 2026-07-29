@@ -66,7 +66,7 @@ import { buildAnalysisBriefs } from './analysis-brief.mjs';
 import { canonicalJson, sha256 } from './canonical.mjs';
 import { ANALYSTS, buildAllAnalystPrompts } from './lane-analysts.mjs';
 import { buildAgentReviewPrompts, buildWorkflowReviewPrompts } from './object-review.mjs';
-import { compareToHistory, readObservations, recordRun } from './recurrence.mjs';
+import { compareToHistory, readCanonicalHistory, recordRun } from './recurrence.mjs';
 import { LANES, investigateRootCause, validateLaneFinding } from './root-cause.mjs';
 import { renderReportPage } from './report-page.mjs';
 import { buildWorkOrderPrompt, renderWorkOrder, validateWorkOrder } from './work-order.mjs';
@@ -605,19 +605,25 @@ export function renderInvestigation({ index, investigation, findings, rejected, 
       `\`${cause.causeId}\` · confidence **${cause.confidence}** · rank score ${cause.rankScore}`,
       `· supported by ${cause.corroboratingLanes.length} of 3 lanes `
         + `(${cause.corroboratingLanes.join(', ')})`,
+      `· next action **${cause.implementationStatus ?? 'READY_TO_IMPLEMENT'}**`,
       '',
       ...causeHistory(history.get(cause.causeId)),
       `**Mechanism:** ${cause.mechanisms.join(', ')}`
         + `${cause.mechanismContested ? ' (the lanes DISAGREE on the family, which is itself information)' : ''}`,
       '',
+      ...((cause.relatedCauseIds ?? []).length === 0 ? [] : [
+        `**Related causes with a different mechanism:** ${cause.relatedCauseIds.map((id) => `\`${id}\``).join(', ')}`,
+        '',
+      ]),
       `**Anchored to:** ${cause.anchors.join(', ')}`,
       '',
     );
     if (cause.unresolvedMaterialAlternatives > 0) {
       lines.push(
         `**${plural(cause.unresolvedMaterialAlternatives, 'material alternative is', 'material alternatives are')}`
-          + ' unresolved.** This cause is ranked lower for it, and resolving them is cheaper than'
-          + ' acting on it.',
+          + (cause.implementationStatus === 'VERIFY_FIRST'
+            ? ' unresolved.** This cause is ranked lower for it, and the verification check must land before implementation.'
+            : ' unresolved.** C3 evidence permits a monitored implementation, but its acceptance check must be able to refute the diagnosis.'),
         '',
       );
     }
@@ -694,12 +700,12 @@ export function renderBacklog({ index, investigation, recurrence = null }) {
     const entry = byCauseId.get(causeId);
     if (!entry) return recurrence?.unavailable ? '?' : 'new';
     if (entry.status === 'RECURRING') {
-      return `${plural(entry.priorRuns, 'run', 'runs')} before this`;
+      return `${plural(entry.priorWeeks ?? entry.priorRuns, 'week', 'weeks')} before this`;
     }
     // An opinion, and it says so. The number is the share of this problem's anchors the earlier one
     // already covered, so a reader can overrule it without opening the investigation.
     if (entry.status === 'LIKELY_RECURRING') {
-      return `likely ${plural(entry.priorRuns, 'run', 'runs')} before this (${Math.round((entry.match?.anchorOverlap ?? 0) * 100)}% match)`;
+      return `likely ${plural(entry.priorWeeks ?? entry.priorRuns, 'week', 'weeks')} before this (${Math.round((entry.match?.anchorOverlap ?? 0) * 100)}% match)`;
     }
     return entry.nearMatches.length > 0 ? 'new (similar seen before)' : 'new';
   };
@@ -715,6 +721,7 @@ export function renderBacklog({ index, investigation, recurrence = null }) {
         : held
     ), 'NONE');
     return `| ${position + 1} | ${cause.findings[0].title.replaceAll('|', '\\|')} `
+      + `| ${cause.implementationStatus === 'VERIFY_FIRST' ? 'verify first' : 'implement'} `
       + `| ${age(cause.causeId)} | ${cause.confidence} | ${cause.corroboratingLanes.length}/3 `
       + `| ${worst('commercialImpact')} `
       + `| ${worst('implementationEffort')} | ${worst('risk')} | ${cause.rankScore} `
@@ -727,9 +734,9 @@ export function renderBacklog({ index, investigation, recurrence = null }) {
     'PRODUCT-SPEC.md, with effort and risk counting against.',
     '',
     ...historyLine(recurrence),
-    '| # | Cause | Age | Confidence | Lanes | Impact | Effort | Risk | Score | Id |',
-    '|---|---|---|---|---|---|---|---|---|---|',
-    ...(rows.length === 0 ? ['| - | (no causes) | - | - | - | - | - | - | - | - |'] : rows),
+    '| # | Cause | Next action | Age | Confidence | Lanes | Impact | Effort | Risk | Score | Id |',
+    '|---|---|---|---|---|---|---|---|---|---|---|',
+    ...(rows.length === 0 ? ['| - | (no causes) | - | - | - | - | - | - | - | - | - |'] : rows),
     '',
     ...absentSection(recurrence),
   ].join('\n');
@@ -748,7 +755,7 @@ function causeHistory(entry) {
   if (entry.status === 'RECURRING') {
     return [
       `**Seen before.** First recorded ${entry.firstSeenAt}, and it has appeared in `
-        + `${plural(entry.priorRuns, 'earlier run', 'earlier runs')}. It has survived every week since.`,
+        + `${plural(entry.priorWeeks ?? entry.priorRuns, 'earlier week', 'earlier weeks')}.`,
       '',
     ];
   }
@@ -788,7 +795,8 @@ function historyLine(recurrence) {
       '',
     ];
   }
-  if (recurrence.priorRunCount === 0) {
+  const priorWeekCount = recurrence.priorWeekCount ?? recurrence.priorRunCount;
+  if (priorWeekCount === 0) {
     return [
       '> This is the FIRST recorded run for this account, so every problem below is new by',
       '> definition and Age carries no information yet. From the next run it will.',
@@ -797,13 +805,19 @@ function historyLine(recurrence) {
   }
   const likely = recurrence.likelyRecurringCount ?? 0;
   return [
-    `> Compared against ${plural(recurrence.priorRunCount, 'earlier run', 'earlier runs')}: `
+    `> Compared against ${plural(priorWeekCount, 'earlier week', 'earlier weeks')}: `
       + `${recurrence.newCount} new, ${recurrence.recurringCount} seen before`
       + `${likely > 0 ? `, ${likely} probably seen before` : ''}.`
       + (likely > 0
         ? ' A "probably" is a match on the workflows and metrics a problem points at rather than an'
           + ' exact one, and each says how strong it is.'
         : ''),
+    ...(recurrence.ambiguousWeeks?.length > 0
+      ? [
+          '',
+          `> ${plural(recurrence.ambiguousWeeks.length, 'earlier week was', 'earlier weeks were')} omitted because multiple runs exist and no canonical baseline was selected.`,
+        ]
+      : []),
     '',
   ];
 }
@@ -825,7 +839,7 @@ function absentSection(recurrence) {
     'expert framed it differently, when its finding was refused, or when the evidence moved. Nothing',
     'here has been verified as fixed.',
     '',
-    '| Fingerprint | First seen | Last seen | Runs it appeared in |',
+    '| Fingerprint | First seen | Last seen | Weeks it appeared in |',
     '|---|---|---|---|',
     ...recurrence.absent.map(({ fingerprint, firstSeenAt, lastSeenAt, priorRuns }) => (
       `| \`${fingerprint.slice(0, 12)}\` | ${firstSeenAt} | ${lastSeenAt} | ${priorRuns} |`
@@ -878,6 +892,7 @@ function rewritesFor({ cause, reviews }) {
 export function renderSolutionPackage({ index, cause, findings, reviews = [] }) {
   const byId = new Map(findings.map((finding) => [`${finding.lane}:${finding.findingId}`, finding]));
   const rewrites = rewritesFor({ cause, reviews });
+  const verifyFirst = cause.implementationStatus === 'VERIFY_FIRST';
   const lines = [
     `# Solution package: ${cause.findings[0].title}`,
     '',
@@ -886,6 +901,11 @@ export function renderSolutionPackage({ index, cause, findings, reviews = [] }) 
     '',
     'FOR HUMAN IMPLEMENTATION AND APPROVAL. Nothing here is applied by this tool.',
     '',
+    ...(verifyFirst ? [
+      '🔴 **VERIFY FIRST.** A material competing explanation is still unresolved. Do not implement',
+      'the proposed change until the checks below support this diagnosis.',
+      '',
+    ] : []),
     '## What is wrong',
     '',
     ...cause.findings.flatMap((summary) => [
@@ -894,13 +914,22 @@ export function renderSolutionPackage({ index, cause, findings, reviews = [] }) 
       byId.get(`${summary.lane}:${summary.findingId}`)?.analysis ?? '(analysis not carried)',
       '',
     ]),
-    '## What to change',
+    verifyFirst ? '## Proposed change if verified' : '## What to change',
     '',
     ...cause.findings.flatMap((summary) => [`**${summary.lane}:**`, '', summary.fix, '']),
     '## Where it applies',
     '',
     ...bulleted(cause.anchors),
     '',
+    ...((cause.relatedCauseIds ?? []).length === 0 ? [] : [
+      '## Related diagnoses, kept separate',
+      '',
+      'These causes touch at least one of the same account objects but require a different kind of',
+      'intervention. Coordinate the work; do not merge their evidence or fixes.',
+      '',
+      ...bulleted(cause.relatedCauseIds),
+      '',
+    ]),
     '## How we will know it worked',
     '',
     ...cause.findings.flatMap((summary) => [
@@ -976,14 +1005,22 @@ export function runInvestigation({ paths, runId, answers } = {}) {
    */
   let recurrence = null;
   try {
-    const observations = readObservations({ paths });
-    recurrence = compareToHistory({ investigation, observations, runId });
+    const occurredAt = index.collectionWindow?.to ?? briefsIndex.collectionWindow?.to;
+    const history = readCanonicalHistory({ paths, currentOccurredAt: occurredAt });
+    recurrence = compareToHistory({
+      investigation,
+      observations: history.observations,
+      runId,
+      currentOccurredAt: occurredAt,
+      canonicalWeekCount: history.priorWeekCount,
+      ambiguousWeeks: history.ambiguousWeeks,
+    });
     recordRun({
       paths,
       runId,
       investigation,
       // The end of the window this evidence covers, never the clock. See `recordRun`.
-      occurredAt: index.collectionWindow?.to ?? briefsIndex.collectionWindow?.to,
+      occurredAt,
     });
   } catch (error) {
     recurrence = { unavailable: error?.code ?? 'RECURRENCE_FAILED' };

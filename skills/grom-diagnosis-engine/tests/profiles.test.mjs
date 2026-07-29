@@ -92,6 +92,19 @@ test('Grom contracts keep acquisition and onboarding denominators separate', () 
   assert.equal(onboarding[0].fromStage, 'won_or_paid');
 });
 
+test('Grom Hana caveat preserves attribution and keeps the GHL send path auditable', () => {
+  const grom = loadProfile('grom_internal');
+  const hana = grom.situation.knownDataCaveats.find((caveat) => caveat.includes('Hana'));
+  assert.ok(hana, 'the Grom account facts must retain the Hana evidence boundary');
+  assert.match(hana, /Owner confirmed 2026-07-28/u);
+  assert.match(hana, /2026-07-29 GHL reread/u);
+  assert.match(hana, /UK GROM Daily Update - Hana/u);
+  assert.match(hana, /GHL workflow itself is IN SCOPE/u);
+  assert.match(hana, /Portal conversations.*outside this audit/u);
+  assert.match(hana, /actual portal-supplied subject and body cannot be judged from GHL alone/u);
+  assert.doesNotMatch(hana, /Do not treat the absence of Hana activity inside GHL/u);
+});
+
 test('collection budgets cap every required collection dimension and checkpoint incomplete scopes', () => {
   const budgets = loadCollectionBudgets();
   assert.equal(budgets.exhaustionPolicy, 'checkpoint_scope_incomplete');

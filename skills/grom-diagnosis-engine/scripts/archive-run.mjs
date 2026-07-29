@@ -399,9 +399,16 @@ if (previous) {
   const comparison = compareWeeks({
     claimed,
     thisWeeksFingerprints: causes.map((c) => causeFingerprint(c)),
+    recurrence: investigationRecord.recurrence,
   });
   const priorHadFingerprints = comparison.concluded;
-  const { acted, gone, stillHere, untouchedGone } = comparison;
+  const {
+    acted,
+    gone,
+    stillHere,
+    stillHereLikely,
+    untouchedGone,
+  } = comparison;
 
   writeFileSync(join(destination, 'LAST-WEEK.md'), `# Against last week (${previous})
 
@@ -433,7 +440,11 @@ ${gone.length === 0 ? '_none_' : gone.map(([id, v]) => `- \`${id}\`${v.did ? ` �
 
 🔴 **The fix did not work, or did not address the cause.** Read the package again before doing more.
 
-${stillHere.length === 0 ? '_none_' : stillHere.map(([id, v]) => `- \`${id}\`${v.did ? ` — ${v.did}` : ''}`).join('\n')}
+${stillHere.length === 0 ? '_none_' : stillHere.map(([id, v]) => `- \`${id}\`${v.did ? ` — ${v.did}` : ''}${
+    stillHereLikely.some(([likelyId]) => likelyId === id)
+      ? ' — likely recurring by anchor overlap; verify the match before changing the fix'
+      : ''
+  }`).join('\n')}
 `}
 ## Gone, but nobody changed anything — ${untouchedGone.length}
 
