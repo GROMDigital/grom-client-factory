@@ -949,9 +949,11 @@ function validatePublicTransport(transport) {
  * which can be a secret or an argv, and which refuses to name anything but the plugin's read-only
  * audit-server bundle inside the plugin cache.
  *
- * `runtimeWorkflowIds` is CONFIGURATION and not a default, because which workflows carry the
- * revenue path is an account fact. A runtime window is expensive enough that guessing wrong costs
- * the run, so nothing in this repository guesses.
+ * `runtimeWorkflowIds` NARROWS runtime to a named subset, and naming that subset is CONFIGURATION,
+ * because which workflows carry the revenue path is an account fact. OMITTING it means every
+ * workflow, which is not a guess but the refusal to make one. See the header of
+ * `lib/adapters/internal-audit-collector.mjs`: a hand-maintained per-account id list does not
+ * survive a second account, and its absence silently defaulted every account to NO runtime at all.
  */
 function validatePublicInternalAudit(value) {
   if (!isPlainObject(value)) publicConfigError();
@@ -1798,7 +1800,9 @@ function buildInternalAuditAdapter({
           rail: createInternalAuditAdapter({ client, expectedLocationId }),
           boundLocationId: expectedLocationId,
           companyId: internalAudit.companyId,
-          runtimeWorkflowIds: internalAudit.runtimeWorkflowIds ?? [],
+          // `?? null`, NOT `?? []`. Coercing absent to the empty array is what made "no runtime at
+          // all" the silent default for every account that never wrote a list.
+          runtimeWorkflowIds: internalAudit.runtimeWorkflowIds ?? null,
           budgets: internalAudit.budgets ?? {},
           runtime,
         });

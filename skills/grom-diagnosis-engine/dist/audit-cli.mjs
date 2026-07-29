@@ -44163,7 +44163,7 @@ function createInternalAuditCollector({
   rail,
   boundLocationId,
   companyId = void 0,
-  runtimeWorkflowIds = [],
+  runtimeWorkflowIds = null,
   budgets = {},
   runtime = {}
 } = {}) {
@@ -44203,8 +44203,9 @@ function createInternalAuditCollector({
       for (const warning of statedWarnings(roster)) limitations.add(warning.code);
       const definitionIds = ids.slice(0, budget.maxDefinitions);
       if (ids.length > definitionIds.length) limitations.add("DEFINITION_BUDGET_EXHAUSTED");
-      const requestedRuntime = [...new Set(runtimeWorkflowIds)].sort(byteOrder5);
-      const unknownRuntime = requestedRuntime.filter((id) => !ids.includes(id));
+      const runtimeCoversAll = runtimeWorkflowIds === null || runtimeWorkflowIds === void 0;
+      const requestedRuntime = runtimeCoversAll ? [...definitionIds] : [...new Set(runtimeWorkflowIds)].sort(byteOrder5);
+      const unknownRuntime = runtimeCoversAll ? [] : requestedRuntime.filter((id) => !ids.includes(id));
       if (unknownRuntime.length > 0) limitations.add("RUNTIME_WORKFLOW_NOT_IN_ROSTER");
       const runtimeIds = requestedRuntime.filter((id) => ids.includes(id)).slice(0, budget.maxRuntimeWindows);
       if (requestedRuntime.filter((id) => ids.includes(id)).length > runtimeIds.length) {
@@ -44300,8 +44301,18 @@ var init_internal_audit_collector = __esm({
       rosterMaxPages: 20,
       /** Definitions read per run. Cheap, one call each. */
       maxDefinitions: 60,
-      /** Runtime windows read per run. Expensive; see the module header. */
-      maxRuntimeWindows: 5,
+      /**
+       * Runtime windows read per run. This is the ONLY brake once runtime covers every workflow by
+       * default, so it is sized to match `maxDefinitions` rather than to a guess about which workflows
+       * matter. Truncation is disclosed as `RUNTIME_BUDGET_EXHAUSTED`.
+       *
+       * MEASURED 2026-07-29, because "expensive" was folklore worth checking: a runtime response is
+       * ~147KB on the wire but reaches the brief as UNDER 1KB, and three quarters of that payload is
+       * the workflow definition and the enrollment walk. Putting runtime on all 16 SK Skin workflows
+       * grows the workflow brief 33% (50KB to 66KB). The real cost is wall-clock and API load during
+       * collection, NOT prompt size, and `maxLogPages` is the lever for that.
+       */
+      maxRuntimeWindows: 60,
       /**
        * Passed through to the runtime window, well under the server's own ceilings.
        *
@@ -52550,7 +52561,9 @@ function buildInternalAuditAdapter({
           rail: createInternalAuditAdapter({ client, expectedLocationId }),
           boundLocationId: expectedLocationId,
           companyId: internalAudit.companyId,
-          runtimeWorkflowIds: internalAudit.runtimeWorkflowIds ?? [],
+          // `?? null`, NOT `?? []`. Coercing absent to the empty array is what made "no runtime at
+          // all" the silent default for every account that never wrote a list.
+          runtimeWorkflowIds: internalAudit.runtimeWorkflowIds ?? null,
           budgets: internalAudit.budgets ?? {},
           runtime
         });

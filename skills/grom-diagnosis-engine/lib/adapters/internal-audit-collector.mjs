@@ -52,8 +52,18 @@ export const DEFAULT_BUDGETS = Object.freeze({
   rosterMaxPages: 20,
   /** Definitions read per run. Cheap, one call each. */
   maxDefinitions: 60,
-  /** Runtime windows read per run. Expensive; see the module header. */
-  maxRuntimeWindows: 5,
+  /**
+   * Runtime windows read per run. This is the ONLY brake once runtime covers every workflow by
+   * default, so it is sized to match `maxDefinitions` rather than to a guess about which workflows
+   * matter. Truncation is disclosed as `RUNTIME_BUDGET_EXHAUSTED`.
+   *
+   * MEASURED 2026-07-29, because "expensive" was folklore worth checking: a runtime response is
+   * ~147KB on the wire but reaches the brief as UNDER 1KB, and three quarters of that payload is
+   * the workflow definition and the enrollment walk. Putting runtime on all 16 SK Skin workflows
+   * grows the workflow brief 33% (50KB to 66KB). The real cost is wall-clock and API load during
+   * collection, NOT prompt size, and `maxLogPages` is the lever for that.
+   */
+  maxRuntimeWindows: 60,
   /**
    * Passed through to the runtime window, well under the server's own ceilings.
    *
@@ -148,15 +158,26 @@ function statedWarnings(result) {
 /**
  * Build the adapter `collectInternalEvidencePhase` expects.
  *
- * `rail` is the thin adapter from `internal-audit.mjs`. `runtimeWorkflowIds` is the opt-in list of
- * workflows to spend a runtime window on; it is CONFIGURATION, because which workflows carry the
+ * `rail` is the thin adapter from `internal-audit.mjs`. `runtimeWorkflowIds` NARROWS which workflows
+ * spend a runtime window; naming a subset is CONFIGURATION, because which workflows carry the
  * revenue path is an account fact and nothing in this module may guess it.
+ *
+ * 🔴 ABSENT (null/undefined) means EVERY workflow in the roster, bounded by `maxRuntimeWindows`.
+ * Covering all of them is not this module guessing which ones matter, it is DECLINING to guess,
+ * which is the safe direction. The old default was `[]`, meaning none, and it made the empty list
+ * the silent default for every account: the 2026-07-27 SK Skin run read all 16 definitions and zero
+ * runtime windows, so every finding about how a workflow BEHAVES was inferred from how it is BUILT.
+ * A per-account hand-maintained id list does not survive contact with a second account, let alone a
+ * tenth: onboarding gains a manual step nobody remembers, and a workflow added later silently gets
+ * no runtime, which reads exactly like a workflow nobody used.
+ *
+ * An explicit array still wins, and an explicit `[]` still means none.
  */
 export function createInternalAuditCollector({
   rail,
   boundLocationId,
   companyId = undefined,
-  runtimeWorkflowIds = [],
+  runtimeWorkflowIds = null,
   budgets = {},
   runtime = {},
 } = {}) {
@@ -214,10 +235,20 @@ export function createInternalAuditCollector({
       const definitionIds = ids.slice(0, budget.maxDefinitions);
       if (ids.length > definitionIds.length) limitations.add('DEFINITION_BUDGET_EXHAUSTED');
 
-      // Runtime is opt-in, and an id asked for that the roster does not contain is a
-      // configuration error worth naming rather than a silent no-op.
-      const requestedRuntime = [...new Set(runtimeWorkflowIds)].sort(byteOrder);
-      const unknownRuntime = requestedRuntime.filter((id) => !ids.includes(id));
+      /*
+       * Absent means every workflow that got a definition this run. `definitionIds` is already in
+       * content-derived order and already capped by `maxDefinitions`, so runtime can never be asked
+       * for a workflow whose definition was not read: an event stream with no definition beside it
+       * cannot be judged. An id asked for that the roster does not contain is a configuration error
+       * worth naming rather than a silent no-op, and that check is meaningless when covering all.
+       */
+      const runtimeCoversAll = runtimeWorkflowIds === null || runtimeWorkflowIds === undefined;
+      const requestedRuntime = runtimeCoversAll
+        ? [...definitionIds]
+        : [...new Set(runtimeWorkflowIds)].sort(byteOrder);
+      const unknownRuntime = runtimeCoversAll
+        ? []
+        : requestedRuntime.filter((id) => !ids.includes(id));
       if (unknownRuntime.length > 0) limitations.add('RUNTIME_WORKFLOW_NOT_IN_ROSTER');
       const runtimeIds = requestedRuntime
         .filter((id) => ids.includes(id))

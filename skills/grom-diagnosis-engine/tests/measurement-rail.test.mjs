@@ -1005,6 +1005,14 @@ function internalAuditBlock(projectRootForToken) {
       serverPath: INSTALLED_AUDIT_SERVER,
       tokenFilePath,
     },
+    /*
+     * EXPLICITLY none. These tests are about the internal rail running and about the transcript
+     * window, not about runtime, and they assert no runtime call is made. That used to be the
+     * default for an absent list; since 2026-07-29 an absent list means EVERY workflow, so the
+     * intent has to be written down rather than inherited. The new default has its own coverage in
+     * `tests/internal-audit-collector.test.mjs`.
+     */
+    runtimeWorkflowIds: [],
   };
 }
 

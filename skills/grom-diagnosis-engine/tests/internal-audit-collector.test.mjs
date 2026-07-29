@@ -184,7 +184,7 @@ test('an expired credential stops before a single evidence call is spent', async
     auth_status: okAuth(-259_083),
     list_workflows_complete: () => { throw new Error('MUST NOT BE CALLED'); },
   });
-  const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION });
+  const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] });
   const evidence = await collector.collectAuditEvidence({ window: WINDOW });
 
   // Observed on the real server: the first read on a dead token returns TRANSPORT_FAILED and
@@ -261,7 +261,7 @@ test('a latching code ends the walk instead of burning the rest of the account',
       : okDefinition(args.workflowId)),
     get_ai_configuration_bundle: () => { throw new Error('MUST NOT BE CALLED AFTER A LATCH'); },
   });
-  const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION });
+  const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] });
   const evidence = await collector.collectAuditEvidence({ window: WINDOW });
 
   // w1 read, w2 refused and latched, w3 and w4 never attempted. Nothing auto-retries after a
@@ -282,7 +282,7 @@ test('an unreadable roster is never reported as an empty account', async () => {
     list_workflows_complete: { structuredContent: { ok: true, data: { boundLocationId: LOCATION, somethingElse: 1 } } },
     get_ai_configuration_bundle: okAiBundle,
   });
-  const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION });
+  const collector = createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] });
   const evidence = await collector.collectAuditEvidence({ window: WINDOW });
   assert.equal(evidence.complete, false);
   assert.ok(evidence.limitations.includes('ROSTER_SHAPE_UNREADABLE'));
@@ -308,7 +308,7 @@ test('the AI surfaces are skipped and SAID SO when the agency token is dead', as
     export_workflow: (args) => okDefinition(args.workflowId),
     get_ai_configuration_bundle: () => { throw new Error('MUST NOT BE CALLED'); },
   });
-  const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION })
+  const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] })
     .collectAuditEvidence({ window: WINDOW });
   assert.equal(calls.some(({ name }) => name === 'get_ai_configuration_bundle'), false);
   assert.ok(evidence.limitations.includes('AGENCY_TOKEN_UNAVAILABLE'));
@@ -325,7 +325,7 @@ test('a dropped tail is disclosed rather than looking like a shorter account', a
     get_ai_configuration_bundle: okAiBundle,
   });
   const evidence = await createInternalAuditCollector({
-    rail, boundLocationId: LOCATION, budgets: { maxDefinitions: 2 },
+    rail, boundLocationId: LOCATION, runtimeWorkflowIds: [], budgets: { maxDefinitions: 2 },
   }).collectAuditEvidence({ window: WINDOW });
   assert.equal(evidence.workflows.length, 2);
   assert.ok(evidence.limitations.includes('DEFINITION_BUDGET_EXHAUSTED'));
@@ -351,6 +351,69 @@ test('a runtime workflow id the roster does not contain is named, not silently i
   assert.equal(calls.filter(({ name }) => name === 'get_workflow_runtime_window').length, 1);
 });
 
+test('runtime covers EVERY workflow when no subset is named', async () => {
+  const { rail, calls } = railFor({
+    auth_status: okAuth(),
+    list_workflows_complete: okRoster(['w1', 'w2', 'w3']),
+    export_workflow: (args) => okDefinition(args.workflowId),
+    get_workflow_runtime_window: (args) => okRuntime(args.workflowId),
+    get_ai_configuration_bundle: okAiBundle,
+  });
+  // No `runtimeWorkflowIds` at all. This is the shape every account had before 2026-07-29, and it
+  // used to collect ZERO runtime windows while looking like a complete run.
+  const evidence = await createInternalAuditCollector({
+    rail, boundLocationId: LOCATION,
+  }).collectAuditEvidence({ window: WINDOW });
+
+  assert.equal(calls.filter(({ name }) => name === 'get_workflow_runtime_window').length, 3);
+  for (const workflow of evidence.workflows) {
+    assert.ok(workflow.runtimeWindow, `${workflow.workflowId} should have runtime`);
+    assert.equal(workflow.runtimeCode, null);
+  }
+  assert.equal(evidence.complete, true);
+  assert.deepEqual(evidence.limitations, []);
+});
+
+test('an explicit subset still wins, and an explicit empty list still means none', async () => {
+  const base = {
+    auth_status: okAuth(),
+    list_workflows_complete: okRoster(['w1', 'w2', 'w3']),
+    export_workflow: (args) => okDefinition(args.workflowId),
+    get_workflow_runtime_window: (args) => okRuntime(args.workflowId),
+    get_ai_configuration_bundle: okAiBundle,
+  };
+
+  const subset = railFor(base);
+  await createInternalAuditCollector({
+    rail: subset.rail, boundLocationId: LOCATION, runtimeWorkflowIds: ['w2'],
+  }).collectAuditEvidence({ window: WINDOW });
+  assert.equal(subset.calls.filter(({ name }) => name === 'get_workflow_runtime_window').length, 1);
+
+  const none = railFor(base);
+  const evidence = await createInternalAuditCollector({
+    rail: none.rail, boundLocationId: LOCATION, runtimeWorkflowIds: [],
+  }).collectAuditEvidence({ window: WINDOW });
+  assert.equal(none.calls.filter(({ name }) => name === 'get_workflow_runtime_window').length, 0);
+  // Opting out stays sayable, and stays distinguishable from asking and getting nothing.
+  assert.equal(evidence.workflows[0].runtimeCode, 'RUNTIME_NOT_REQUESTED');
+});
+
+test('covering all workflows is still bounded, and truncation is disclosed', async () => {
+  const { rail, calls } = railFor({
+    auth_status: okAuth(),
+    list_workflows_complete: okRoster(['w1', 'w2', 'w3']),
+    export_workflow: (args) => okDefinition(args.workflowId),
+    get_workflow_runtime_window: (args) => okRuntime(args.workflowId),
+    get_ai_configuration_bundle: okAiBundle,
+  });
+  const evidence = await createInternalAuditCollector({
+    rail, boundLocationId: LOCATION, budgets: { maxRuntimeWindows: 2 },
+  }).collectAuditEvidence({ window: WINDOW });
+
+  assert.equal(calls.filter(({ name }) => name === 'get_workflow_runtime_window').length, 2);
+  assert.ok(evidence.limitations.includes('RUNTIME_BUDGET_EXHAUSTED'));
+});
+
 test('capabilityCoverage is EMPTY, on purpose, and that keeps the run honestly partial', async () => {
   const { rail } = railFor({
     auth_status: okAuth(),
@@ -358,7 +421,7 @@ test('capabilityCoverage is EMPTY, on purpose, and that keeps the run honestly p
     export_workflow: (args) => okDefinition(args.workflowId),
     get_ai_configuration_bundle: okAiBundle,
   });
-  const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION })
+  const evidence = await createInternalAuditCollector({ rail, boundLocationId: LOCATION, runtimeWorkflowIds: [] })
     .collectAuditEvidence({ window: WINDOW });
 
   /*
