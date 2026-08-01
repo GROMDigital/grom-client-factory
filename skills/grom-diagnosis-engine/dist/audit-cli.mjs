@@ -10054,7 +10054,7 @@ function conversationsOf(internal) {
      * parens `+` binds to the final template literal only, so the SAMPLE branch got the attendance
      * warning and every CENSUS brief silently went without it. Caught by its own test.
      */
-    howToReadThis: (mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" && collection.complete === true && (collection.universeCount ?? 0) === 0 ? "The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`) + attendanceCaveat(collection.outcomeCoverage),
+    howToReadThis: (mode === "UNKNOWN" ? "NO VALID SAMPLE WAS PRODUCED for this run \u2014 the collection failed or returned nothing readable. Read `limitations`. Do not describe this account as quiet, and do not claim any thread was or was not included." : mode === "CENSUS" && collection.complete === true && (collection.universeCount ?? 0) === 0 ? "The conversation export completed successfully and found zero conversations in the closed account-local week. This is a verified empty census, not a collection failure." : mode === "CENSUS" ? `Every conversation in the window is below. A count you take from these threads is the real count for the week.${guaranteeHeld ? "" : " \u{1F534} EXCEPT: the size budget bound and flagged threads were dropped, so this is NOT the whole week. See `droppedFlaggedCount`."}` : `These are ${sampledCount} threads drawn from ${collection.universeCount ?? 0}. ${guaranteeHeld ? "Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent." : `\u{1F534} THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`} Never turn a count of these threads into a rate for the account: say "in the sampled threads".`) + attendanceCaveat(collection.outcomeCoverage) + supersededCaveat(collection.outcomeCoverage) + blendedRateCaveat(collection.outcomeCoverage),
     threads: [...collection.transcripts ?? []]
   };
 }
@@ -10065,6 +10065,19 @@ function attendanceCaveat(coverage) {
   if (!Number.isFinite(seen) || !Number.isFinite(attendance) || seen === 0) return "";
   if (attendance >= seen) return "";
   return ` \u{1F534} ATTENDANCE: ${attendance} of ${seen} appointments carry a showed or no-show disposition${attendance === 0 ? ", meaning NONE" : ""}. Attendance is what a human records after the visit; \`appointmentStatusesRecorded\` counts scheduling states the platform sets by itself and is NOT attendance coverage. On this evidence a low or zero show rate is a RECORDING rate, so no finding may say leads are failing to attend. That the outcome cannot be measured, and why, is a legitimate finding; the show rate itself is not.`;
+}
+function supersededCaveat(coverage) {
+  if (!coverage || coverage.joined !== true) return "";
+  const superseded = Number(coverage.supersededAppointments);
+  const seen = Number(coverage.appointmentsSeen);
+  if (!Number.isFinite(superseded) || superseded <= 0) return "";
+  return ` \u{1F534} SUPERSEDED APPOINTMENTS: ${superseded}${Number.isFinite(seen) && seen > 0 ? ` of ${seen}` : ""} appointment records were replaced by a LATER appointment for the same contact. Those are rebooking ghosts, not appointments anybody failed to work: the original was never cancelled, so it sits at a scheduling status forever and looks identical to an ignored booking. Subtract them before counting anything "unresolved", "unworked" or "stale", and exclude them from any show-rate denominator, which they otherwise inflate while never carrying an outcome. If you report such a count, say explicitly that superseded records were removed and how many.`;
+}
+function blendedRateCaveat(coverage) {
+  if (!coverage || coverage.joined !== true) return "";
+  const seen = Number(coverage.appointmentsSeen);
+  if (!Number.isFinite(seen) || seen <= 0) return "";
+  return ' \u{1F534} BLENDED RATES: any rate you compute here spans the WHOLE window and is an average of it, not the state today. Before publishing one, split it by month (or by first half against second half) and check the halves agree. If they do not, publish the split and say the direction of travel; a single blended figure that hides a doubling or a halving is worse than no figure, because it reads as current. Never describe a blended rate as "the" rate.';
 }
 function messagesOf(workflow, emailCopy = null) {
   const messages = [];
@@ -45479,6 +45492,7 @@ function buildOutcomeIndex(publicEvidence) {
   let opportunitiesSeen = 0;
   let statusesRecorded = 0;
   let attendanceRecorded = 0;
+  let supersededAppointments = 0;
   for (const { record: record2 } of recordsOf(publicEvidence)) {
     const contactId = contactIdOf(record2);
     if (contactId === null) continue;
@@ -45492,9 +45506,11 @@ function buildOutcomeIndex(publicEvidence) {
       statusesRecorded += 1;
       if (mapped === "showed" || mapped === "no_show") attendanceRecorded += 1;
       const current = recordsByContact.get(contactId) ?? { appointment: null, opportunity: null };
+      const incoming = eventRecord(record2, mapped, "appointment");
+      if (current.appointment !== null) supersededAppointments += 1;
       recordsByContact.set(contactId, {
         ...current,
-        appointment: latest(current.appointment, eventRecord(record2, mapped, "appointment"))
+        appointment: latest(current.appointment, incoming)
       });
       continue;
     }
@@ -45538,7 +45554,21 @@ function buildOutcomeIndex(publicEvidence) {
        * that simply does not record attendance as an account whose leads do not attend. When it is
        * low, a zero show rate is a RECORDING rate and no finding may claim otherwise.
        */
-      attendanceDispositionsRecorded: attendanceRecorded
+      attendanceDispositionsRecorded: attendanceRecorded,
+      /**
+       * 🔴 How many appointment records were REPLACED by a later appointment for the same contact.
+       * These are rebooking ghosts, not appointments anybody failed to work.
+       *
+       * The joined outcome is already correct — `latest` discards them — so this number exists for
+       * the LANE, which sees raw appointment records and cannot tell a superseded original from a
+       * live booking that was ignored. Both look like a past appointment sitting at `confirmed`.
+       *
+       * Any count of "unresolved" or "unworked" appointments must subtract this. On Grom UK the
+       * uncorrected count was 21 and the true figure was 4: one was in the future, 9 were these
+       * ghosts, 7 had been worked by hand. A show rate computed over the raw records is wrong in
+       * BOTH directions, because the ghosts inflate the denominator and never carry an outcome.
+       */
+      supersededAppointments
     }
   };
 }

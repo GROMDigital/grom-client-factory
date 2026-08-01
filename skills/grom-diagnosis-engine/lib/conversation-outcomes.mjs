@@ -189,6 +189,7 @@ export function buildOutcomeIndex(publicEvidence) {
   let opportunitiesSeen = 0;
   let statusesRecorded = 0;
   let attendanceRecorded = 0;
+  let supersededAppointments = 0;
 
   for (const { record } of recordsOf(publicEvidence)) {
     const contactId = contactIdOf(record);
@@ -219,9 +220,19 @@ export function buildOutcomeIndex(publicEvidence) {
        */
       if (mapped === 'showed' || mapped === 'no_show') attendanceRecorded += 1;
       const current = recordsByContact.get(contactId) ?? { appointment: null, opportunity: null };
+      const incoming = eventRecord(record, mapped, 'appointment');
+      /*
+       * 🔴 SUPERSEDED APPOINTMENTS. Staff rebook by CREATING A SECOND appointment rather than
+       * moving the first, and nothing cleans up the original, so it sits at `confirmed` forever.
+       * `latest` already resolves this per contact, which is why the joined outcome is right — but
+       * the discarded record still exists in the evidence, and a lane counting appointment RECORDS
+       * reads every ghost as a call nobody worked. On Grom UK that turned 4 genuinely unworked
+       * appointments into a reported 21. Counting them here is what lets the brief say so.
+       */
+      if (current.appointment !== null) supersededAppointments += 1;
       recordsByContact.set(contactId, {
         ...current,
-        appointment: latest(current.appointment, eventRecord(record, mapped, 'appointment')),
+        appointment: latest(current.appointment, incoming),
       });
       continue;
     }
@@ -269,6 +280,20 @@ export function buildOutcomeIndex(publicEvidence) {
        * low, a zero show rate is a RECORDING rate and no finding may claim otherwise.
        */
       attendanceDispositionsRecorded: attendanceRecorded,
+      /**
+       * 🔴 How many appointment records were REPLACED by a later appointment for the same contact.
+       * These are rebooking ghosts, not appointments anybody failed to work.
+       *
+       * The joined outcome is already correct — `latest` discards them — so this number exists for
+       * the LANE, which sees raw appointment records and cannot tell a superseded original from a
+       * live booking that was ignored. Both look like a past appointment sitting at `confirmed`.
+       *
+       * Any count of "unresolved" or "unworked" appointments must subtract this. On Grom UK the
+       * uncorrected count was 21 and the true figure was 4: one was in the future, 9 were these
+       * ghosts, 7 had been worked by hand. A show rate computed over the raw records is wrong in
+       * BOTH directions, because the ghosts inflate the denominator and never carry an outcome.
+       */
+      supersededAppointments,
     },
   };
 }

@@ -403,7 +403,9 @@ function conversationsOf(internal) {
             ? 'Every complaint and opt-out THE FLAGGING CAUGHT is included, so those are OVER-represented on purpose. The flagging is a keyword match, not a judgement: a complaint phrased in words it does not match was not guaranteed a place and may be absent.'
             : `🔴 THE MANDATORY GUARANTEE DID NOT HOLD. ${collection.droppedFlaggedCount ?? 0} flagged threads were dropped for size, so you may NOT say every complaint is here.`
         } Never turn a count of these threads into a rate for the account: say "in the sampled threads".`)
-      + attendanceCaveat(collection.outcomeCoverage),
+      + attendanceCaveat(collection.outcomeCoverage)
+      + supersededCaveat(collection.outcomeCoverage)
+      + blendedRateCaveat(collection.outcomeCoverage),
     threads: [...(collection.transcripts ?? [])],
   };
 }
@@ -429,6 +431,51 @@ function attendanceCaveat(coverage) {
     + ' attendance coverage. On this evidence a low or zero show rate is a RECORDING rate, so no'
     + ' finding may say leads are failing to attend. That the outcome cannot be measured, and why,'
     + ' is a legitimate finding; the show rate itself is not.';
+}
+
+/**
+ * The rebooking-ghost sentence, appended to `howToReadThis`.
+ *
+ * 🔴 Prose for the same reason `attendanceCaveat` is prose: the coverage field alone does not
+ * survive a skim, and this is the number a lane gets wrong while looking at correct data.
+ *
+ * Staff rebook by creating a SECOND appointment instead of moving the first, and nothing cleans up
+ * the original, so it sits at `confirmed` forever. The joined outcome already discards it, but the
+ * record is still in the evidence and reads exactly like a booking nobody worked.
+ */
+function supersededCaveat(coverage) {
+  if (!coverage || coverage.joined !== true) return '';
+  const superseded = Number(coverage.supersededAppointments);
+  const seen = Number(coverage.appointmentsSeen);
+  if (!Number.isFinite(superseded) || superseded <= 0) return '';
+  return ` 🔴 SUPERSEDED APPOINTMENTS: ${superseded}`
+    + `${Number.isFinite(seen) && seen > 0 ? ` of ${seen}` : ''} appointment records were replaced by`
+    + ' a LATER appointment for the same contact. Those are rebooking ghosts, not appointments'
+    + ' anybody failed to work: the original was never cancelled, so it sits at a scheduling status'
+    + ' forever and looks identical to an ignored booking. Subtract them before counting anything'
+    + ' "unresolved", "unworked" or "stale", and exclude them from any show-rate denominator, which'
+    + ' they otherwise inflate while never carrying an outcome. If you report such a count, say'
+    + ' explicitly that superseded records were removed and how many.';
+}
+
+/**
+ * The blended-rate sentence, appended to `howToReadThis`.
+ *
+ * 🔴 A rate computed across the whole window is an AVERAGE OF THE WINDOW, not the current state.
+ * On Grom UK a single 90-day show rate read 39.5% while the underlying months were 26.9% and 58.8%
+ * — the rate had more than doubled and the published figure hid it, so the finding described a
+ * problem that was already resolving. This is not a defect in the arithmetic; it is a defect in
+ * reporting one number for a period long enough to contain a trend.
+ */
+function blendedRateCaveat(coverage) {
+  if (!coverage || coverage.joined !== true) return '';
+  const seen = Number(coverage.appointmentsSeen);
+  if (!Number.isFinite(seen) || seen <= 0) return '';
+  return ' 🔴 BLENDED RATES: any rate you compute here spans the WHOLE window and is an average of'
+    + ' it, not the state today. Before publishing one, split it by month (or by first half against'
+    + ' second half) and check the halves agree. If they do not, publish the split and say the'
+    + ' direction of travel; a single blended figure that hides a doubling or a halving is worse'
+    + ' than no figure, because it reads as current. Never describe a blended rate as "the" rate.';
 }
 
 /**
