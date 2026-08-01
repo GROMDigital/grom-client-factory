@@ -410,7 +410,19 @@ test('a run captured after its own cutoff measures the account it collected', ()
   assert.equal(placed, SUBJECTS.length);
   assert.equal(stock.enquiry, 2, 'c09 and c10 were never contacted');
   assert.equal(stock.contacted, 2, 'c06 and c08 got no further');
-  assert.equal(stock.strategy_call, 2, 'c04 no-showed and c05 was never dispositioned');
+  /*
+   * 🔴 CHANGED 2026-07-31 and the old expectation was the bug, not the baseline.
+   *
+   * This used to assert `strategy_call === 2` with the comment "c04 no-showed and c05 was never
+   * dispositioned" — the assertion itself recorded that a RECORDED no-show and an UNRESOLVED
+   * appointment were being parked at the same stage, indistinguishable. That is precisely why the
+   * agency's own show rate reported as unmeasurable: the projection emitted no `no_show` event, so
+   * the edge had a numerator and no denominator.
+   *
+   * `appointment_no_show` now projects, so c04 (`noshow`) separates from c05 (`confirmed`).
+   */
+  assert.equal(stock.strategy_call, 1, 'only c05, whose appointment was never dispositioned');
+  assert.equal(stock.no_show, 1, 'c04 no-showed, and that is now an observable disposition');
   assert.equal(stock.showed, 1, 'c03 showed and is still open');
   // c01's `decision`, `won` and `collected_revenue` all come off ONE record at ONE instant, so
   // which of the three it lands on is a tie-break and not a fact about the account. The three

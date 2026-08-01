@@ -264,6 +264,47 @@
             "id",
             "_id"
           ]
+        },
+        {
+          "eventId": "appointment_no_show",
+          "stage": "no_show",
+          "journeyId": "agency_new_business",
+          "eventTimeField": [
+            "startTime",
+            "dateUpdated",
+            "updatedAt"
+          ],
+          "when": {
+            "kind": "field_in",
+            "field": "appointmentStatus",
+            "values": [
+              "noshow",
+              "no_show"
+            ]
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
+        },
+        {
+          "eventId": "appointment_cancelled",
+          "stage": "cancelled",
+          "journeyId": "agency_new_business",
+          "eventTimeField": [
+            "dateUpdated",
+            "updatedAt",
+            "startTime"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "appointmentStatus",
+            "value": "cancelled"
+          },
+          "cohortFrom": [
+            "id",
+            "_id"
+          ]
         }
       ],
       "observations": [
