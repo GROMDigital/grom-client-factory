@@ -88,8 +88,16 @@ test('Grom contracts keep acquisition and onboarding denominators separate', () 
   const onboarding = edges.filter(({ journeyId }) => journeyId === 'client_onboarding');
   assert.ok(acquisition.length > 0);
   assert.ok(onboarding.length > 0);
-  assert.ok(acquisition.every(({ fromStage }) => fromStage !== 'won_or_paid'));
-  assert.equal(onboarding[0].fromStage, 'won_or_paid');
+  // The point is SEPARATION, not any particular entry stage. This used to pin the literal
+  // `won_or_paid`, which was the speculative delivery ladder's invented entry point; the ladder is
+  // now the account's real pipeline and enters at `onboarding_ready`. Asserting that no stage is
+  // shared between the two journeys keeps the actual guarantee — an onboarding cohort can never be
+  // counted into an acquisition rate — and survives the ladder being renamed again.
+  const acquisitionStages = new Set(acquisition.flatMap((e) => [e.fromStage, e.toStage]));
+  const onboardingStages = new Set(onboarding.flatMap((e) => [e.fromStage, e.toStage]));
+  for (const stage of onboardingStages) {
+    assert.ok(!acquisitionStages.has(stage), `"${stage}" is shared across both journeys`);
+  }
 });
 
 test('Grom Hana caveat preserves attribution and keeps the GHL send path auditable', () => {

@@ -7,17 +7,7 @@
   },
   "unmeasurableEdges": [
     "contacted_to_qualified",
-    "qualified_to_strategy_call",
-    "won_to_internal_handoff",
-    "handoff_to_activation",
-    "activation_to_assets_requested",
-    "assets_requested_to_assets_complete",
-    "assets_complete_to_strategy_approved",
-    "strategy_approved_to_build",
-    "build_to_qa",
-    "qa_to_client_approval",
-    "client_approval_to_launch",
-    "launch_to_first_value"
+    "qualified_to_strategy_call"
   ],
   "unprojectedActions": [
     {
@@ -474,6 +464,175 @@
           "kind": "distribution",
           "path": "source",
           "maxDistinct": 25
+        }
+      ]
+    },
+    {
+      "sourceId": "grom_delivery_phases",
+      "capability": "delivery_phase_entries",
+      "evidenceSource": "internal_ghl",
+      "operationIdPattern": "internal_ghl.delivery_phase_entries",
+      "identity": {
+        "nativeId": [
+          "contactId"
+        ],
+        "subjectNativeId": [
+          "contactId"
+        ]
+      },
+      "entities": [
+        {
+          "entityId": "grom_delivery_subject_entity",
+          "recordType": "contact",
+          "when": {
+            "kind": "always"
+          }
+        }
+      ],
+      "events": [
+        {
+          "eventId": "delivery_onboarding_ready",
+          "stage": "onboarding_ready",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "onboarding ready"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_access_in_progress",
+          "stage": "access_in_progress",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "access in progress"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_submitted_for_review",
+          "stage": "submitted_for_review",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "submitted for review"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_strategy_in_progress",
+          "stage": "strategy_in_progress",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "strategy in progress"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_strategy_sent",
+          "stage": "strategy_sent",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "strategy sent"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_creative_in_progress",
+          "stage": "creative_in_progress",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "creative in progress"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_creative_sent",
+          "stage": "creative_sent",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "creative sent"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_build_in_progress",
+          "stage": "build_in_progress",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "build in progress"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_live",
+          "stage": "live",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "live"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
         }
       ]
     }

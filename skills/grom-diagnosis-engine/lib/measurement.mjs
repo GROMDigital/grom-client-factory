@@ -50,6 +50,7 @@
  */
 import { sourceCollectionsFromScopes } from './adapters/collection.mjs';
 import { canonicalJson } from './canonical.mjs';
+import { assertDeliveryPhaseInputs, deliveryPhaseCollections } from './delivery-phases.mjs';
 import { buildEvidenceGraph } from './evidence-graph.mjs';
 import { projectJourneyEvents } from './journey-projection.mjs';
 import { buildWindows, computeJourneyMetrics } from './metrics.mjs';
@@ -170,7 +171,7 @@ function projectionSummary(projected) {
  * here reads the wall clock, the host timezone, the filesystem beyond the two profile files, or
  * anything the run was not sealed with.
  */
-export function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
+export function measurePublicEvidence({ publicEvidence, frozenInputs, internalEvidence = null } = {}) {
   const profileId = sealedProfileId(frozenInputs);
   const timezone = sealedTimezone(frozenInputs);
 
@@ -202,7 +203,18 @@ export function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
   }
 
   const context = { locationId };
-  const collections = sourceCollectionsFromScopes(publicEvidence);
+  /*
+   * The public scopes, plus the delivery-phase entries derived from the internal rail's enrollment
+   * logs. `internalEvidence` is OPTIONAL and defaults to null: a public-only run is the approved
+   * Task 9 path and must keep measuring exactly what it measured before, so an absent internal rail
+   * contributes no envelope at all rather than an empty one. See `lib/delivery-phases.mjs` for why
+   * an empty envelope and no envelope are different claims.
+   */
+  assertDeliveryPhaseInputs(internalEvidence);
+  const collections = [
+    ...sourceCollectionsFromScopes(publicEvidence),
+    ...deliveryPhaseCollections({ internalEvidence, publicEvidence }),
+  ];
   const projected = projectJourneyEvents({
     collections, context, profile, projection,
   });

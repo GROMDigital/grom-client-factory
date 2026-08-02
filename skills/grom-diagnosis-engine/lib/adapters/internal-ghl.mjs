@@ -576,7 +576,21 @@ const RUNTIME_EVENT_DETAIL_SPEC = Object.freeze({
 });
 // `_id` is pseudonymised in `projectEnrollments`; it is not in this spec because a raw
 // enrollment-row id is never retained.
-const ENROLLMENT_ROW_SPEC = Object.freeze({ createdAt: isIsoInstant });
+//
+// `contactId` IS retained raw, and it is the second identifier in this file permitted to be — the
+// first is `RUNTIME_EVENT_DETAIL_SPEC.contactId`, for the identical reason, stated there in full.
+// An enrollment row is the moment a subject ENTERED a workflow, and on this account every delivery
+// workflow is triggered by one pipeline stage, so that instant is the moment the subject entered
+// that stage. `lib/delivery-phases.mjs` turns those instants into per-phase durations, and it can
+// only do so by joining the row to a SUBJECT. A pseudonym joins as well as the raw id only when
+// BOTH sides carry it; the public rail carries raw contact ids and does not carry this run's
+// pseudonyms, so pseudonymising here would leave every enrollment unjoinable to the contact it
+// describes and the whole delivery journey unmeasurable — which is exactly the state this retention
+// exists to end. It is bound to the id vocabulary rather than echoed.
+const ENROLLMENT_ROW_SPEC = Object.freeze({
+  createdAt: isIsoInstant,
+  contactId: isOpaqueId,
+});
 const ENROLLMENT_SPEC = Object.freeze({
   complete: isBoolean,
   windowScoped: isBoolean,
@@ -713,6 +727,101 @@ function projectEnrollments(value, pseudonymize) {
         : { _id: pseudonymize(identifier), ...projected };
     }),
   };
+}
+
+/**
+ * WHICH PIPELINE STAGE A WORKFLOW FIRES ON, and nothing else about the trigger.
+ *
+ * `definitionIsSound` already hashes `block.triggers`, so the triggers are read and verified on
+ * every run and were then discarded. That discard is what made the whole `client_onboarding`
+ * journey permanently unmeasurable: every delivery phase on this account IS a stage change on one
+ * pipeline, and every one of those stage changes is already the trigger of a firing workflow, so
+ * the enrollment log of that workflow is a record of when cards entered that phase. Without the
+ * trigger, an enrollment timestamp is an instant with nothing to attach it to.
+ *
+ * 🔴 THIS IS EVIDENCE, NOT CONFIGURATION, and the distinction is the whole reason it is derived
+ * here rather than declared in a profile. `profiles/accounts/<locationId>.v1.json` may not say what
+ * a workflow is FOR — that is the owner's standing rule and stage 1 derives it. Reading the stage
+ * id out of a trigger the account itself wrote says nothing about purpose: it is the same class of
+ * fact as "this opportunity's status is won", and it stays true if somebody repoints the workflow
+ * tomorrow, which a hand-maintained id list would not.
+ *
+ * TWO IDS AND A TYPE. Not the filters, not the conditions, not the steps, not a name. A pipeline id
+ * and a stage id are opaque account ids in the same vocabulary every other retained id here is
+ * bound to; none of it is free text and none of it is a contact.
+ */
+const TRIGGER_TYPE_PATHS = Object.freeze(['type', 'key', 'eventType']);
+/**
+ * A trigger type is lowercase snake case with NO BOUND ON THE NUMBER OF SEGMENTS, which is why it
+ * cannot reuse `isBoundedToken`: that grammar admits at most one `_` segment, so it rejects
+ * `pipeline_stage_updated` and `facebook_lead_form` alike and every trigger type in this account
+ * would have been retained as `null`. Still a closed CHARSET and still length-bounded — the point
+ * of a vocabulary here is that free text can never ride out on this field, not that the set of
+ * trigger names is one this repo can enumerate. It is not: GHL adds them.
+ */
+const MAX_TRIGGER_TYPE_LENGTH = 64;
+const TRIGGER_TYPE_TOKEN = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/u;
+const isTriggerTypeToken = (value) => typeof value === 'string'
+  && value.length <= MAX_TRIGGER_TYPE_LENGTH
+  && TRIGGER_TYPE_TOKEN.test(value);
+const PIPELINE_ID_FIELDS = Object.freeze(['opportunity.pipelineid', 'pipelineid', 'pipeline']);
+const STAGE_ID_FIELDS = Object.freeze([
+  'opportunity.pipelinestageid', 'pipelinestageid', 'stageid', 'stage',
+]);
+// A trigger is a small hand-authored object. The bound stops a pathological payload turning this
+// into an unbounded walk; nothing real nests a stage filter deeper than a few levels.
+const TRIGGER_SCAN_MAX_DEPTH = 6;
+const TRIGGER_SCAN_MAX_NODES = 512;
+
+/**
+ * Collect every `field -> value` pair a trigger states, however the builder chose to spell it.
+ * GHL has shipped filters as `{field, value}`, as `{key, value}` and as plain properties on the
+ * trigger itself across eras, and a reader that knows only one of the three silently sees no
+ * stage at all — which is indistinguishable from a workflow that has no stage trigger. So all
+ * three are read, the field name is compared case-insensitively, and anything that is not an id
+ * in the sealed vocabulary is dropped rather than guessed at.
+ */
+function collectTriggerFields(node, into, depth = 0, budget = { nodes: 0 }) {
+  if (depth > TRIGGER_SCAN_MAX_DEPTH) return;
+  if (budget.nodes >= TRIGGER_SCAN_MAX_NODES) return;
+  budget.nodes += 1;
+  if (Array.isArray(node)) {
+    for (const entry of node) collectTriggerFields(entry, into, depth + 1, budget);
+    return;
+  }
+  if (!isPlainObject(node)) return;
+  const name = ['field', 'key', 'name'].map((k) => node[k]).find(isNonEmptyString);
+  if (isNonEmptyString(name) && isOpaqueId(node.value) && !into.has(name.toLowerCase())) {
+    into.set(name.toLowerCase(), node.value);
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (isOpaqueId(value) && !into.has(key.toLowerCase())) into.set(key.toLowerCase(), value);
+    else collectTriggerFields(value, into, depth + 1, budget);
+  }
+}
+
+function projectTriggers(triggers) {
+  if (!Array.isArray(triggers)) return [];
+  const projected = [];
+  for (const trigger of triggers) {
+    if (!isPlainObject(trigger)) continue;
+    const fields = new Map();
+    collectTriggerFields(trigger, fields);
+    const pipelineId = PIPELINE_ID_FIELDS.map((f) => fields.get(f)).find(isOpaqueId) ?? null;
+    const stageId = STAGE_ID_FIELDS.map((f) => fields.get(f)).find(isOpaqueId) ?? null;
+    // A trigger that names no stage is not a delivery rung. It is retained with nulls rather than
+    // dropped so that "this workflow has three triggers and none is a stage change" stays readable
+    // downstream; a dropped entry reads as a workflow with no triggers at all.
+    projected.push({
+      type: inVocabularyOrNull(
+        isTriggerTypeToken,
+        TRIGGER_TYPE_PATHS.map((path) => trigger[path]).find(isNonEmptyString),
+      ),
+      pipelineId,
+      stageId,
+    });
+  }
+  return projected;
 }
 
 function projectStepRosters(value, pseudonymize) {
@@ -2724,6 +2833,9 @@ export function createInternalGhlAdapter(options = {}) {
       // `export_workflow` read. Never absent, so the weaker verdict cannot pass as the stronger.
       hashVerification: definitionIntegrity.hashVerification,
       capturedAt: isoOrNullString(definitionBlock.capturedAt),
+      // Two opaque ids and a type per trigger. See `projectTriggers` for why the stage a workflow
+      // fires on is evidence rather than configuration, and for what is deliberately NOT kept.
+      triggers: projectTriggers(definitionBlock.triggers),
       sourceRoutes: definitionRoutes,
     };
 

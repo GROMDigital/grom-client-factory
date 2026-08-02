@@ -238,7 +238,14 @@ test('CRITICAL 1 — duplicate identity detection can now actually fire', () => 
 test('CRITICAL 2 — every shipped source pattern matches at least one real allowlist action', () => {
   for (const profileId of ['client', 'grom_internal']) {
     const projection = loadProjection(profileId);
-    for (const source of projection.sources) {
+    // PUBLIC sources only, which is exactly the scope `assertActionRouting` applies these two rules
+    // at. The allowlist is the catalogue of the PUBLIC read surface, so "matches no allowlist
+    // action" is a real defect for a public source and a category error for any other: an
+    // `internal_ghl` source reads the internal rail, which the allowlist does not describe and
+    // never will. The rules that need no allowlist — no catch-all, no overlap with a sibling — are
+    // applied to every source of every evidence source, by the validator and by the two MINOR
+    // tests below.
+    for (const source of projection.sources.filter((s) => s.evidenceSource === 'public_ghl')) {
       const matched = allowlist.actions.filter(
         ({ actionId }) => patternMatchesLocally(source.operationIdPattern, actionId),
       );

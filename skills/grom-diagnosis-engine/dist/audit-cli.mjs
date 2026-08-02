@@ -29578,6 +29578,44 @@ function projectEnrollments(value, pseudonymize) {
     })
   };
 }
+function collectTriggerFields(node, into, depth = 0, budget = { nodes: 0 }) {
+  if (depth > TRIGGER_SCAN_MAX_DEPTH) return;
+  if (budget.nodes >= TRIGGER_SCAN_MAX_NODES) return;
+  budget.nodes += 1;
+  if (Array.isArray(node)) {
+    for (const entry of node) collectTriggerFields(entry, into, depth + 1, budget);
+    return;
+  }
+  if (!isPlainObject11(node)) return;
+  const name = ["field", "key", "name"].map((k2) => node[k2]).find(isNonEmptyString);
+  if (isNonEmptyString(name) && isOpaqueId(node.value) && !into.has(name.toLowerCase())) {
+    into.set(name.toLowerCase(), node.value);
+  }
+  for (const [key, value] of Object.entries(node)) {
+    if (isOpaqueId(value) && !into.has(key.toLowerCase())) into.set(key.toLowerCase(), value);
+    else collectTriggerFields(value, into, depth + 1, budget);
+  }
+}
+function projectTriggers(triggers) {
+  if (!Array.isArray(triggers)) return [];
+  const projected = [];
+  for (const trigger of triggers) {
+    if (!isPlainObject11(trigger)) continue;
+    const fields = /* @__PURE__ */ new Map();
+    collectTriggerFields(trigger, fields);
+    const pipelineId = PIPELINE_ID_FIELDS.map((f2) => fields.get(f2)).find(isOpaqueId) ?? null;
+    const stageId = STAGE_ID_FIELDS.map((f2) => fields.get(f2)).find(isOpaqueId) ?? null;
+    projected.push({
+      type: inVocabularyOrNull(
+        isTriggerTypeToken,
+        TRIGGER_TYPE_PATHS.map((path) => trigger[path]).find(isNonEmptyString)
+      ),
+      pipelineId,
+      stageId
+    });
+  }
+  return projected;
+}
 function projectStepRosters(value, pseudonymize) {
   if (!Array.isArray(value)) return [];
   return value.map((roster) => {
@@ -31000,6 +31038,9 @@ function createInternalGhlAdapter(options = {}) {
       // `export_workflow` read. Never absent, so the weaker verdict cannot pass as the stronger.
       hashVerification: definitionIntegrity.hashVerification,
       capturedAt: isoOrNullString(definitionBlock.capturedAt),
+      // Two opaque ids and a type per trigger. See `projectTriggers` for why the stage a workflow
+      // fires on is evidence rather than configuration, and for what is deliberately NOT kept.
+      triggers: projectTriggers(definitionBlock.triggers),
       sourceRoutes: definitionRoutes
     };
     const observedEvents = (Array.isArray(data.runtimeEvents) ? data.runtimeEvents : []).map(
@@ -31235,7 +31276,7 @@ function definitionIsSound(block, exportedHash) {
   if (exportedHash !== block.canonicalHash) return bad("definition_export_mismatch");
   return { reason: null, hashVerification: "exact" };
 }
-var SOURCE, SCHEMA_VERSION2, SUPPORTED_CONTRACT_VERSIONS, MANIFEST_SCHEMA_VERSION, MANIFEST_PROFILE, MANIFEST_PROOF_MODEL, PROOF_INDEX_SCHEMA_VERSION, LIVE_RUNTIME, INTERNAL_DIGEST, BARE_DIGEST, PROVENANCE_TOKEN, ISO_INSTANT, MAX_ID_LENGTH, PROVIDER_ID, UUID_ID, BARE_DIGIT_RUN, MAX_TOKEN_LENGTH, MACHINE_TOKEN, INTERVAL_NOTATION, ROUTE_HOSTS, NORMALIZED_PATH, MAX_PATH_LENGTH, FAILURE_CLASSES, HTTP_FAILURE_CLASS, WORKFLOW_STATUSES, RUNTIME_EVENT_TYPES, RUNTIME_EVENT_CLAIM_FIELDS, TOMBSTONE_SURFACES, LOG_PARTITION_STREAMS, ROSTER_TERMINAL_REASONS, ENROLLMENT_TOTAL_SOURCES, ENROLLMENT_TOTAL_SCOPES, QUERY_BOUNDARIES, TIMESTAMP_FIELDS, DEFINITION_VALIDITY_SOURCES, SEALED_CAPABILITY_IDS, PROOF_INDEX_KEYS, SHORT_LIVED_CREDENTIAL_MS, MAXIMUM_PROOF_VALIDITY_MS, AUDIT_TOOL_NAMES, AUDIT_TOOL_INPUT_KEYS, FORBIDDEN_SURFACE_TOKENS, EXCLUDED_PORTAL_TOKENS, AI_SURFACES, AI_SURFACE_CAPABILITIES, DEFINITION_CAPABILITIES, DEFINITION_PRIMARY_CAPABILITY, CODES, oneOf, isOpaqueId, isBoundedToken, isProvenanceToken, isRouteHost, isNormalizedPath, isFailureClass, isKnownRuntimeEventType, isRosterTerminalReason, isEnrollmentTotalSource, isEnrollmentTotalScope, isQueryBoundaries, isTimestampField, isDefinitionValiditySource, isSealedCapabilityId, isBoolean, isInteger, isCount, isIsoInstant, isIntervalNotation, nullable2, either, EPOCH_MS_FLOOR, EPOCH_MS_CEILING, EPOCH_DIGITS, PSEUDONYM_KEY_BYTES, RUNTIME_EVENT_DETAIL_SPEC, ENROLLMENT_ROW_SPEC, ENROLLMENT_SPEC, ENROLLMENT_TOTAL_SPEC, PER_STEP_COUNT_SPEC, STEP_ROSTER_SPEC, STEP_ROSTER_CONTACT_SPEC, COMPLETENESS_SPEC, REQUESTED_WINDOW_SPEC, APPLIED_WINDOW_SPEC, LOG_PARTITION_SPEC, PAGE_LEDGER_SPEC, ENROLLMENT_CURSOR_KEYS, ENROLLMENT_CURSOR_SPEC, LOCATION_INDICATOR_KEYS, ATTESTATION_BOUND_FIELDS2, RECEIPT_FIELDS, ROSTER_ID_WRAPPER_KEYS, SCRUB_SENTINEL;
+var SOURCE, SCHEMA_VERSION2, SUPPORTED_CONTRACT_VERSIONS, MANIFEST_SCHEMA_VERSION, MANIFEST_PROFILE, MANIFEST_PROOF_MODEL, PROOF_INDEX_SCHEMA_VERSION, LIVE_RUNTIME, INTERNAL_DIGEST, BARE_DIGEST, PROVENANCE_TOKEN, ISO_INSTANT, MAX_ID_LENGTH, PROVIDER_ID, UUID_ID, BARE_DIGIT_RUN, MAX_TOKEN_LENGTH, MACHINE_TOKEN, INTERVAL_NOTATION, ROUTE_HOSTS, NORMALIZED_PATH, MAX_PATH_LENGTH, FAILURE_CLASSES, HTTP_FAILURE_CLASS, WORKFLOW_STATUSES, RUNTIME_EVENT_TYPES, RUNTIME_EVENT_CLAIM_FIELDS, TOMBSTONE_SURFACES, LOG_PARTITION_STREAMS, ROSTER_TERMINAL_REASONS, ENROLLMENT_TOTAL_SOURCES, ENROLLMENT_TOTAL_SCOPES, QUERY_BOUNDARIES, TIMESTAMP_FIELDS, DEFINITION_VALIDITY_SOURCES, SEALED_CAPABILITY_IDS, PROOF_INDEX_KEYS, SHORT_LIVED_CREDENTIAL_MS, MAXIMUM_PROOF_VALIDITY_MS, AUDIT_TOOL_NAMES, AUDIT_TOOL_INPUT_KEYS, FORBIDDEN_SURFACE_TOKENS, EXCLUDED_PORTAL_TOKENS, AI_SURFACES, AI_SURFACE_CAPABILITIES, DEFINITION_CAPABILITIES, DEFINITION_PRIMARY_CAPABILITY, CODES, oneOf, isOpaqueId, isBoundedToken, isProvenanceToken, isRouteHost, isNormalizedPath, isFailureClass, isKnownRuntimeEventType, isRosterTerminalReason, isEnrollmentTotalSource, isEnrollmentTotalScope, isQueryBoundaries, isTimestampField, isDefinitionValiditySource, isSealedCapabilityId, isBoolean, isInteger, isCount, isIsoInstant, isIntervalNotation, nullable2, either, EPOCH_MS_FLOOR, EPOCH_MS_CEILING, EPOCH_DIGITS, PSEUDONYM_KEY_BYTES, RUNTIME_EVENT_DETAIL_SPEC, ENROLLMENT_ROW_SPEC, ENROLLMENT_SPEC, ENROLLMENT_TOTAL_SPEC, PER_STEP_COUNT_SPEC, STEP_ROSTER_SPEC, STEP_ROSTER_CONTACT_SPEC, COMPLETENESS_SPEC, REQUESTED_WINDOW_SPEC, APPLIED_WINDOW_SPEC, LOG_PARTITION_SPEC, PAGE_LEDGER_SPEC, ENROLLMENT_CURSOR_KEYS, ENROLLMENT_CURSOR_SPEC, TRIGGER_TYPE_PATHS, MAX_TRIGGER_TYPE_LENGTH, TRIGGER_TYPE_TOKEN, isTriggerTypeToken, PIPELINE_ID_FIELDS, STAGE_ID_FIELDS, TRIGGER_SCAN_MAX_DEPTH, TRIGGER_SCAN_MAX_NODES, LOCATION_INDICATOR_KEYS, ATTESTATION_BOUND_FIELDS2, RECEIPT_FIELDS, ROSTER_ID_WRAPPER_KEYS, SCRUB_SENTINEL;
 var init_internal_ghl = __esm({
   "lib/adapters/internal-ghl.mjs"() {
     init_canonical();
@@ -31460,7 +31501,10 @@ var init_internal_ghl = __esm({
       contactId: isOpaqueId,
       outcome: isBoundedToken
     });
-    ENROLLMENT_ROW_SPEC = Object.freeze({ createdAt: isIsoInstant });
+    ENROLLMENT_ROW_SPEC = Object.freeze({
+      createdAt: isIsoInstant,
+      contactId: isOpaqueId
+    });
     ENROLLMENT_SPEC = Object.freeze({
       complete: isBoolean,
       windowScoped: isBoolean,
@@ -31523,6 +31567,19 @@ var init_internal_ghl = __esm({
       referenceSid: isOpaqueId,
       referenceSequence: isOpaqueId
     });
+    TRIGGER_TYPE_PATHS = Object.freeze(["type", "key", "eventType"]);
+    MAX_TRIGGER_TYPE_LENGTH = 64;
+    TRIGGER_TYPE_TOKEN = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/u;
+    isTriggerTypeToken = (value) => typeof value === "string" && value.length <= MAX_TRIGGER_TYPE_LENGTH && TRIGGER_TYPE_TOKEN.test(value);
+    PIPELINE_ID_FIELDS = Object.freeze(["opportunity.pipelineid", "pipelineid", "pipeline"]);
+    STAGE_ID_FIELDS = Object.freeze([
+      "opportunity.pipelinestageid",
+      "pipelinestageid",
+      "stageid",
+      "stage"
+    ]);
+    TRIGGER_SCAN_MAX_DEPTH = 6;
+    TRIGGER_SCAN_MAX_NODES = 512;
     LOCATION_INDICATOR_KEYS = Object.freeze([
       "locationid",
       "boundlocationid",
@@ -49201,6 +49258,146 @@ var init_kernel = __esm({
   }
 });
 
+// lib/delivery-phases.mjs
+function isPlainObject22(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function isNonEmptyString2(value) {
+  return typeof value === "string" && value.length > 0;
+}
+function normalizeStageName(value) {
+  if (!isNonEmptyString2(value)) return null;
+  const collapsed = value.trim().toLowerCase().replace(/\s+/gu, " ");
+  return collapsed.length > 0 ? collapsed : null;
+}
+function indexPipelineStages(pipelines) {
+  const byStageId = /* @__PURE__ */ new Map();
+  if (!Array.isArray(pipelines)) return byStageId;
+  for (const pipeline of pipelines) {
+    if (!isPlainObject22(pipeline)) continue;
+    const pipelineId = [pipeline.id, pipeline._id].find(isNonEmptyString2) ?? null;
+    const stages = Array.isArray(pipeline.stages) ? pipeline.stages : [];
+    stages.forEach((stage, position) => {
+      if (!isPlainObject22(stage)) return;
+      const stageId = [stage.id, stage._id].find(isNonEmptyString2);
+      const name = normalizeStageName([stage.name, stage.stageName].find(isNonEmptyString2));
+      if (!isNonEmptyString2(stageId) || name === null) return;
+      if (!byStageId.has(stageId)) byStageId.set(stageId, { name, pipelineId, position });
+    });
+  }
+  return byStageId;
+}
+function bindWorkflowsToStages(workflows, stageIndex) {
+  const bound = /* @__PURE__ */ new Map();
+  const ambiguous = [];
+  if (!Array.isArray(workflows)) return { bound, ambiguous };
+  for (const workflow of workflows) {
+    if (!isPlainObject22(workflow)) continue;
+    const workflowId = workflow.workflowId ?? workflow.id;
+    if (!isNonEmptyString2(workflowId)) continue;
+    const triggers = Array.isArray(workflow.definition?.triggers) ? workflow.definition.triggers : [];
+    const names = /* @__PURE__ */ new Set();
+    for (const trigger of triggers) {
+      if (!isPlainObject22(trigger) || !isNonEmptyString2(trigger.stageId)) continue;
+      const stage = stageIndex.get(trigger.stageId);
+      if (stage) names.add(stage.name);
+    }
+    if (names.size === 1) bound.set(workflowId, [...names][0]);
+    else if (names.size > 1) ambiguous.push(workflowId);
+  }
+  return { bound, ambiguous };
+}
+function scopeItems(publicEvidence, operationId) {
+  const scopes = Array.isArray(publicEvidence?.scopes) ? publicEvidence.scopes : [];
+  const scope = scopes.find((entry) => entry?.operationId === operationId);
+  if (!scope) return null;
+  return Array.isArray(scope.items) ? scope.items : [];
+}
+function unwrapPipelines(items) {
+  if (!Array.isArray(items)) return [];
+  const unwrapped = [];
+  for (const item of items) {
+    if (!isPlainObject22(item)) continue;
+    if (Array.isArray(item.pipelines)) unwrapped.push(...item.pipelines.filter(isPlainObject22));
+    else unwrapped.push(item);
+  }
+  return unwrapped;
+}
+function deliveryPhaseCollections({ internalEvidence, publicEvidence } = {}) {
+  if (!isPlainObject22(internalEvidence)) return [];
+  const workflows = Array.isArray(internalEvidence.workflows) ? internalEvidence.workflows : [];
+  if (workflows.length === 0) return [];
+  const pipelineItems = scopeItems(publicEvidence, PIPELINES_OPERATION_ID);
+  if (pipelineItems === null) return [];
+  const stageIndex = indexPipelineStages(unwrapPipelines(pipelineItems));
+  if (stageIndex.size === 0) return [];
+  const { bound, ambiguous } = bindWorkflowsToStages(workflows, stageIndex);
+  if (bound.size === 0) return [];
+  const items = [];
+  const incomplete = [];
+  for (const workflow of workflows) {
+    if (!isPlainObject22(workflow)) continue;
+    const workflowId = workflow.workflowId ?? workflow.id;
+    const stageName = bound.get(workflowId);
+    if (stageName === void 0) continue;
+    const enrollments = workflow.runtime?.enrollments;
+    if (!isPlainObject22(enrollments) || !Array.isArray(enrollments.rows)) {
+      incomplete.push(workflowId);
+      continue;
+    }
+    for (const row of enrollments.rows) {
+      if (!isPlainObject22(row)) continue;
+      if (!isNonEmptyString2(row.contactId) || !isNonEmptyString2(row.createdAt)) continue;
+      items.push({
+        contactId: row.contactId,
+        enteredAt: row.createdAt,
+        deliveryStageName: stageName,
+        workflowId
+      });
+    }
+  }
+  if (items.length === 0 && incomplete.length === 0) return [];
+  items.sort((left, right) => {
+    const key = (row) => `${row.deliveryStageName}\0${row.enteredAt}\0${row.contactId}`;
+    return key(left) < key(right) ? -1 : key(left) > key(right) ? 1 : 0;
+  });
+  const complete = incomplete.length === 0 && ambiguous.length === 0;
+  const collection = {
+    source: "internal_ghl",
+    operationId: DELIVERY_PHASE_OPERATION_ID,
+    boundLocationId: internalEvidence.boundLocationId ?? publicEvidence?.boundLocationId ?? null,
+    requestedWindow: cloneJson(internalEvidence.requestedWindow ?? {}),
+    appliedWindow: cloneJson(internalEvidence.appliedWindow ?? internalEvidence.requestedWindow ?? {}),
+    capturedAt: internalEvidence.capturedAt ?? null,
+    items,
+    page: {
+      complete,
+      truncated: false,
+      nextCursor: null,
+      collectedCount: items.length,
+      reportedCount: items.length
+    }
+  };
+  if (!complete) {
+    collection.incompleteReason = incomplete.length > 0 ? "DELIVERY_PHASE_ENROLLMENTS_MISSING" : "DELIVERY_PHASE_TRIGGER_AMBIGUOUS";
+  }
+  return [collection];
+}
+function assertDeliveryPhaseInputs(internalEvidence) {
+  if (internalEvidence !== null && internalEvidence !== void 0 && !isPlainObject22(internalEvidence)) {
+    throw codedError("DELIVERY_PHASE_EVIDENCE_INVALID", TypeError);
+  }
+  return true;
+}
+var DELIVERY_PHASE_OPERATION_ID, PIPELINES_OPERATION_ID;
+var init_delivery_phases = __esm({
+  "lib/delivery-phases.mjs"() {
+    init_collection();
+    DELIVERY_PHASE_OPERATION_ID = "internal_ghl.delivery_phase_entries";
+    PIPELINES_OPERATION_ID = "opportunities-v3__get-pipelines";
+  }
+});
+
 // lib/evidence-graph.mjs
 function codedError19(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
@@ -49690,7 +49887,7 @@ var init_evidence_graph = __esm({
 function codedError20(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject22(value) {
+function isPlainObject23(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
   );
@@ -49708,7 +49905,7 @@ function byteCompare(left, right) {
 function readPath(record2, path) {
   let current = record2;
   for (const key of path.split(".")) {
-    if (!isPlainObject22(current) || !Object.hasOwn(current, key)) return void 0;
+    if (!isPlainObject23(current) || !Object.hasOwn(current, key)) return void 0;
     current = current[key];
   }
   return current;
@@ -49907,7 +50104,7 @@ function orderingKey(value, seen = /* @__PURE__ */ new WeakSet()) {
   }
 }
 function envelopeOrderingKey(collection) {
-  if (!isPlainObject22(collection)) return orderingKey(collection);
+  if (!isPlainObject23(collection)) return orderingKey(collection);
   const rows = Array.isArray(collection.items) ? collection.items : [];
   const withoutRows = Object.fromEntries(
     Object.entries(collection).filter(([key]) => key !== "items")
@@ -49925,22 +50122,22 @@ function talliedAnnotations(counter) {
   return [...counter.entries()].sort(([left], [right]) => byteCompare(left, right)).map(([code, count]) => ({ code, count }));
 }
 function assertInput({ collections, context, profile, projection }) {
-  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject22(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject22(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject22(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject22(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError20("PROJECTION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(collections) || collections.length === 0 || !isPlainObject23(context) || typeof context.locationId !== "string" || context.locationId.length === 0 || !isPlainObject23(profile) || !Array.isArray(profile.journeys) || profile.journeys.length === 0 || !isPlainObject23(projection) || typeof projection.revenueBasis !== "string" || projection.revenueBasis.length === 0 || !isPlainObject23(projection.suppressionSignal) || typeof projection.suppressionSignal.recordType !== "string" || projection.suppressionSignal.recordType.length === 0 || !Array.isArray(projection.sources) || projection.sources.length === 0) throw codedError20("PROJECTION_INPUT_INVALID", TypeError);
 }
 function assertWindowShape(window) {
-  if (!isPlainObject22(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (!isPlainObject23(window) || Object.getPrototypeOf(window) !== Object.prototype || Object.keys(window).sort().join(",") !== "from,to" || !isCanonicalTimestamp(window.from) || !isCanonicalTimestamp(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
 }
 function copyWindow(window) {
   return { ...window };
 }
 function assertSourceCollection(collection, locationId) {
-  if (!isPlainObject22(collection)) {
+  if (!isPlainObject23(collection)) {
     throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   }
   if (collection.boundLocationId !== locationId) {
     throw codedError20("PROJECTION_LOCATION_MISMATCH");
   }
-  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject22(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
+  if (typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || !isCanonicalTimestamp(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject23(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.reportedCount) || !Number.isInteger(collection.page.collectedCount)) throw codedError20("PROJECTION_SOURCE_COLLECTION_INVALID", TypeError);
   assertWindowShape(collection.requestedWindow);
   assertWindowShape(collection.appliedWindow);
   if (Date.parse(collection.appliedWindow.from) < Date.parse(collection.requestedWindow.from) || Date.parse(collection.appliedWindow.to) > Date.parse(collection.requestedWindow.to)) throw codedError20("PROJECTION_WINDOW_MISMATCH");
@@ -49969,7 +50166,7 @@ function resolveJourneyInstances(profile, projection) {
       if (typeof entity?.recordType !== "string" || entity.recordType.length === 0) {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject22(entity.when) || typeof entity.when.kind !== "string") {
+      if (!isPlainObject23(entity.when) || typeof entity.when.kind !== "string") {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
     }
@@ -49981,7 +50178,7 @@ function resolveJourneyInstances(profile, projection) {
       if (!Array.isArray(event.eventTimeField) || event.eventTimeField.length === 0) {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
-      if (!isPlainObject22(event.when) || typeof event.when.kind !== "string") {
+      if (!isPlainObject23(event.when) || typeof event.when.kind !== "string") {
         throw codedError20("PROJECTION_CONTRACT_INVALID");
       }
       if (Object.hasOwn(event, "revenueFrom") && !Array.isArray(event.revenueFrom)) {
@@ -50022,7 +50219,7 @@ function projectJourneyEvents({ collections, context, profile, projection } = {}
     const entities = plan.spec.entities ?? [];
     const events = plan.spec.events ?? [];
     for (const record2 of plan.collection.items) {
-      if (!isPlainObject22(record2)) {
+      if (!isPlainObject23(record2)) {
         tally2(plan.suppressed, REASON_NOT_AN_OBJECT);
         continue;
       }
@@ -50953,7 +51150,7 @@ var init_metrics = __esm({
 function codedError22(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject23(value) {
+function isPlainObject24(value) {
   return Boolean(
     value && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
   );
@@ -50991,10 +51188,10 @@ function assertLocation(value, locationId, seen = /* @__PURE__ */ new WeakSet())
   }
 }
 function assertWindow(window, code) {
-  if (!isPlainObject23(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError22(code, TypeError);
+  if (!isPlainObject24(window) || Object.keys(window).sort().join(",") !== "from,to" || typeof window.from !== "string" || typeof window.to !== "string" || !isCanonicalTimestamp2(window.from) || !isCanonicalTimestamp2(window.to) || Date.parse(window.from) >= Date.parse(window.to)) throw codedError22(code, TypeError);
 }
 function validateCollection(collection, locationId) {
-  if (!isPlainObject23(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject23(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError22(
+  if (!isPlainObject24(collection) || typeof collection.source !== "string" || collection.source.length === 0 || typeof collection.operationId !== "string" || collection.operationId.length === 0 || collection.boundLocationId !== locationId || !isCanonicalTimestamp2(collection.capturedAt) || !Array.isArray(collection.items) || !isPlainObject24(collection.page) || typeof collection.page.complete !== "boolean" || typeof collection.page.truncated !== "boolean" || !Number.isInteger(collection.page.collectedCount) || collection.page.collectedCount !== collection.items.length || !Number.isInteger(collection.page.reportedCount)) throw codedError22(
     collection?.boundLocationId !== locationId ? "EVIDENCE_LOCATION_MISMATCH" : "EVIDENCE_COLLECTION_INVALID",
     TypeError
   );
@@ -51007,7 +51204,7 @@ function validateCollection(collection, locationId) {
   }
 }
 function normalizeItem(item, provenance, occurrenceOrdinal) {
-  if (!isPlainObject23(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
+  if (!isPlainObject24(item) || typeof item.recordType !== "string" || item.recordType.length === 0) {
     throw codedError22("EVIDENCE_RECORD_INVALID", TypeError);
   }
   if (Object.hasOwn(item, "eventTime") && !isCanonicalTimestamp2(item.eventTime) || Object.hasOwn(item, "evidenceRef") && (typeof item.evidenceRef !== "string" || !/^ev_[a-f0-9]{16,64}$/u.test(item.evidenceRef)) || Object.hasOwn(item, "definitionHash") && !/^[a-f0-9]{64}$/u.test(item.definitionHash) || Object.hasOwn(item, "effectiveDefinitionHash") && !/^[a-f0-9]{64}$/u.test(item.effectiveDefinitionHash) || Object.hasOwn(item, "cohortInstanceRef") && !/^cohort_[a-z0-9_]{1,120}$/u.test(item.cohortInstanceRef) || Object.hasOwn(item, "revenueAmount") && (typeof item.revenueAmount !== "number" || !Number.isFinite(item.revenueAmount) || item.revenueAmount < 0)) throw codedError22("EVIDENCE_RECORD_INVALID", TypeError);
@@ -51063,7 +51260,7 @@ function normalizeItem(item, provenance, occurrenceOrdinal) {
   return canonical;
 }
 function normalizeEvidence(records, context) {
-  if (!Array.isArray(records) || records.length === 0 || !isPlainObject23(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError22("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
+  if (!Array.isArray(records) || records.length === 0 || !isPlainObject24(context) || typeof context.locationId !== "string" || context.locationId.length === 0) throw codedError22("EVIDENCE_NORMALIZATION_INPUT_INVALID", TypeError);
   const pending = [];
   for (const collection of records) {
     validateCollection(collection, context.locationId);
@@ -51127,7 +51324,7 @@ var init_normalize = __esm({
 function codedError23(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject24(value) {
+function isPlainObject25(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -51135,7 +51332,7 @@ function isPlainObject24(value) {
 function readPath2(row, path) {
   let current = row;
   for (const segment of path.split(".")) {
-    if (!isPlainObject24(current)) return void 0;
+    if (!isPlainObject25(current)) return void 0;
     current = current[segment];
   }
   return current;
@@ -51150,7 +51347,7 @@ function isPresent(value, { requirePositiveNumber = false } = {}) {
   }
   if (typeof value === "boolean") return !requirePositiveNumber;
   if (Array.isArray(value)) return value.length > 0;
-  if (isPlainObject24(value)) return Object.keys(value).length > 0;
+  if (isPlainObject25(value)) return Object.keys(value).length > 0;
   return false;
 }
 function bucketFor(value) {
@@ -51324,7 +51521,7 @@ function projectionSummary(projected) {
     annotations: envelope.projection.annotations.map((entry) => ({ ...entry }))
   }));
 }
-function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
+function measurePublicEvidence({ publicEvidence, frozenInputs, internalEvidence = null } = {}) {
   const profileId = sealedProfileId(frozenInputs);
   const timezone = sealedTimezone(frozenInputs);
   const profile = loadProfile(profileId);
@@ -51341,7 +51538,11 @@ function measurePublicEvidence({ publicEvidence, frozenInputs } = {}) {
     throw codedError24("MEASUREMENT_CUTOFF_UNDECLARED");
   }
   const context = { locationId };
-  const collections = sourceCollectionsFromScopes(publicEvidence);
+  assertDeliveryPhaseInputs(internalEvidence);
+  const collections = [
+    ...sourceCollectionsFromScopes(publicEvidence),
+    ...deliveryPhaseCollections({ internalEvidence, publicEvidence })
+  ];
   const projected = projectJourneyEvents({
     collections,
     context,
@@ -51391,6 +51592,7 @@ var init_measurement = __esm({
   "lib/measurement.mjs"() {
     init_collection();
     init_canonical();
+    init_delivery_phases();
     init_evidence_graph();
     init_journey_projection();
     init_metrics();
@@ -52075,7 +52277,7 @@ import {
 function codedError27(code, ErrorType = Error) {
   return Object.assign(new ErrorType(code), { code });
 }
-function isPlainObject25(value) {
+function isPlainObject26(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -52103,7 +52305,7 @@ function readRegularJson(pathname, code) {
     const metadata = fstatSync3(descriptor);
     if (!metadata.isFile()) throw new Error();
     const parsed = JSON.parse(readFileSync12(descriptor, "utf8"));
-    if (!isPlainObject25(parsed)) throw new Error();
+    if (!isPlainObject26(parsed)) throw new Error();
     return parsed;
   } catch {
     throw codedError27(code);
@@ -52112,7 +52314,7 @@ function readRegularJson(pathname, code) {
   }
 }
 function validateLocalConfig(config2) {
-  if (!isPlainObject25(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject25(config2.frozenInputs) || !isPlainObject25(config2.context) || !isPlainObject25(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject26(config2) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== "local_fixture" || typeof config2.providerId !== "string" || config2.providerId.length === 0 || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject26(config2.frozenInputs) || !isPlainObject26(config2.context) || !isPlainObject26(config2.publicEvidence) || !Array.isArray(config2.reviews)) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   if (Object.hasOwn(config2, "internalRail") && config2.internalRail !== null) {
     validateInternalRailConfig(config2.internalRail);
   }
@@ -52120,7 +52322,7 @@ function validateLocalConfig(config2) {
 }
 function validateInternalRailConfig(rail) {
   const transport = rail?.transport;
-  if (!isPlainObject25(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject25(rail.capabilityProofIndex) || !isPlainObject25(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject25(transport.responses) || !isPlainObject25(transport.toolsList))) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject26(rail) || rail.adapterKind !== "internal_ghl" || typeof rail.contractVersion !== "string" || rail.contractVersion.length === 0 || typeof rail.locationId !== "string" || rail.locationId.length === 0 || typeof rail.toolProfileHash !== "string" || rail.toolProfileHash.length === 0 || !isPlainObject26(rail.capabilityProofIndex) || !isPlainObject26(transport) || !["inline_responses", "host_injected"].includes(transport.kind) || transport.kind === "inline_responses" && (!isPlainObject26(transport.responses) || !isPlainObject26(transport.toolsList))) throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   for (const key of ["capabilityManifestHash", "bundleHash"]) {
     if (typeof rail[key] !== "string" || rail[key].length === 0) {
       throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
@@ -52150,7 +52352,7 @@ function assertSealedRailIdentities(rail, frozenInputs) {
   const fail2 = () => {
     throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject25(frozenInputs)) fail2();
+  if (!isPlainObject26(frozenInputs)) fail2();
   const sealedProfile = frozenInputs.providerToolProfileHash;
   if (typeof sealedProfile !== "string" || sealedProfile.length === 0) fail2();
   if (rail.toolProfileHash !== sealedProfile) fail2();
@@ -52220,7 +52422,7 @@ function assertSealDocumentShape(document) {
   const fail2 = () => {
     throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   };
-  if (!isPlainObject25(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject25(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
+  if (!isPlainObject26(document) || document.schemaVersion !== LOCAL_SCHEMA || document.kind !== SEAL_KIND || typeof document.locationId !== "string" || document.locationId.length === 0 || !isPlainObject26(document.anchors) || !Array.isArray(document.canaryTargetHashes)) fail2();
   const documentKeys = Object.keys(document).sort();
   const documentExpected = ["anchors", "canaryTargetHashes", "kind", "locationId", "schemaVersion"];
   if (documentKeys.length !== documentExpected.length) fail2();
@@ -52266,7 +52468,7 @@ function loadFrozenInputSeal(config2, { projectRoot, vaultKeyReference, provider
   };
   const declaration = config2.frozenInputSeal;
   if (declaration === void 0 || declaration === null) return null;
-  if (!isPlainObject25(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
+  if (!isPlainObject26(declaration) || declaration.kind !== "project_file" || typeof declaration.relativePath !== "string" || declaration.relativePath.length === 0 || typeof projectRoot !== "string" || projectRoot.length === 0 || typeof vaultKeyReference !== "string" || vaultKeyReference.length === 0) fail2();
   const project = resolve6(projectRoot);
   const pathname = resolve6(project, declaration.relativePath);
   if (!isWithin3(project, pathname)) fail2();
@@ -52324,7 +52526,7 @@ function buildInternalAdapter(rail, internalClient, frozenInputs = null, pseudon
   return createInternalGhlAdapter(options);
 }
 function loadProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject25(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject26(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve6(projectRoot);
   const pathname = resolve6(project, descriptor.relativePath);
   if (!isWithin3(project, pathname)) {
@@ -52525,7 +52727,7 @@ function publicConfigError() {
   throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
 }
 function validatePublicTransport(transport) {
-  if (!isPlainObject25(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
+  if (!isPlainObject26(transport) || Object.hasOwn(transport, "connect") || Object.hasOwn(transport, "fetch")) publicConfigError();
   if (transport.kind === "streamable-http") {
     if (Object.keys(transport).sort().join(",") !== "kind,url" || typeof transport.url !== "string" || transport.url.length === 0) publicConfigError();
     return;
@@ -52545,7 +52747,7 @@ function validatePublicTransport(transport) {
   publicConfigError();
 }
 function validatePublicInternalAudit(value) {
-  if (!isPlainObject25(value)) publicConfigError();
+  if (!isPlainObject26(value)) publicConfigError();
   if (Object.keys(value).some((key) => !PUBLIC_INTERNAL_AUDIT_KEYS.includes(key))) {
     publicConfigError();
   }
@@ -52564,7 +52766,7 @@ function validatePublicInternalAudit(value) {
     if (!Array.isArray(value.runtimeWorkflowIds) || value.runtimeWorkflowIds.some((id) => typeof id !== "string" || id.length === 0)) publicConfigError();
   }
   if (Object.hasOwn(value, "budgets")) {
-    if (!isPlainObject25(value.budgets)) publicConfigError();
+    if (!isPlainObject26(value.budgets)) publicConfigError();
     for (const [key, limit] of Object.entries(value.budgets)) {
       if (!Object.hasOwn(DEFAULT_BUDGETS, key)) publicConfigError();
       if (!Number.isSafeInteger(limit) || limit < 1) publicConfigError();
@@ -52576,9 +52778,9 @@ function validatePublicInternalAudit(value) {
   if (Object.hasOwn(value, "conversationTranscripts") && value.conversationTranscripts !== true && value.conversationTranscripts !== false) publicConfigError();
 }
 function validatePublicConfig(config2) {
-  if (!isPlainObject25(config2)) publicConfigError();
+  if (!isPlainObject26(config2)) publicConfigError();
   const keys = Object.keys(config2);
-  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject25(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject25(config2.frozenInputs) || !isPlainObject25(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
+  if (keys.some((key) => !PUBLIC_REQUIRED_KEYS.includes(key) && !PUBLIC_OPTIONAL_KEYS.includes(key)) || PUBLIC_REQUIRED_KEYS.some((key) => !Object.hasOwn(config2, key)) || config2.schemaVersion !== LOCAL_SCHEMA || config2.adapterKind !== PUBLIC_ADAPTER_KIND || typeof config2.providerId !== "string" || config2.providerId.length === 0 || typeof config2.expectedLocationId !== "string" || !PUBLIC_LOCATION_ID.test(config2.expectedLocationId) || typeof config2.capabilityManifestHash !== "string" || !PUBLIC_HEX64.test(config2.capabilityManifestHash) || typeof config2.publicCatalogSnapshotHash !== "string" || !PUBLIC_HEX64.test(config2.publicCatalogSnapshotHash) || typeof config2.publicReadAllowlistHash !== "string" || !PUBLIC_HEX64.test(config2.publicReadAllowlistHash) || !(config2.credentialRef === null || isPlainObject26(config2.credentialRef)) || !Number.isSafeInteger(config2.cutoff) || typeof config2.timezone !== "string" || config2.timezone.length === 0 || !isPlainObject26(config2.frozenInputs) || !isPlainObject26(config2.context) || !Array.isArray(config2.reviews) || !Array.isArray(config2.capabilities) || config2.capabilities.length === 0) publicConfigError();
   validatePublicTransport(config2.transport);
   if (Object.hasOwn(config2, "internalAudit")) validatePublicInternalAudit(config2.internalAudit);
   if (config2.transport.kind === GHL_NATIVE_TRANSPORT_KIND && config2.credentialRef === null) {
@@ -52586,7 +52788,7 @@ function validatePublicConfig(config2) {
   }
   const operationIds = /* @__PURE__ */ new Set();
   for (const capability of config2.capabilities) {
-    if (!isPlainObject25(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
+    if (!isPlainObject26(capability) || Object.keys(capability).sort().join(",") !== "actionId,operationId" || typeof capability.actionId !== "string" || capability.actionId.length === 0 || typeof capability.operationId !== "string" || !PUBLIC_OPERATION_ID.test(capability.operationId) || operationIds.has(capability.operationId)) publicConfigError();
     operationIds.add(capability.operationId);
   }
   for (const field of PUBLIC_DERIVED_FROZEN_FIELDS) {
@@ -52614,7 +52816,7 @@ function validatePublicConfig(config2) {
   return config2;
 }
 function loadPublicProjectConfig({ descriptor, projectRoot }) {
-  if (!isPlainObject25(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
+  if (!isPlainObject26(descriptor) || descriptor.kind !== "project_file" || typeof descriptor.relativePath !== "string" || descriptor.relativePath.length === 0 || typeof descriptor.configHash !== "string") throw codedError27("AUDIT_PREFLIGHT_FAILED_PROVIDER_CONFIG");
   const project = resolve6(projectRoot);
   const pathname = resolve6(project, descriptor.relativePath);
   if (!isWithin3(project, pathname)) {
@@ -52905,7 +53107,7 @@ function adoptSealedInventory({ projectRoot, locationId, runId, declared }) {
   }
   try {
     const sealed = state.getRun(runId)?.frozenInputs;
-    if (!isPlainObject25(sealed)) return null;
+    if (!isPlainObject26(sealed)) return null;
     if (state.getCheckpoint({ runId, phase: "collecting_public" }) === void 0) return null;
     const { privateSourceInventory, privateSourceInventoryHash, ...rest } = sealed;
     if (canonicalJson(rest) !== canonicalJson(declared)) return null;
@@ -53042,7 +53244,7 @@ function buildInternalAuditAdapter({
   transcriptRail = null,
   runtime
 }) {
-  if (!isPlainObject25(internalAudit)) return null;
+  if (!isPlainObject26(internalAudit)) return null;
   const connect = connectOverride ?? createInternalAuditConnect(
     validateInternalAuditTransport(internalAudit.transport)
   );
@@ -53069,7 +53271,7 @@ function buildInternalAuditAdapter({
         }
       }
       let withTranscripts = evidence;
-      if (transcriptRail !== null && isPlainObject25(evidence)) {
+      if (transcriptRail !== null && isPlainObject26(evidence)) {
         let conversationTranscripts;
         try {
           conversationTranscripts = await transcriptRail.collectTranscripts({
@@ -53286,7 +53488,11 @@ function createPublicAuditKernel({
         frozenInputs,
         runId
       }) => {
-        const measurement = measurePublicEvidence({ publicEvidence, frozenInputs });
+        const measurement = measurePublicEvidence({
+          publicEvidence,
+          frozenInputs,
+          internalEvidence
+        });
         if (analysisTarget !== null) {
           prepareAnalysisArtifacts({
             paths: auditPaths(analysisTarget.projectRoot, analysisTarget.locationId),

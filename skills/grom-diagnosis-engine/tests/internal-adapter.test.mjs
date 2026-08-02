@@ -1063,6 +1063,23 @@ test('every roster workflow receives definition and runtime coverage', async () 
     assert.equal(record.definition.definitionHash, DEFINITIONS[workflowId].canonicalHash, workflowId);
     assert.equal(typeof record.definition.capturedAt, 'string', workflowId);
     assert.ok(Array.isArray(record.definition.sourceRoutes), workflowId);
+    // 🔴 THE TRIGGER SURVIVES, and is the only thing that says which delivery phase a workflow
+    // marks. `definitionIsSound` has always HASHED `block.triggers`; until the delivery ladder was
+    // made measurable it then discarded them, and that discard is why the whole `client_onboarding`
+    // journey read as permanently unmeasurable. Two opaque ids and a type per trigger — never the
+    // filters, the steps or a name.
+    assert.deepEqual(
+      record.definition.triggers,
+      DEFINITIONS[workflowId].triggers.map((trigger) => ({
+        type: trigger.type,
+        // These fixtures are lead-form and tag triggers, so neither names a stage. A trigger that
+        // names no stage is retained WITH NULLS rather than dropped: a dropped entry reads as a
+        // workflow with no triggers at all, which is a different and false claim.
+        pipelineId: null,
+        stageId: null,
+      })),
+      workflowId,
+    );
   }
 
   // Non-applicable workflows are never fetched, but are still recorded from the sealed roster.
@@ -1187,6 +1204,20 @@ test('runtime windows reconcile partitions enrollments totals and step rosters',
   // The enrollment cursor tuple survives intact, `referenceSequence` included.
   assert.deepEqual(runtime.enrollmentCursor ?? runtime.enrollments?.cursor, scenario.enrollmentCursor);
   assert.equal(runtime.enrollments.rows.length, scenario.enrollments.rows.length);
+  for (const [rowIndex, row] of runtime.enrollments.rows.entries()) {
+    // The row id is a PSEUDONYM, as it always was.
+    assert.match(row._id, /^psn_[a-f0-9]{32}$/u);
+    assert.notEqual(row._id, scenario.enrollments.rows[rowIndex]._id);
+    // 🔴 `contactId` is RAW, and it is the join key the delivery-phase durations are computed on.
+    // An enrollment is the moment a subject entered a workflow, and every delivery workflow is
+    // triggered by one pipeline stage, so that instant is the moment the card entered that stage —
+    // but only if the row can be joined to a SUBJECT. The public rail carries raw contact ids and
+    // does not carry this run's pseudonyms, so pseudonymising here would leave every phase entry
+    // unjoinable and the whole delivery ladder unmeasurable again, silently.
+    const expected = scenario.enrollments.rows[rowIndex].contactId;
+    if (expected === undefined) assert.ok(!Object.hasOwn(row, 'contactId'));
+    else assert.equal(row.contactId, expected);
+  }
   assert.equal(runtimeEventsOf(record).length, scenario.runtimeEvents.length);
 
   // Every failing shape, including the ones the server itself declares Complete.

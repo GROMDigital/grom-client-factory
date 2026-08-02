@@ -2100,7 +2100,13 @@ export function createPublicAuditKernel({
         frozenInputs,
         runId,
       }) => {
-        const measurement = measurePublicEvidence({ publicEvidence, frozenInputs });
+        // `internalEvidence` is passed for ONE derivation: the delivery-phase entry times, which
+        // exist nowhere on the public rail because an opportunity carries only its CURRENT stage.
+        // Everything else in the measurement is still computed from public evidence alone, and a
+        // run with no internal rail measures exactly what it did before.
+        const measurement = measurePublicEvidence({
+          publicEvidence, frozenInputs, internalEvidence,
+        });
         /*
          * THE SEAM. The three briefs and the three analyst prompts are written to disk HERE, where
          * the measurement and the internal evidence are both in hand, and they are deliberately NOT

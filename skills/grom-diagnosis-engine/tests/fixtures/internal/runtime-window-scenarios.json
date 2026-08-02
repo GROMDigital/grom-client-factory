@@ -15,7 +15,7 @@
       { "id": "E1", "timestamp": 1784019600000, "timestampField": "startedExecutionAt", "unreadableTimestampFields": [], "event": { "_id": "E1", "stepId": "S1" } },
       { "id": "E2", "timestamp": 1784365200000, "timestampField": "startedExecutionAt", "unreadableTimestampFields": [], "event": { "_id": "E2", "stepId": "S2" } }
     ],
-    "enrollments": { "rows": [{ "_id": "EN1", "createdAt": "2026-07-14T09:00:00.000Z" }], "complete": true, "windowScoped": true, "contactFiltered": false },
+    "enrollments": { "rows": [{ "_id": "EN1", "createdAt": "2026-07-14T09:00:00.000Z", "contactId": "CONTACT1" }], "complete": true, "windowScoped": true, "contactFiltered": false },
     "enrollmentCursor": { "referenceId": "EN1", "referenceCreatedAt": "2026-07-14T09:00:00.000Z", "referenceSequence": "1" },
     "perStepCounts": [{ "stepId": "S1", "count": 2 }, { "stepId": "S2", "count": 1 }],
     "stepRosters": [{ "stepId": "S1", "contacts": [{ "id": "C1" }], "total": 1, "complete": true, "pages": 1 }],

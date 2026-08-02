@@ -433,9 +433,14 @@ test('partial or incomplete records cannot prove progression and all graph outpu
     profile: profileById.grom_internal,
   });
   assert.equal(sha256(first.graph), sha256(reversed));
+  // Moved once, deliberately, when the delivery ladder became measurable. `buildEvidenceGraph`
+  // puts `journey.denominator` on the `journey_instance` node, and the `client_onboarding`
+  // denominator changed from the invented `won_or_paid_handoff` to `onboarding_ready_stage_entered`
+  // — the stage entry the enrollment logs can actually observe. That single field is the whole
+  // difference; the determinism assertion above still holds unchanged.
   assert.equal(
     sha256(first.graph),
-    '5e0d8653a376d3256c46bb696960cdb680671460953eb5da065f8b18bc346e91',
+    'f1552110227260e94532813e1c43def6bb9b786ef0b7f957b3d52045fa727e92',
   );
   assert.ok(first.graph.edges.every((edge) => (
     Object.keys(edge).sort().join(',') === [
