@@ -49313,6 +49313,33 @@ function scopeItems(publicEvidence, operationId) {
   if (!scope) return null;
   return Array.isArray(scope.items) ? scope.items : [];
 }
+function firstStageEntries(publicEvidence, stageIndex, deliveryPipelineIds) {
+  const items = scopeItems(publicEvidence, OPPORTUNITIES_OPERATION_ID);
+  if (items === null || deliveryPipelineIds.size === 0) return { rows: [], read: false };
+  const firstStageByPipeline = /* @__PURE__ */ new Map();
+  for (const [, stage] of stageIndex) {
+    if (!deliveryPipelineIds.has(stage.pipelineId)) continue;
+    const held = firstStageByPipeline.get(stage.pipelineId);
+    if (!held || stage.position < held.position) firstStageByPipeline.set(stage.pipelineId, stage);
+  }
+  const rows = [];
+  for (const item of items) {
+    if (!isPlainObject22(item)) continue;
+    const stage = firstStageByPipeline.get(item.pipelineId);
+    if (!stage) continue;
+    const contactId = [item.contactId, item.contact?.id].find(isNonEmptyString2);
+    const createdAt = [item.dateAdded, item.createdAt].find(isNonEmptyString2);
+    if (!isNonEmptyString2(contactId) || !isNonEmptyString2(createdAt)) continue;
+    rows.push({
+      contactId,
+      enteredAt: createdAt,
+      deliveryStageName: stage.name,
+      evidenceOrigin: "opportunity_created",
+      workflowId: null
+    });
+  }
+  return { rows, read: true };
+}
 function unwrapPipelines(items) {
   if (!Array.isArray(items)) return [];
   const unwrapped = [];
@@ -49333,6 +49360,12 @@ function deliveryPhaseCollections({ internalEvidence, publicEvidence } = {}) {
   if (stageIndex.size === 0) return [];
   const { bound, ambiguous } = bindWorkflowsToStages(workflows, stageIndex);
   if (bound.size === 0) return [];
+  const deliveryPipelineIds = /* @__PURE__ */ new Set();
+  for (const [, stageName] of bound) {
+    for (const [, stage] of stageIndex) {
+      if (stage.name === stageName && stage.pipelineId) deliveryPipelineIds.add(stage.pipelineId);
+    }
+  }
   const items = [];
   const incomplete = [];
   for (const workflow of workflows) {
@@ -49352,10 +49385,13 @@ function deliveryPhaseCollections({ internalEvidence, publicEvidence } = {}) {
         contactId: row.contactId,
         enteredAt: row.createdAt,
         deliveryStageName: stageName,
+        evidenceOrigin: "enrollment_log",
         workflowId
       });
     }
   }
+  const first = firstStageEntries(publicEvidence, stageIndex, deliveryPipelineIds);
+  items.push(...first.rows);
   if (items.length === 0 && incomplete.length === 0) return [];
   items.sort((left, right) => {
     const key = (row) => `${row.deliveryStageName}\0${row.enteredAt}\0${row.contactId}`;
@@ -49389,12 +49425,13 @@ function assertDeliveryPhaseInputs(internalEvidence) {
   }
   return true;
 }
-var DELIVERY_PHASE_OPERATION_ID, PIPELINES_OPERATION_ID;
+var DELIVERY_PHASE_OPERATION_ID, PIPELINES_OPERATION_ID, OPPORTUNITIES_OPERATION_ID;
 var init_delivery_phases = __esm({
   "lib/delivery-phases.mjs"() {
     init_collection();
     DELIVERY_PHASE_OPERATION_ID = "internal_ghl.delivery_phase_entries";
     PIPELINES_OPERATION_ID = "opportunities-v3__get-pipelines";
+    OPPORTUNITIES_OPERATION_ID = "opportunities.list";
   }
 });
 

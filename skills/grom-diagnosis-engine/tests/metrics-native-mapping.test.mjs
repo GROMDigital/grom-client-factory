@@ -73,14 +73,16 @@ const EXPECTED_MAPPED = Object.freeze({
     'access_to_submitted',
     'build_to_live',
     'creative_sent_to_build',
+    'creative_sent_to_revision',
     'creative_start_to_creative_sent',
     'enquiry_to_contacted',
-    'onboarding_ready_to_access',
+    'form_sent_to_access',
     'showed_to_decision',
     'showed_to_decision_30d',
     'showed_to_decision_60d',
     'strategy_call_to_showed',
     'strategy_sent_to_creative_start',
+    'strategy_sent_to_revision',
     'strategy_start_to_strategy_sent',
     'submitted_to_strategy_start',
     'won_to_collected_revenue',
@@ -97,8 +99,9 @@ const EXPECTED_MAPPED = Object.freeze({
  * happens in a portal this audit cannot see. That was half right and wholly wrong in effect. The
  * portal owns whether a client APPROVED something; this system owns WHEN THE CARD MOVED, and every
  * delivery phase is a stage change that already triggers a workflow whose enrollment log records
- * exactly that instant. Ten speculative edges that could never be measured are now eight real ones
- * that are, derived from the account's own triggers rather than declared. See
+ * exactly that instant. Ten speculative edges that could never be measured are now ten real ones
+ * that can be — eight main rungs plus the two revision loops — derived from the account's own
+ * triggers and its own pipeline rather than declared. See
  * `tests/grom-internal-delivery-projection.test.mjs`.
  */
 const EXPECTED_UNKNOWN = Object.freeze({
@@ -133,13 +136,13 @@ test('A2 - exactly the projection-provable edges are MAPPED in both shipped prof
       `${profileId} has an edge that is neither MAPPED nor UNKNOWN`,
     );
   }
-  // 8 of 12 for client, 14 of 16 for Grom. Stated as literals so a silent drift is a test failure
+  // 8 of 12 for client, 16 of 18 for Grom. Stated as literals so a silent drift is a test failure
   // rather than a quiet re-grade. The maturity ladder added two MAPPED edges to each profile and
   // took nothing away: it declares the SAME measurement twice more, at a shorter lag over a
   // shorter lookback, so the unmeasurable set is untouched.
   assert.equal(EXPECTED_MAPPED.client.length, 8);
   assert.equal(EXPECTED_UNKNOWN.client.length, 4);
-  assert.equal(EXPECTED_MAPPED.grom_internal.length, 14);
+  assert.equal(EXPECTED_MAPPED.grom_internal.length, 16);
   assert.equal(EXPECTED_UNKNOWN.grom_internal.length, 2);
 });
 
@@ -995,12 +998,12 @@ test('A2 headline - the same fixture reports the hand-computed table for grom_in
     for (const edgeId of EXPECTED_UNKNOWN.grom_internal) {
       assert.deepEqual(cell(metrics[window][edgeId]), UNMAPPED, `grom / ${window} / ${edgeId}`);
     }
-    // 16 declared edges minus the three outcome rungs, which each declare one window of their own,
-    // plus the 60-day rung back again in the window it declares. Was 18 and 15/16: the delivery
-    // ladder replaced ten speculative edges with the account's eight real ones.
+    // 18 declared edges minus the three outcome rungs, which each declare one window of their own,
+    // plus the 60-day rung back again in the window it declares. The delivery ladder is now the
+    // account's real pipeline: eight main rungs plus the two revision loops.
     assert.equal(
       Object.keys(metrics[window]).length,
-      window === 'trailing90Days' ? 14 : 13,
+      window === 'trailing90Days' ? 16 : 15,
       `grom / ${window}`,
     );
   }

@@ -52,7 +52,7 @@ test('every delivery edge is MAPPED, and none is still declared unmeasurable', (
   const declaredUnmeasurable = new Set(projection.unmeasurableEdges);
   const edges = deliveryEdges();
 
-  assert.equal(edges.length, 8, 'one edge per rung of the delivery ladder');
+  assert.equal(edges.length, 10, 'eight main rungs plus the two revision loops');
   for (const edge of edges) {
     assert.equal(edge.nativeMapping, 'MAPPED', `${edge.edgeId} must be MAPPED`);
     // 🔴 The regression that matters. An UNKNOWN edge publishes NOTHING — no cell, no zero, no
@@ -75,15 +75,47 @@ test('every stage the delivery edges name is actually projectable', () => {
   }
 });
 
-test('the ladder is a chain: each rung starts where the last one ended', () => {
-  const edges = deliveryEdges();
-  for (let i = 1; i < edges.length; i += 1) {
+test('the MAIN LINE is a chain: each rung starts where the last one ended', () => {
+  // Scoped to the main line on purpose. The two revision edges branch OFF a "sent" stage rather
+  // than continuing from it — a revision is the client sending work back — so including them here
+  // would assert a chain the delivery process does not have.
+  const main = deliveryEdges().filter((e) => !e.edgeId.endsWith('_to_revision'));
+  assert.equal(main.length, 8);
+  for (let i = 1; i < main.length; i += 1) {
     assert.equal(
-      edges[i].fromStage,
-      edges[i - 1].toStage,
-      `${edges[i].edgeId} does not continue from ${edges[i - 1].edgeId} — the ladder has a gap`,
+      main[i].fromStage,
+      main[i - 1].toStage,
+      `${main[i].edgeId} does not continue from ${main[i - 1].edgeId} — the ladder has a gap`,
     );
   }
+});
+
+test('🔴 every stage name the contract binds is a name the PIPELINE actually uses', () => {
+  // The defect this pins: the first cut took two of these from the WORKFLOW name rather than the
+  // STAGE name — "onboarding ready" for a stage called "Onboarding Form Sent", and "submitted for
+  // review" for one called "Submitted - Awaiting Review". Neither could ever match, and a stage that
+  // never matches produces no event, no error, and an edge that reads as permanently unmeasured.
+  // Names verified against the live Onboarding pipeline 2026-08-02.
+  const live = [
+    'onboarding form sent', 'access in progress', 'submitted - awaiting review',
+    'strategy in progress', 'strategy sent', 'strategy revision', 'creative in progress',
+    'creative sent', 'creative revision', 'build in progress', 'live',
+  ];
+  const bound = deliverySource().events.map((e) => e.when.value);
+  assert.deepEqual([...bound].sort(), [...live].sort());
+});
+
+test('the revision loops are observable, not folded into the phase they branch off', () => {
+  const stages = new Set(deliverySource().events.map((e) => e.stage));
+  assert.ok(stages.has('strategy_revision'));
+  assert.ok(stages.has('creative_revision'));
+  const loops = deliveryEdges().filter((e) => e.edgeId.endsWith('_to_revision'));
+  assert.equal(loops.length, 2);
+  // A revision branches off the SENT stage. Getting this backwards would measure the wrong thing.
+  assert.deepEqual(loops.map((e) => [e.fromStage, e.toStage]), [
+    ['strategy_sent', 'strategy_revision'],
+    ['creative_sent', 'creative_revision'],
+  ]);
 });
 
 test('the contract binds phases by stage NAME, never by an account-specific id', () => {
@@ -93,10 +125,13 @@ test('the contract binds phases by stage NAME, never by an account-specific id',
     // Grom AU and Grom UK share no workflow, pipeline or stage ids, and they run the same
     // standardised build under the same stage names. An id in here would measure one account and
     // silently measure nothing on the other.
-    assert.match(
+    // A real stage label may hold a hyphen or an ampersand ("Submitted - Awaiting Review"), so the
+    // test is not a charset whitelist. What it rules out is an ID: every GHL pipeline, stage and
+    // workflow id contains digits, and no stage name in this pipeline does.
+    assert.doesNotMatch(
       event.when.value,
-      /^[a-z][a-z ]*$/u,
-      `${event.eventId} binds "${event.when.value}", which looks like an id, not a stage name`,
+      /\d/u,
+      `${event.eventId} binds "${event.when.value}", which contains a digit and looks like an id`,
     );
     assert.equal(normalizeStageName(event.when.value), event.when.value,
       `${event.eventId} binds a name the normalizer would not produce, so it can never match`);
@@ -119,6 +154,7 @@ test('the delivery source can prove its own events', () => {
 const PIPELINES = [{
   id: 'PIPE1',
   stages: [
+    { id: 'STAGE_0', name: 'Onboarding Form Sent' },
     { id: 'STAGE_A', name: 'Creative In Progress' },
     { id: 'STAGE_B', name: '  Creative   Sent  ' },
   ],
@@ -130,11 +166,14 @@ const workflow = (workflowId, stageIds, rows) => ({
   runtime: { enrollments: { complete: true, rows } },
 });
 
-const evidenceFor = (workflows, pipelines = PIPELINES) => deliveryPhaseCollections({
+const evidenceFor = (workflows, pipelines = PIPELINES, opportunities = null) => deliveryPhaseCollections({
   internalEvidence: { boundLocationId: 'LOC1', capturedAt: '2026-07-27T00:00:00.000Z', workflows },
   publicEvidence: {
     boundLocationId: 'LOC1',
-    scopes: [{ operationId: 'opportunities-v3__get-pipelines', items: pipelines }],
+    scopes: [
+      { operationId: 'opportunities-v3__get-pipelines', items: pipelines },
+      ...(opportunities === null ? [] : [{ operationId: 'opportunities.list', items: opportunities }]),
+    ],
   },
 });
 
@@ -159,12 +198,14 @@ test('an enrollment becomes a phase entry, carrying its subject and its instant'
       contactId: 'C1',
       enteredAt: '2026-07-01T00:00:00.000Z',
       deliveryStageName: 'creative in progress',
+      evidenceOrigin: 'enrollment_log',
       workflowId: 'WF_A',
     },
     {
       contactId: 'C1',
       enteredAt: '2026-07-09T00:00:00.000Z',
       deliveryStageName: 'creative sent',
+      evidenceOrigin: 'enrollment_log',
       workflowId: 'WF_B',
     },
   ]);
@@ -251,4 +292,61 @@ test('phase entries come out in a deterministic order', () => {
     workflow('WF_A', ['STAGE_A'], rows(['C1', 'C2', 'C3'])),
   ]);
   assert.deepEqual(forward[0].items, reversed[0].items);
+});
+
+// ---------------------------------------------------------------------------
+// The first rung, which no enrollment log can supply
+// ---------------------------------------------------------------------------
+
+test('the first rung is dated from the opportunity, because 01 has no stage trigger', () => {
+  // `01 Onboarding Ready` fires on `opportunity_created`, not a stage change — the opportunity is
+  // created INTO the first stage by the contract-signed handoff, so there is no earlier stage to
+  // move from. Without this path the first rung is permanently unmeasured.
+  const [collection] = evidenceFor(
+    [workflow('WF_A', ['STAGE_A'], [{ contactId: 'C1', createdAt: '2026-07-05T00:00:00.000Z' }])],
+    PIPELINES,
+    [{ id: 'OPP1', contactId: 'C1', pipelineId: 'PIPE1', dateAdded: '2026-07-01T00:00:00.000Z' }],
+  );
+  const first = collection.items.filter((i) => i.deliveryStageName === 'onboarding form sent');
+  assert.deepEqual(first, [{
+    contactId: 'C1',
+    enteredAt: '2026-07-01T00:00:00.000Z',
+    deliveryStageName: 'onboarding form sent',
+    evidenceOrigin: 'opportunity_created',
+    workflowId: null,
+  }]);
+});
+
+test('every row says which rail it came from', () => {
+  // The one place two rails are combined. A row that cannot say where it came from cannot be
+  // audited, and the two have different reliability: an enrollment log OBSERVED the entry, while an
+  // opportunity ASSUMES it was created into the first stage.
+  const [collection] = evidenceFor(
+    [workflow('WF_A', ['STAGE_A'], [{ contactId: 'C1', createdAt: '2026-07-05T00:00:00.000Z' }])],
+    PIPELINES,
+    [{ id: 'OPP1', contactId: 'C1', pipelineId: 'PIPE1', dateAdded: '2026-07-01T00:00:00.000Z' }],
+  );
+  assert.deepEqual(
+    [...new Set(collection.items.map((i) => i.evidenceOrigin))].sort(),
+    ['enrollment_log', 'opportunity_created'],
+  );
+});
+
+test('an opportunity in a pipeline with no delivery workflow contributes no first rung', () => {
+  // Which pipeline is the delivery one is DERIVED from where the stage-triggered workflows point.
+  // A sales opportunity must never be dated into the delivery journey.
+  const [collection] = evidenceFor(
+    [workflow('WF_A', ['STAGE_A'], [{ contactId: 'C1', createdAt: '2026-07-05T00:00:00.000Z' }])],
+    PIPELINES,
+    [{ id: 'OPP2', contactId: 'C9', pipelineId: 'SALES_PIPE', dateAdded: '2026-07-01T00:00:00.000Z' }],
+  );
+  assert.equal(collection.items.filter((i) => i.contactId === 'C9').length, 0);
+});
+
+test('no opportunities scope means no first rung, and the other rungs still stand', () => {
+  const [collection] = evidenceFor(
+    [workflow('WF_A', ['STAGE_A'], [{ contactId: 'C1', createdAt: '2026-07-05T00:00:00.000Z' }])],
+  );
+  assert.equal(collection.items.every((i) => i.evidenceOrigin === 'enrollment_log'), true);
+  assert.equal(collection.items.length, 1);
 });

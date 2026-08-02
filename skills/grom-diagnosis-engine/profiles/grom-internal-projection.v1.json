@@ -491,8 +491,8 @@
       ],
       "events": [
         {
-          "eventId": "delivery_onboarding_ready",
-          "stage": "onboarding_ready",
+          "eventId": "delivery_form_sent",
+          "stage": "form_sent",
           "journeyId": "client_onboarding",
           "eventTimeField": [
             "enteredAt"
@@ -500,7 +500,7 @@
           "when": {
             "kind": "field_equals",
             "field": "deliveryStageName",
-            "value": "onboarding ready"
+            "value": "onboarding form sent"
           },
           "cohortFrom": [
             "contactId"
@@ -532,7 +532,7 @@
           "when": {
             "kind": "field_equals",
             "field": "deliveryStageName",
-            "value": "submitted for review"
+            "value": "submitted - awaiting review"
           },
           "cohortFrom": [
             "contactId"
@@ -571,6 +571,22 @@
           ]
         },
         {
+          "eventId": "delivery_strategy_revision",
+          "stage": "strategy_revision",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "strategy revision"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
           "eventId": "delivery_creative_in_progress",
           "stage": "creative_in_progress",
           "journeyId": "client_onboarding",
@@ -597,6 +613,22 @@
             "kind": "field_equals",
             "field": "deliveryStageName",
             "value": "creative sent"
+          },
+          "cohortFrom": [
+            "contactId"
+          ]
+        },
+        {
+          "eventId": "delivery_creative_revision",
+          "stage": "creative_revision",
+          "journeyId": "client_onboarding",
+          "eventTimeField": [
+            "enteredAt"
+          ],
+          "when": {
+            "kind": "field_equals",
+            "field": "deliveryStageName",
+            "value": "creative revision"
           },
           "cohortFrom": [
             "contactId"

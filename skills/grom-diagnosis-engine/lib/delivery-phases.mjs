@@ -69,6 +69,12 @@ export const DELIVERY_PHASE_OPERATION_ID = 'internal_ghl.delivery_phase_entries'
  */
 const PIPELINES_OPERATION_ID = 'opportunities-v3__get-pipelines';
 
+/**
+ * The opportunities read, used ONLY to date the first rung (see `firstStageEntries`). It stays a
+ * projected journey source in its own right for the acquisition journey; nothing here changes that.
+ */
+const OPPORTUNITIES_OPERATION_ID = 'opportunities.list';
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -167,6 +173,62 @@ function scopeItems(publicEvidence, operationId) {
 }
 
 /**
+ * THE FIRST RUNG, which no enrollment log can supply.
+ *
+ * `01 Onboarding Ready` does NOT trigger on a stage change. It triggers on `opportunity_created`,
+ * because on this account the opportunity is CREATED into the delivery pipeline's first stage by
+ * the contract-signed handoff — there is no earlier stage for it to move from. Verified live
+ * 2026-08-02, and confirmed by the owner as the intended process: a client must exist in that first
+ * stage before an onboarding form link can be sent to them at all.
+ *
+ * So the first stage entry is the opportunity's own `dateAdded`, read off the opportunities the
+ * public rail already collects. Every later rung still comes from an enrollment log; this is the
+ * one place the two rails are combined, and each emitted row says which one it came from.
+ *
+ * 🔴 THE ASSUMPTION, STATED RATHER THAN BURIED: an opportunity in the delivery pipeline was created
+ * INTO that pipeline's first stage. The record cannot prove it — `pipelineStageId` is the CURRENT
+ * stage, so an opportunity that has moved on carries no memory of where it started, which is the
+ * same limitation that made this whole journey unmeasurable in the first place. If a delivery
+ * opportunity were ever created directly into a later stage, its first-rung entry time would be
+ * wrong. It is accepted deliberately, because the alternative is leaving the first rung permanently
+ * unmeasured, and because the process that creates these opportunities has exactly one entry point.
+ *
+ * The pipeline is identified by DERIVATION, never by a declared id: it is whichever pipeline the
+ * stage-triggered delivery workflows themselves point at.
+ */
+function firstStageEntries(publicEvidence, stageIndex, deliveryPipelineIds) {
+  const items = scopeItems(publicEvidence, OPPORTUNITIES_OPERATION_ID);
+  if (items === null || deliveryPipelineIds.size === 0) return { rows: [], read: false };
+
+  // Position 0 of each delivery pipeline, by the pipeline's own ordering — not by a name this
+  // module guesses at.
+  const firstStageByPipeline = new Map();
+  for (const [, stage] of stageIndex) {
+    if (!deliveryPipelineIds.has(stage.pipelineId)) continue;
+    const held = firstStageByPipeline.get(stage.pipelineId);
+    if (!held || stage.position < held.position) firstStageByPipeline.set(stage.pipelineId, stage);
+  }
+
+  const rows = [];
+  for (const item of items) {
+    if (!isPlainObject(item)) continue;
+    const stage = firstStageByPipeline.get(item.pipelineId);
+    if (!stage) continue;
+    const contactId = [item.contactId, item.contact?.id].find(isNonEmptyString);
+    const createdAt = [item.dateAdded, item.createdAt].find(isNonEmptyString);
+    if (!isNonEmptyString(contactId) || !isNonEmptyString(createdAt)) continue;
+    rows.push({
+      contactId,
+      enteredAt: createdAt,
+      deliveryStageName: stage.name,
+      evidenceOrigin: 'opportunity_created',
+      workflowId: null,
+    });
+  }
+  return { rows, read: true };
+}
+
+/**
  * Pipelines arrive either as the bare array or wrapped in `{pipelines: [...]}` depending on which
  * shape of the read answered. Both are unwrapped here rather than in the indexer so the indexer
  * has exactly one input shape to reason about.
@@ -209,6 +271,16 @@ export function deliveryPhaseCollections({ internalEvidence, publicEvidence } = 
   const { bound, ambiguous } = bindWorkflowsToStages(workflows, stageIndex);
   if (bound.size === 0) return [];
 
+  // WHICH PIPELINE IS THE DELIVERY ONE, derived and never declared: whichever pipeline the
+  // stage-triggered delivery workflows actually point at. A sales pipeline with no such workflow
+  // contributes nothing and needs no rule to exclude it.
+  const deliveryPipelineIds = new Set();
+  for (const [, stageName] of bound) {
+    for (const [, stage] of stageIndex) {
+      if (stage.name === stageName && stage.pipelineId) deliveryPipelineIds.add(stage.pipelineId);
+    }
+  }
+
   const items = [];
   const incomplete = [];
   for (const workflow of workflows) {
@@ -235,10 +307,17 @@ export function deliveryPhaseCollections({ internalEvidence, publicEvidence } = 
         contactId: row.contactId,
         enteredAt: row.createdAt,
         deliveryStageName: stageName,
+        evidenceOrigin: 'enrollment_log',
         workflowId,
       });
     }
   }
+
+  // The first rung, from the opportunity record rather than an enrollment log. Appended here so
+  // every row in the envelope carries the same shape and the sort below orders all of them together.
+  const first = firstStageEntries(publicEvidence, stageIndex, deliveryPipelineIds);
+  items.push(...first.rows);
+
   if (items.length === 0 && incomplete.length === 0) return [];
 
   // Deterministic byte order. The kernel byte-compares the measurement on resume, and the order
