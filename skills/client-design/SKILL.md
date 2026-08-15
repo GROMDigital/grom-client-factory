@@ -1,6 +1,6 @@
 ---
 name: client-design
-description: Design a complete Grom client build from an approved Meta ads strategy. Orchestrates the full agent factory (foundation research, binding registry, module fan-out, audit and fix loop) to produce the design doc set, client manifest, go-live checklist, fill guide, and a self-contained system-guide.html review page in a client folder. Landing pages are built separately, not by this factory. Requires the ads strategy as input and confirms everything with the user before spawning agents. Modes: fresh, ingest-answers, regen, resume, guide. Design only: writes local files, never touches a live account.
+description: Design a complete Grom client build from an approved Meta ads strategy. Orchestrates the agent factory (foundation research, binding registry, module fan-out, audit and fix loop) to produce the design doc set, client manifest, go-live checklist, fill guide, and a self-contained system-guide.html review page. Confirms with the user before spawning agents. Design only: writes local files, never touches a live account.
 ---
 
 # client-design
